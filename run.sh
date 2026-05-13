@@ -84,7 +84,7 @@ customize3)
 esac
 qemu-system-riscv64 \
 	-machine virt \
-	-m 8M \
+	-m 64M \
 	-smp 2 \
 	-bios $SHELL_FOLDER/output/opensbi/fw_jump.bin \
 	-kernel $SHELL_FOLDER/output/os/kernel \
