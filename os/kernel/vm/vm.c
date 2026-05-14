@@ -29,8 +29,17 @@ kvminit()
   // uart registers
   kvmmap(UART0, UART0, PGSIZE, PTE_R | PTE_W);
 
+#ifdef QEMU
   // virtio mmio disk interface
   kvmmap(VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+#endif
+
+#ifndef QEMU
+  // K210 peripheral range (DMAC, SPI, etc.)
+  kvmmap(0x50000000, 0x50000000, 0x400000, PTE_R | PTE_W);
+  // K210 low peripherals (UARTHS, GPIOHS behind UART0)
+  kvmmap(0x38000000, 0x38000000, 0x100000, PTE_R | PTE_W);
+#endif
 
   // CLINT
   kvmmap(CLINT, CLINT, 0x10000, PTE_R | PTE_W);
@@ -56,11 +65,18 @@ ukvminit(void)
   memset(pagetable, 0, PGSIZE);
 
   ukvmmap(pagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+#ifdef QEMU
   ukvmmap(pagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+#endif
   ukvmmap(pagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
   ukvmmap(pagetable, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
   ukvmmap(pagetable, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
   ukvmmap(pagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+
+#ifndef QEMU
+  ukvmmap(pagetable, 0x50000000, 0x50000000, 0x400000, PTE_R | PTE_W);
+  ukvmmap(pagetable, 0x38000000, 0x38000000, 0x100000, PTE_R | PTE_W);
+#endif
 
   return pagetable;
 }
@@ -231,11 +247,13 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   }
 }
 
-void 
+void
 ukvmunmap(pagetable_t pagetable)
 {
   uvmunmap(pagetable, UART0, PGSIZE / PGSIZE, 0);
+#ifdef QEMU
   uvmunmap(pagetable, VIRTIO0, PGSIZE / PGSIZE, 0);
+#endif
   uvmunmap(pagetable, PLIC, 0x400000 / PGSIZE, 0);
   uvmunmap(pagetable, KERNBASE, ((uint64)etext-KERNBASE) / PGSIZE, 0);
   uvmunmap(pagetable, (uint64)etext, (PHYSTOP-(uint64)etext) / PGSIZE, 0);

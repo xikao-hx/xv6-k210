@@ -17,13 +17,14 @@
 // end -- start of kernel page allocation area
 // PHYSTOP -- end RAM used by the kernel
 
+#ifdef QEMU
 // qemu puts UART registers here in physical memory.
 #define UART0 0x10000000L
 #define UART0_IRQ 10
-
 // virtio mmio interface
 #define VIRTIO0 0x10001000
 #define VIRTIO0_IRQ 1
+#endif
 
 // local interrupt controller, which contains the timer.
 #define CLINT 0x2000000L
@@ -41,10 +42,43 @@
 #define PLIC_MCLAIM(hart) (PLIC + 0x200004 + (hart)*0x2000)
 #define PLIC_SCLAIM(hart) (PLIC + 0x201004 + (hart)*0x2000)
 
+#ifndef QEMU
+#define UART0 0x38000000L
+#define UART0_IRQ 33
+#endif
+
+// K210 peripheral base addresses (physical, identity-mapped)
+#ifndef QEMU
+#define GPIOHS      0x38001000
+#define DMAC        0x50000000
+#define GPIO        0x50200000
+#define SPI_SLAVE   0x50240000
+#define FPIOA       0x502B0000
+#define SYSCTL      0x50440000
+#define SPI0        0x52000000
+#define SPI1        0x53000000
+#define SPI2        0x54000000
+
+// Virtual addresses (identity-mapped on os/ tree)
+#define GPIOHS_V    GPIOHS
+#define DMAC_V      DMAC
+#define GPIO_V      GPIO
+#define SPI_SLAVE_V SPI_SLAVE
+#define FPIOA_V     FPIOA
+#define SYSCTL_V    SYSCTL
+#define SPI0_V      SPI0
+#define SPI1_V      SPI1
+#define SPI2_V      SPI2
+#endif
+
 // the kernel expects there to be RAM
 // for use by the kernel and user pages
 // from physical address 0x80000000 to PHYSTOP.
+#ifndef QEMU
+#define KERNBASE 0x80020000L
+#else
 #define KERNBASE 0x80200000L
+#endif
 #define PHYSTOP 0x80600000L
 // #define PHYSTOP (KERNBASE + 128*1024*1024)
 

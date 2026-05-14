@@ -6,6 +6,11 @@
 #include "proc.h"
 #include "defs.h"
 #include "fcntl.h"
+#ifndef QEMU
+struct dirent*  ename(char *path);
+struct dirent*  edup(struct dirent *entry);
+void            eput(struct dirent *entry);
+#endif
 
 struct cpu cpus[NCPU];
 
@@ -264,7 +269,11 @@ userinit(void)
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
   safestrcpy(p->name, "initcode", sizeof(p->name));
+#ifdef QEMU
   p->cwd = namei("/");
+#else
+  p->cwd = ename("/");
+#endif
 
   upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz);
   p->state = RUNNABLE;
@@ -326,7 +335,11 @@ fork(void)
   for(i = 0; i < NOFILE; i++)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
+#ifdef QEMU
   np->cwd = idup(p->cwd);
+#else
+  np->cwd = edup(p->cwd);
+#endif
 
   for (int i = 0; i < NVMA; i ++) {
     struct vma_area *vma = &p->vmas[i];
@@ -409,9 +422,13 @@ exit(int status)
     }
   }
 
+#ifdef QEMU
   begin_op();
   iput(p->cwd);
   end_op();
+#else
+  eput(p->cwd);
+#endif
   p->cwd = 0;
 
   // we might re-parent a child to init. we can't be precise about
@@ -609,7 +626,9 @@ forkret(void)
     // regular process (e.g., because it calls sleep), and thus cannot
     // be run from main().
     first = 0;
+#ifdef QEMU
     fsinit(ROOTDEV);
+#endif
   }
 
   usertrapret();

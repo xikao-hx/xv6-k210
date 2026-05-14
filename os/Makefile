@@ -5,32 +5,37 @@
 
 # -include conf/lab.mk
 
+platform ?= qemu
+
 K=kernel
 U=user
 
+# Entry point must be the first object in link order
+# (OpenSBI jumps to the beginning of the kernel image)
+ifeq ($(platform), k210)
+ENTRY_OBJ = $K/entry_k210.o
+else
+ENTRY_OBJ = $K/entry.o
+endif
+
+# Common objects (all platforms)
 OBJS = \
-  $K/entry.o \
+  $(ENTRY_OBJ) \
   $K/main.o \
   $K/trap.o \
   $K/devsw/console.o \
   $K/devsw/stats.o \
   $K/driver/uart.o \
   $K/driver/plic.o \
-  $K/driver/virtio_disk.o \
+  $K/driver/disk.o \
   $K/fs/bio.o \
-  $K/fs/fs.o \
-  $K/fs/file.o \
-  $K/fs/log.o \
   $K/ipc/pipe.o \
   $K/libc/printf.o \
   $K/libc/sprintf.o \
   $K/libc/string.o \
   $K/lock/sleeplock.o \
   $K/lock/spinlock.o \
-  $K/proc/exec.o \
   $K/proc/proc.o \
-  $K/syscall/syscall.o \
-  $K/syscall/sysfile.o \
   $K/syscall/sysproc.o \
   $K/vm/kalloc.o \
   $K/vm/vm.o \
@@ -38,6 +43,32 @@ OBJS = \
   $K/asm/swtch.o \
   $K/asm/trampoline.o \
   $K/asm/kernelvec.o
+
+# Platform-specific objects
+ifeq ($(platform), k210)
+OBJS += \
+  $K/driver/spi.o \
+  $K/driver/gpiohs.o \
+  $K/driver/fpioa.o \
+  $K/driver/utils.o \
+  $K/driver/sdcard.o \
+  $K/driver/dmac.o \
+  $K/driver/sysctl.o \
+  $K/fs/fat32.o \
+  $K/fs/file_k210.o \
+  $K/proc/exec_k210.o \
+  $K/syscall/syscall_k210.o \
+  $K/syscall/sysfile_k210.o
+else
+OBJS += \
+  $K/driver/virtio_disk.o \
+  $K/fs/fs.o \
+  $K/fs/file.o \
+  $K/fs/log.o \
+  $K/proc/exec.o \
+  $K/syscall/syscall.o \
+  $K/syscall/sysfile.o
+endif
 
 # riscv64-unknown-elf- or riscv64-linux-gnu-
 
@@ -62,6 +93,9 @@ CFLAGS += -mcmodel=medany
 CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
 CFLAGS += -I.
 CFLAGS += -I$K/include
+ifeq ($(platform), qemu)
+CFLAGS += -D QEMU
+endif
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 
 # Disable PIE when possible (for Ubuntu 16.10 toolchain)
@@ -74,8 +108,14 @@ endif
 
 LDFLAGS = -z max-page-size=4096
 
-$K/kernel: $(OBJS) linker/qemu-kernel.ld $U/initcode
-	$(LD) $(LDFLAGS) -T linker/qemu-kernel.ld -o $K/kernel $(OBJS)
+ifeq ($(platform), k210)
+LINKER_SCRIPT = linker/k210.ld
+else
+LINKER_SCRIPT = linker/qemu-kernel.ld
+endif
+
+$K/kernel: $(OBJS) $(LINKER_SCRIPT) $U/initcode
+	$(LD) $(LDFLAGS) -T $(LINKER_SCRIPT) -o $K/kernel $(OBJS)
 	$(OBJDUMP) -S $K/kernel > $K/kernel.asm
 	$(OBJDUMP) -t $K/kernel | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $K/kernel.sym
 
@@ -181,7 +221,7 @@ fs.img: mkfs/mkfs README $(UEXTRA) $(UPROGS)
 clean:
 	rm -f *.tex *.dvi *.idx *.aux *.log *.ind *.ilg \
 	*/*.o */*.d */*.asm */*.sym \
-	**/*.o **/*.d **/*.asm **/*.sym \
+	*/*/*.o */*/*.d */*/*.asm */*/*.sym \
 	$U/initcode $U/initcode.out $K/kernel $K/kernel.bin $K/kernel.elf fs.img \
 	mkfs/mkfs .gdbinit \
 	$U/usys.S \

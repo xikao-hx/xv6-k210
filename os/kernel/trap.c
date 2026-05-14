@@ -6,6 +6,8 @@
 #include "proc.h"
 #include "defs.h"
 #include "sbi.h"
+#include "disk.h"
+#include "plic.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -74,11 +76,14 @@ usertrap(void)
     uint64 va = r_stval();
     pagetable_t pagetable = p->pagetable;
 
+#ifdef QEMU
     if (find_vma(p, va) == 0) {
       if (mmap_handler(va, r_scause()) != 0) {
         p->killed = 1;
       }
-    } else {
+    } else
+#endif
+    {
       if (va < p->sz) {
         if (uvmcowpage(pagetable, va) == 0) {
           if (uvmcowmalloc(pagetable, PGROUNDDOWN(va)) == 0) {
@@ -86,7 +91,6 @@ usertrap(void)
           }
         } else if (PGROUNDUP(p->trapframe->sp) - 1 < va) {
           if (uvmlazymalloc(pagetable, PGROUNDDOWN(va)) != 0) {
-            // printf("usertrap(): uvmlazymalloc\n");
             p->killed = 1;
           }
         }
@@ -217,8 +221,13 @@ devintr()
 
     if(irq == UART0_IRQ){
       uartintr();
+#ifdef QEMU
     } else if(irq == VIRTIO0_IRQ){
-      virtio_disk_intr();
+      disk_intr();
+#else
+    } else if(irq == DISK_IRQ){
+      disk_intr();
+#endif
     } else if(irq){
       printf("unexpected interrupt irq=%d\n", irq);
     }

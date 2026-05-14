@@ -4,6 +4,12 @@
 #include "riscv.h"
 #include "defs.h"
 #include "sbi.h"
+#ifdef QEMU
+#include "disk.h"
+#else
+void sdcard_init(void);
+int  fat32_init(void);
+#endif
 
 volatile static int started = 0;
 volatile static int boot_leader_flag = 0;
@@ -39,16 +45,25 @@ main()
     plicinit();      // set up interrupt controller
     plicinithart();  // ask PLIC for device interrupts
     binit();         // buffer cache
-    iinit();         // inode cache
     fileinit();      // file table
-    virtio_disk_init(); // emulated hard disk
+#ifdef QEMU
+    iinit();         // inode cache
+    disk_init(); // emulated hard disk
+#else
+    sdcard_init();   // SD card
+    fat32_init();    // FAT32 filesystem
+#endif
     userinit();      // first user process
 
     // Start secondary harts via SBI HSM
     for(int i = 0; i < NCPU; i++) {
       if(i == hartid)
         continue;
+#ifdef QEMU
       int rc = sbi_hart_start(i, 0x80200000, i);
+#else
+      int rc = sbi_hart_start(i, 0x80020000, i);
+#endif
       if(rc != 0)
         printf("failed to start hart %d: error %d\n", i, rc);
     }

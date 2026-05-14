@@ -1,0 +1,17 @@
+# 1.任务目标
+* 任务1：调整kernel下的文件布局，对应调整makefile文件，完成编译工作
+    * 文件目录如下：
+    * /home/xikao/xv6-k210-opensbi/os/kernel
+    * /home/xikao/xv6-k210-opensbi/os/linker
+    * /home/xikao/xv6-k210-opensbi/os/user
+    * /home/xikao/xv6-k210-opensbi/os/Makefile
+* 任务2：调整链接器脚本，完成编译工作，去掉start.c和symtab.c
+    * /home/xikao/xv6-k210-opensbi/os/linker/qemu-kernel.ld
+    * /home/xikao/xv6-k210-opensbi/os/kernel/start.c
+    * /home/xikao/xv6-k210-opensbi/os/kernel/symtab.c 
+* 任务3：参考/home/xikao/xv6-k210-opensbi/xv6-k210的代码，完成os相关的SD卡的配适工作
+* 任务4：
+    * 参考/home/xikao/xv6-k210-opensbi/xv6-k210/Makefile，完成k210平台的构建支持
+    * 增加 K210 入口相关文件 — `entry_k210.S` 和 `k210.ld` 链接脚本
+    * 修改build.sh，增加k210平台的构建支持
+ 

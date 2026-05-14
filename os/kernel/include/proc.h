@@ -1,3 +1,6 @@
+#ifndef __PROC_H
+#define __PROC_H
+
 // Saved registers for kernel context switches.
 struct context {
   uint64 ra;
@@ -114,8 +117,16 @@ struct proc {
   struct trapframe *trapframe; // data page for trampoline.S
   struct context context;      // swtch() here to run process
   struct file *ofile[NOFILE];  // Open files
+#ifdef QEMU
   struct inode *cwd;           // Current directory
+#else
+  struct dirent *cwd;          // Current directory (FAT32)
+#endif
   char name[16];               // Process name (debugging)
   int trace_mask;
   struct vma_area vmas[NVMA];
 };
+
+struct proc*    myproc(void);
+
+#endif

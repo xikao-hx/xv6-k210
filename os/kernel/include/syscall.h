@@ -25,3 +25,7 @@
 #define SYS_symlink  24
 #define SYS_mmap  25
 #define SYS_munmap 26
+#define SYS_dev    27
+#define SYS_readdir 28
+#define SYS_getcwd 29
+#define SYS_remove 30
