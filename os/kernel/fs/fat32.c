@@ -10,9 +10,7 @@
 #include "string.h"
 #include "printf.h"
 
-// forward declarations from defs.h (not included to avoid conflict with fat32's dirlookup)
-int either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
-int either_copyin(void *dst, int user_src, uint64 src, uint64 len);
+#include "defs.h"
 
 /* fields that start with "_" are something we don't use */
 

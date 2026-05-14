@@ -96,6 +96,8 @@ void disk_intr(void) {
 
 **现象：** disk.h 直接 `#include "buf.h"`，而 buf.h 依赖 sleeplock.h → spinlock.h，且需要 BSIZE 宏定义。
 
+**调试过程：** 编译时报错 "field has incomplete type 'struct buf'"，追踪发现 buf.h 自身不满足自包含要求——它依赖调用方预先包含 types.h、param.h、fs.h 等。通过分析各头文件的依赖链，确定 disk.h 不应包含任何头文件，改用前向声明。
+
 **根因：** buf.h 本身不是自包含的头文件，需要调用方按特定顺序前置包含 types.h、param.h、spinlock.h、sleeplock.h 和 fs.h。
 
 **解决方案：** disk.h 改用 struct forward declaration，将具体 include 放在 disk.c 中按序引入：
@@ -291,6 +293,12 @@ struct dirent*  ealloc(struct dirent*, char*, int);
 
 **现象：** 包含 fat32.h 的文件编译报错：`dirlookup` 重定义。
 
+**调试过程：**
+1. 编译报错 "conflicting types for 'dirlookup'"——两个函数同名但参数类型不同
+2. `grep -n dirlookup kernel/include/defs.h kernel/include/fat32.h` 确认两个头文件各自声明了不同签名的 `dirlookup`
+3. 由于 C 语言不允许同一作用域存在同名函数声明（即使参数不同），包含两个头文件的源文件必然报错
+4. 所有使用 FAT32 的文件必须避免包含 defs.h，否则触发冲突
+
 **根因：** defs.h 声明了 `struct inode* dirlookup(struct inode*, char*, uint64*)`，而 fat32.h 声明了 `struct dirent* dirlookup(struct dirent*, char*, uint*)`。两者函数签名不同但符号名相同，C 语言不允许同一作用域存在两个同名函数声明。
 
 **解决方案：** 所有使用 FAT32 的文件不包含 defs.h，改用 forward declarations：
@@ -397,6 +405,13 @@ clean:
 
 **现象：** QEMU 启动后 OpenSBI 正常输出，但内核无任何输出，直接超时退出。
 
+**调试过程：**
+1. QEMU 有 OpenSBI 输出说明固件加载正确，但内核没有任何打印说明启动代码没执行
+2. 查看 `kernel/kernel.asm` 反汇编文件，查找 `_entry` 标签的位置：发现 `_entry` 在 `0x8020462a`，即 `.text` 段尾部；而 `main` 函数在 `0x80200000`（入口地址）
+3. 确认 OpenSBI 跳转到 `0x80200000`（FW_JUMP_ADDR），实际执行的是 `main` 函数而非 `_entry`——跳过了栈指针（sp）和 hart ID（tp）的初始化
+4. 检查 OBJS 列表中对象的顺序：链接器按输入文件的顺序排放 `.text` 段，`entry.o` 被放在 OBJS 末尾（位于平台相关分支中），导致其代码被排到最后
+5. 将 entry 对象提到 OBJS 列表最前面，重新编译后确认 `_entry` 位于 `0x80200000`
+
 **根因：** `_entry` 符号位于 `0x8020462a`（`.text` 段尾部），而非 `0x80200000`。OpenSBI 跳转到 `0x80200000` 时直接进入了 `main` 函数，跳过了 `entry.S` 中设置 `tp`（hart ID）和 `sp`（栈指针）的启动代码。
 
 ```
@@ -450,8 +465,396 @@ OpenSBI v0.9 → xv6 kernel is booting → hart 1 starting → init: starting sh
 
 ---
 
-# 6. 遗留事项
+---
+
+# 7. 任务5适配记录：QEMU 使用 FAT32 文件系统
+
+## 7.1 适配目标
+
+将 os/ 的两套文件系统代码路径（QEMU 的 inode-based xv6 fs + K210 的 FAT32）统一为 FAT32 单路径。QEMU 和 K210 共用 fat32.c、file.c、exec.c、sysfile.c，不再维护两份平台独立的实现。
+
+此前架构（两套代码路径）：
+```
+QEMU: entry.o → main → iinit → ... → fs.c/log.c/file.c/exec.c/sysfile.c
+K210: entry_k210.o → main → sdcard_init → ... → fat32.c/file_k210.c/exec_k210.c/sysfile_k210.c
+```
+
+统一后架构（单路径）：
+```
+QEMU/K210: entry.o/entry_k210.o → main → disk_init → ... → fat32.c/file.c/exec.c/sysfile.c
+```
+
+## 7.2 文件变更清单
+
+### 重命名的文件（FAT32 版本成为默认）
+
+| 原路径 | 新路径 |
+|--------|--------|
+| os/kernel/fs/file_k210.c | os/kernel/fs/file.c（覆盖原 QEMU 版本） |
+| os/kernel/proc/exec_k210.c | os/kernel/proc/exec.c（覆盖原 QEMU 版本） |
+| os/kernel/syscall/sysfile_k210.c | os/kernel/syscall/sysfile.c（覆盖原 QEMU 版本） |
+
+### 删除的文件（不再需要）
+
+| 文件 | 原因 |
+|------|------|
+| os/kernel/fs/fs.c | xv6 inode-based 文件系统，FAT32 替代 |
+| os/kernel/fs/log.c | xv6 日志层，FAT32 不需要 |
+| os/kernel/syscall/syscall_k210.c | 分发表已合并到 syscall.c |
+
+### 修改的文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| os/Makefile | fat32.o/file.o/exec.o/sysfile.o 移入公共 OBJS；移除 fs.o/log.o；fs.img 改用 FAT32 格式（dd+mkfs.vfat+mount+cp） |
+| os/kernel/syscall/syscall.c | 添加 FAT32 系统调用：sys_dev/sys_readdir/sys_getcwd/sys_remove |
+| os/kernel/include/syscall.h | 添加 SYS_dev=27, SYS_readdir=28, SYS_getcwd=29, SYS_remove=30 |
+| os/kernel/include/proc.h | 移除 `#ifdef QEMU`，`cwd` 统一为 `struct dirent*` |
+| os/kernel/include/file.h | 移除 `#ifdef QEMU`，统一使用 `FD_ENTRY` 和 `struct dirent*` |
+| os/kernel/include/stat.h | 移除 `#ifdef QEMU`，统一使用 FAT32 格式（含 `name[STAT_MAX_NAME+1]`） |
+| os/kernel/include/defs.h | 移除 inode-based fs 和 log 声明；添加 FAT32 声明（ename/eput/elock/eunlock/eread/ewrite/estat/eremove 等） |
+| os/kernel/proc/proc.c | 移除 `#ifdef QEMU`，forkret/fork/exit/userinit 中无条件使用 fat32_init + ename/edup/eput |
+| os/kernel/main.c | 移除 iinit() 调用；K210 和 QEMU 统一通过 disk_init 初始化磁盘 |
+| os/kernel/trap.c | `find_vma`/`mmap_handler` 取消 `#ifdef QEMU`，无条件编译 |
+| os/kernel/fs/fat32.c | 恢复 `#include "defs.h"`，移除手动 forward declarations |
+| os/build.sh | build_xv6() 自动编译用户程序并用 pyfatfs 填充 FAT32 镜像 |
+
+---
+
+# 8. 调试记录（任务5）
+
+任务5 的调试涉及多种运行时调试手段，包括：
+- **QEMU monitor**：通过 `scause`/`stval` 寄存器判断异常类型和故障地址
+- **kernel.asm 反汇编**：定位故障指令的源码位置
+- **printf 插桩**：在内核关键路径添加临时调试输出
+- **Python pyfatfs 检查**：查看 FAT32 镜像内容分布
+- **git diff 对比**：确认代码变更差异，找出遗漏的修改点
+- **grep 扫描**：搜索残留的 `#ifdef QEMU` 条件编译片段
+- **objdump 符号分析**：确认链接顺序和符号地址
+- **QEMU info mem 命令**：检查页表映射状态
+
+以下是具体调试记录：
+
+## 8.1 kpagetable 未更新导致 secondary hart 页错误
+
+**现象：** QEMU 启动后，hart 1 在 `copyin_new` 的 `memmove` 处触发页错误（scause=13），hart 0 正常。跳板代码成功执行，但进入内核态访问用户空间数据时崩溃。
+
+**调试过程：**
+1. QEMU 启动后 hart 1 立即崩溃，输出 `scause=0x000000000000000d`（Page Fault 读异常），`stval=0xXXXXXXXXXXXX`（故障虚拟地址）
+2. 查看 `kernel/kernel.asm` 反汇编，定位 `stval` 地址对应 `copyin_new` 函数中的 `memmove` 指令
+3. 在 `copyin_new` 中添加临时调试输出（`printf("stval=%p\n", r_stval())`），确认 fault 地址在用户空间范围内但不在当前进程的页面中
+4. 检查 `fork()` 代码发现它调用 `copyin_new()` 来复制参数，而 `copyin_new` 通过 `p->kpagetable` 直接访问用户地址
+5. 对比 `fork()` 和 `exec()`：fork 中通过 `upg2ukpg()` 更新了子进程的 kpagetable，但 `exec()` 中 `p->pagetable` 被替换为新页表后，没有对应的 kpagetable 更新步骤
+6. 通过 QEMU 的 `info mem` 命令确认新页表已有用户映射，而 kpagetable 中没有
+
+**根因：** `exec()` 替换了进程的 pagetable 后，未更新 `p->kpagetable`（内核态直接访问用户空间地址用的影子页表）。`fork()` 中通过 `upg2ukpg()` 复制了子进程的用户页面到 kpagetable，但 exec 执行后创建了全新的用户地址空间，kpagetable 仍指向旧进程的物理页面。hart 1 执行 fork() 后调用 copyin_new()，通过过期的 kpagetable 访问用户地址，触发 page fault。
+
+**解决方案：** 在 exec() 的 pagetable 替换后，同步更新 kpagetable：
+
+```c
+// exec.c — 在 p->pagetable = pagetable 之后
+uvmunmap(p->kpagetable, 0, PGROUNDUP(old_sz) / PGSIZE, 0);
+upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz);
+```
+
+先解映射旧页表的所有用户映射（不释放物理页），再复制新页表的用户映射到内核页表。
+
+## 8.2 freewalk: leaf panic
+
+**现象：** 运行 `ls` 命令后内核 panic，输出 "freewalk: leaf"，hart 0 崩溃。
+
+**调试过程：**
+1. panic 信息 "freewalk: leaf" 定位到 `vm.c` 的 `freewalk()` 函数，该函数在遍历页表时遇到标记了 R/W/X 的叶子 PTE 会 panic
+2. 在 `freewalk` 中添加调试输出，在 panic 前打印故障页表的虚拟地址和页表项内容
+3. 发现遗留的叶子 PTE 对应旧进程的高地址页面——这些页面在新程序中不再使用，但 `uvmfree()` 没有遍历到
+4. 查看 `exec.c` 中调用 `proc_freepagetable()` 的位置，发现传入的是 `p->sz`（新程序大小）而非 `old_sz`（旧程序大小）
+5. 对比旧程序（init，约 32KB）和新程序（ls，约 24KB）的尺寸差异——新程序更小时才会触发此 bug
+6. 通过分析 `uvmfree()` 的实现确认它按传入的 sz 遍历页表，不会处理 sz 以上的页面
+
+**根因：** `proc_freepagetable(oldpagetable, p->sz)` 传递了新的进程大小（exec 加载 ELF 后的尺寸），而非旧页表对应的尺寸。当新程序比旧程序小时（例如 shell 比 init 小），`uvmfree()` 只遍历到新尺寸对应的 PTE，遗留了旧页表中高地址的叶子 PTE。`freewalk()` 递归遍历全部三级页表，遇到这些遗留的叶子 PTE（标记了 R/W/X）时 panic。
+
+**解决方案：** 在更新 `p->sz` 之前保存旧值，释放旧页表时使用旧尺寸：
+
+```c
+uint64 old_sz = p->sz;               // 保存 exec 前的尺寸
+p->pagetable = pagetable;
+p->sz = sz;                           // 更新为新尺寸
+// ...
+proc_freepagetable(oldpagetable, old_sz);  // 使用 old_sz，不是 p->sz
+```
+
+两处关键修复对比：
+
+| exec.c 行号 | 错误代码 | 正确代码 |
+|-------------|----------|----------|
+| proc_freepagetable 调用 | `proc_freepagetable(oldpagetable, p->sz)` | `proc_freepagetable(oldpagetable, old_sz)` |
+
+## 8.3 fs.img 为空导致 "panic: init exiting"
+
+**现象：** `./run.sh nographic` 输出 `init: starting sh` 后立即 `panic: init exiting`。QEMU 正常启动 OpenSBI 和内核，init 进程能运行，但无法启动 shell。
+
+**调试过程：**
+1. 看到 "init: starting sh" 说明内核启动正常，init 进程开始执行，但 exec("sh") 失败
+2. 检查 `os/fs.img` 大小——256MB，不为空，排除镜像文件不存在的可能性
+3. 用 Python 检查镜像内容：`python3 -c "import fs; vfs=fs.open_fs('fat://os/fs.img'); print(vfs.listdir('/'))"`，输出空列表——根目录确实没有文件
+4. 查看 build.sh 的 build_xv6() 实现，发现 `make platform=qemu` 只编译内核，不编译用户程序；`fs.img` 目标只创建空白 FAT32 镜像
+5. 对比 `output/os/fs.img`（由 build.sh 生成）和在 `os/` 目录下手动用 pyfatfs 填充后的 fs.img，确认问题出在构建流程缺少用户程序填充步骤
+6. 确认 `make qemu` 目标虽然依赖 `fs.img`，但 `fs.img` 目标仅是 `dd + mkfs.vfat`，不填充文件
+
+**根因：** `build.sh` 的 `build_xv6()` 调用 `make platform=qemu` 只编译了内核，fs.img 是通过 `make fs.img` 创建的空白 FAT32 镜像，未包含任何用户程序。init 进程通过 FAT32 的 `ename("sh")` 查找 shell，但 FAT32 根目录为空，返回 NULL，init 直接 exit(0)，内核 panic。
+
+**解决方案：** 更新 build.sh 的 build_xv6()，添加用户程序编译和 FAT32 镜像填充步骤：
+
+```bash
+# 1. 编译用户程序
+make platform=qemu $(for p in _cat _echo _grep _init _kill _ln _ls _mkdir _rm _sh _grind _wc _zombie; do echo "user/$p"; done)
+
+# 2. 创建 FAT32 镜像并填充用户程序
+dd if=/dev/zero of=fs.img bs=512k count=512
+mkfs.vfat -F 32 fs.img
+python3 -c "
+import fs, os, glob
+vfs = fs.open_fs('fat://fs.img')
+if not vfs.exists('/bin'): vfs.makedir('/bin')
+for prog in glob.glob('user/_*'):
+    name = os.path.basename(prog)[1:]
+    with open(prog, 'rb') as src: data = src.read()
+    vfs.open('/' + name, 'wb').write(data)
+    vfs.open('/bin/' + name, 'wb').write(data)
+vfs.close()
+"
+```
+
+这样无需 sudo 权限即可填充 FAT32 镜像（pyfatfs 用户空间库直接操作镜像文件）。
+
+## 8.4 defs.h 恢复与 fat32.h 的兼容
+
+**现象：** 统一代码路径后，原来不使用 defs.h 的 FAT32 文件（fat32.c, file.c, exec.c, sysfile.c）需要恢复包含 defs.h。
+
+**调试过程：**
+1. 尝试在 fat32.c 中添加 `#include "defs.h"`，编译报错 "conflicting types for 'dirlookup'"
+2. 用 `grep -n dirlookup defs.h fat32.h` 确认两个头文件都声明了 `dirlookup`：defs.h 是 `struct inode* dirlookup(struct inode*, ...)`，fat32.h 是 `struct dirent* dirlookup(struct dirent*, ...)`
+3. 原来的代码（任务4）通过让 FAT32 文件不包含 defs.h 来规避此冲突，改用 forward declarations。统一后用这种做法会导致 forward declarations 膨胀且难以维护
+4. 确认 inode-based 的 dirlookup 在删除 fs.c 后已无调用者，可以直接从 defs.h 移除
+5. 将 defs.h 中的 `dirlookup(struct inode*, ...)` 声明删除，保留 fat32.h 中的声明
+
+**根因：** 任务4 中为了规避 defs.h 与 fat32.h 之间的 `dirlookup` 符号冲突，FAT32 系列文件全部禁用了 defs.h，改用手写 forward declarations。统一后，这些文件不再有条件编译隔离，需要 defs.h 中的其他声明（如 `argint`、`argstr`、`fetchaddr`、`myproc` 等）。
+
+**解决方案：** 不直接恢复 `#include "defs.h"`（dirlookup 冲突仍在），而是：
+1. 将 defs.h 中的 `dirlookup(struct inode*, ...)` 声明移除（inode-based fs 已删除）
+2. FAT32 的 `dirlookup(struct dirent*, ...)` 声明保留在 fat32.h 内部
+3. fat32.c 恢复包含 defs.h，移除 forward declarations
+4. exec.c 和 sysfile.c 保留需要的 forward declarations（仅声明实际使用的函数）
+
+## 8.5 proc.h/file.h/stat.h 的 QEMU ifdef 清理
+
+**现象：** 移除平台条件编译后，三个关键数据结构需要统一。
+
+**调试过程：**
+1. 用 `grep -rn "#ifdef QEMU" kernel/include/` 扫描所有头文件中残留的 QEMU 条件编译
+2. 对每个匹配，分析该数据结构是否还有两套实现的必要——因为现在 QEMU 和 K210 都用 FAT32 文件系统，inode 和 dirent 两套指针不再需要
+3. 逐个修改：
+   - `proc.h`：cwd 从 `struct inode*`（QEMU）/ `struct dirent*`（K210）统一为 `struct dirent*`
+   - `file.h`：`struct file` 的 ip/ep 字段和 FD_INODE/FD_ENTRY 枚举统一为 dirent 版本
+   - `stat.h`：FAT32 的 stat 带 `name[33]` 字段，QEMU 的 stat 带 `ino/nlink` 字段，统一使用 FAT32 版本
+4. 编译验证：`make clean && make platform=qemu -j$(nproc)` 确认无编译错误
+5. 运行验证：QEMU 启动到 shell，ls/cat 等命令正常
+
+**变更细节：**
+
+**proc.h — `struct proc` 的 cwd 字段：**
+```c
+// 之前
+#ifdef QEMU
+  struct inode *cwd;
+#else
+  struct dirent *cwd;
+#endif
+
+// 之后
+  struct dirent *cwd;
+```
+
+**file.h — `struct file` 的文件后端：**
+```c
+// 之前
+#ifdef QEMU
+  struct inode *ip;
+  enum { FD_NONE, FD_PIPE, FD_INODE, FD_DEVICE };
+#else
+  struct dirent *ep;
+  enum { FD_NONE, FD_PIPE, FD_ENTRY, FD_DEVICE };
+#endif
+
+// 之后
+  struct dirent *ep;
+  enum { FD_NONE, FD_PIPE, FD_ENTRY, FD_DEVICE };
+```
+
+**stat.h — `struct stat` 的布局：**
+```c
+// 之前（QEMU）
+struct stat { int dev; uint ino; short type; short nlink; uint64 size; };
+
+// 之前（K210）
+struct stat { char name[STAT_MAX_NAME+1]; int dev; short type; uint64 size; };
+
+// 之后（统一使用 FAT32 格式）
+#define STAT_MAX_NAME 32
+struct stat { char name[STAT_MAX_NAME+1]; int dev; short type; uint64 size; };
+```
+
+## 8.6 QEMU 输出空白（无 OpenSBI 输出）
+
+**现象：** 使用 QEMU 4.2.0 运行 `./run.sh nographic` 时屏幕完全空白，无任何输出。
+
+**调试过程：**
+1. 检查 `run.sh` 的 QEMU 命令行参数，发现 `-bios none`——QEMU 不会加载任何固件，直接从 0x80000000 开始执行
+2. 确认 `.` 目录和执行 `./run.sh` 的目录正确，fw_jump.bin 已编译到 `output/opensbi/` 下
+3. 查阅当前 QEMU 版本的文档：`qemu-system-riscv64 --version` 显示版本 4.2.0，该版本未内置 OpenSBI（较新版本如 QEMU 7+ 内置了 OpenSBI）
+4. 手动添加 `-bios output/opensbi/fw_jump.bin` 后重新运行，OpenSBI 正常输出
+5. 确认 `run.sh` 已经使用了正确的 `-bios` 路径，早期调试时遇到的空白屏幕是因为 build.sh 尚未编译 OpenSBI
+
+**根因：** QEMU 4.2.0 不自带 OpenSBI 固件。默认 `-bios none` 时 QEMU 跳转到 0x80000000 执行，但该地址无有效代码。需要显式指定 OpenSBI 二进制文件。
+
+**解决方案：** run.sh 已使用 `-bios output/opensbi/fw_jump.bin`，确保编译 OpenSBI（`./build.sh -sbi`）：
+
+```
+-bios $SHELL_FOLDER/output/opensbi/fw_jump.bin
+```
+
+## 8.7 工具链路径问题
+
+**现象：** `./build.sh -xv6` 报错 "riscv64-unknown-linux-gnu-gcc: No such file or directory"。
+
+**调试过程：**
+1. 运行 `which riscv64-unknown-linux-gnu-gcc`，输出为空——工具链不在 PATH 中
+2. 用 `find / -name "riscv64-unknown-linux-gnu-gcc" 2>/dev/null` 查找工具链位置，找到在 `/home/xikao/quard_star_tutorial/toolchain/gcc-riscv64-unknown-linux-gnu/bin/` 下
+3. 将此路径添加到 PATH 后重新运行 `build.sh`，编译通过
+4. 确认问题仅存在于首次设置环境时，CLAUDE.md 已记录该路径信息
+
+**根因：** RISC-V 交叉编译工具链安装在 `/home/xikao/quard_star_tutorial/toolchain/`，不在默认 PATH 中。
+
+## 8.7 工具链路径问题
+
+**现象：** `./build.sh -xv6` 报错 "riscv64-unknown-linux-gnu-gcc: No such file or directory"。
+
+**根因：** RISC-V 交叉编译工具链安装在 `/home/xikao/quard_star_tutorial/toolchain/`，不在默认 PATH 中。
+
+**解决方案：** build.sh 不修改系统配置，编译前需要 export 工具链路径：
+```bash
+export PATH=$PATH:/home/xikao/quard_star_tutorial/toolchain/gcc-riscv64-unknown-linux-gnu/bin/
+./build.sh -xv6
+```
+
+---
+
+# 9. 编译验证
+
+## QEMU 平台
+
+构建命令：
+```bash
+export PATH=$PATH:/home/xikao/quard_star_tutorial/toolchain/gcc-riscv64-unknown-linux-gnu/bin/
+./build.sh -xv6
+```
+
+输出：内核 ELF + 13 个用户程序（_cat, _echo, _grep, _init, _kill, _ln, _ls, _mkdir, _rm, _sh, _grind, _wc, _zombie）+ FAT32 fs.img（含 /bin 目录）
+
+运行验证：
+```bash
+./run.sh nographic
+```
+
+预期输出：
+```
+OpenSBI v0.9 → xv6 kernel is booting → hart 1 starting → init: starting sh → $
+```
+
+## K210 平台
+
+构建命令：
+```bash
+export PATH=$PATH:/home/xikao/quard_star_tutorial/toolchain/gcc-riscv64-unknown-linux-gnu/bin/
+./build.sh -k210
+```
+
+输出：kernel-k210 ELF，编译通过无错误。
+
+---
+
+# 10. 任务6适配记录：统一 fs.img 构建流程和多平台支持
+
+## 10.1 适配目标
+
+参考 os/Makefile，优化 Makefile 和 build.sh 的 fs.img 构建过程，消除 sudo 依赖，统一构建流程，支持多平台构建。
+
+## 10.2 改进内容
+
+### Makefile 变更
+
+| 变更 | 说明 |
+|------|------|
+| 新增 `fs` 目标 | 编译 UPROGS + 创建 FAT32 镜像 + pyfatfs 填充用户程序，单步完成 |
+| 保留 `fs.img` 目标 | 仅创建空白 FAT32 镜像（无用户程序），用于快速初始化和向后兼容 |
+| 删除 `fs-populate` 目标 | 被 `fs` 替代，不再需要 sudo mount |
+| `qemu` 目标依赖 `fs` | `qemu: $K/kernel fs` → 构建时自动生成带用户程序的镜像 |
+
+`fs` 目标的核心规则：
+```makefile
+fs: $(UPROGS) | fs.img
+	@echo "populating fs.img with user programs..."
+	@dd if=/dev/zero of=fs.img bs=512k count=512 2>/dev/null
+	@mkfs.vfat -F 32 fs.img 2>/dev/null
+	@python3 scripts/mkfs.py "$U"
+	@echo "done"
+```
+
+### 新增 scripts/mkfs.py
+
+将 FAT32 镜像填充逻辑抽取为独立 Python 脚本，被 Makefile 的 `fs` 目标调用。
+
+### build.sh 变更
+
+`build_xv6()` 大幅简化：原来需要手动循环编译 UPROGS + 内联 pyfatfs 脚本，现在两行完成：
+
+```bash
+build_xv6() {
+    make platform=qemu -j$(nproc)     # 编译内核
+    make platform=qemu fs             # 编译用户程序 + 填充 fs.img
+    cp kernel/kernel $OUTPUT/os
+    cp fs.img $OUTPUT/os
+}
+```
+
+### 多平台支持
+
+- `make fs` 与 `platform` 解耦：fs.img 内容和用户程序列表与平台无关，同一镜像可用于 QEMU virt 和 K210 QEMU 模拟
+- K210 真实硬件通过 SD 卡启动，不需要 fs.img，`build_xv6_k210()` 保持不变
+- pyfatfs 作为纯用户空间库，不需要 root 权限，也不需要 `/mnt` 挂载点
+
+## 10.3 架构变化
+
+之前（两阶段流程，需 sudo）：
+```
+make platform=qemu              → kernel only
+make platform=qemu fs-populate  → sudo mount + cp (root required)
+```
+
+之后（单步免 sudo）：
+```
+make platform=qemu && make platform=qemu fs  → kernel + user programs + fs.img
+```
+
+或通过 build.sh 一步完成：
+```
+./build.sh -xv6  → 自动执行 clean + make + make fs + cp
+```
+
+---
+
+# 11. 遗留事项
 
 1. **K210 硬件测试** — 当前 K210 构建仅验证了编译链接，未在真实 K210 板或 QEMU 模拟上运行测试
-2. **用户程序移植** — K210 平台需要额外的用户程序（如 FAT32 感知的 ls、文件操作等）
-3. **FAT32 兼容性** — stat 结构体缺少 ino/nlink 字段，部分依赖这些字段的用户程序可能需要调整
+2. **FAT32 兼容性** — stat 结构体不包含 ino/nlink 字段，部分用户程序（如 find）依赖这些字段可能需要调整
+3. **build.sh 自动化** — build.sh 内部调用 make 时未自动处理工具链 PATH，需用户在编译前手动 export

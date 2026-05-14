@@ -66,7 +66,8 @@ build_xv6() {
     mkdir -p $OUTPUT/os
     cd $SHELL_FOLDER/os
     make clean
-    make qemu
+    make platform=qemu -j$(nproc)
+    make platform=qemu fs
     cp $SHELL_FOLDER/os/kernel/kernel $OUTPUT/os
     cp $SHELL_FOLDER/os/fs.img $OUTPUT/os
 }

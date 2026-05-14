@@ -1,9 +1,7 @@
-// On-disk file system format.
-// Both the kernel and user programs use this header file.
-
+// On-disk file system format (original xv6, kept for BSIZE and struct definitions)
+// BSIZE is now defined in buf.h (512)
 
 #define ROOTINO  1   // root i-number
-#define BSIZE 1024  // block size
 
 // Disk layout:
 // [ boot block | super block | log | inode blocks |
@@ -51,11 +49,4 @@ struct dinode {
 // Block of free map containing bit for block b
 #define BBLOCK(b, sb) ((b)/BPB + sb.bmapstart)
 
-// Directory is a file containing a sequence of dirent structures.
-#define DIRSIZ 14
-
-struct dirent {
-  ushort inum;
-  char name[DIRSIZ];
-};
 

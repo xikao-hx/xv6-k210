@@ -1,7 +1,6 @@
 struct buf;
 struct context;
 struct file;
-struct inode;
 struct pipe;
 struct proc;
 struct spinlock;
@@ -35,31 +34,7 @@ int             filestat(struct file*, uint64 addr);
 int             filewrite(struct file*, uint64, int n);
 int             mmap_handler(uint64 va, uint64 scause);
 int             find_vma(struct proc *p, uint64 va);
-
-// fs.c
-void            fsinit(int);
-int             dirlink(struct inode*, char*, uint);
-struct inode*   dirlookup(struct inode*, char*, uint*);
-struct inode*   ialloc(uint, short);
-struct inode*   idup(struct inode*);
-void            iinit();
-void            ilock(struct inode*);
-void            iput(struct inode*);
-void            iunlock(struct inode*);
-void            iunlockput(struct inode*);
-void            iupdate(struct inode*);
-int             namecmp(const char*, const char*);
-struct inode*   namei(char*);
-struct inode*   nameiparent(char*, char*);
-int             readi(struct inode*, int, uint64, uint, uint);
-void            stati(struct inode*, struct stat*);
-int             writei(struct inode*, int, uint64, uint, uint);
-void            itrunc(struct inode*);
-
-// ramdisk.c
-void            ramdiskinit(void);
-void            ramdiskintr(void);
-void            ramdiskrw(struct buf*);
+int             dirnext(struct file *f, uint64 addr);
 
 // kalloc.c
 void*           kalloc(void);
@@ -68,12 +43,6 @@ void            kinit(void);
 uint64          freemem(void);
 void            kaddquota(void *pa);
 int             kgetquota(void *pa);
-
-// log.c
-void            initlog(int, struct superblock*);
-void            log_write(struct buf*);
-void            begin_op(void);
-void            end_op(void);
 
 // pipe.c
 int             pipealloc(struct file**, struct file**);
@@ -209,6 +178,20 @@ void            virtio_disk_intr(void);
 
 // fat32.c
 int             fat32_init(void);
+struct dirent*  ename(char*);
+struct dirent*  enameparent(char*, char*);
+struct dirent*  ealloc(struct dirent*, char*, int);
+void            eput(struct dirent*);
+struct dirent*  edup(struct dirent*);
+void            elock(struct dirent*);
+void            eunlock(struct dirent*);
+void            estat(struct dirent*, struct stat*);
+void            eremove(struct dirent*);
+int             enext(struct dirent*, struct dirent*, uint, int*);
+void            etrunc(struct dirent*);
+int             eread(struct dirent*, int, uint64, uint, uint);
+int             ewrite(struct dirent*, int, uint64, uint, uint);
+char*           formatname(char *name);
 
 // vmcopyin.c
 int copyin_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len);

@@ -2,9 +2,6 @@
 
 #include "types.h"
 #include "stat.h"
-#include "spinlock.h"
-#include "sleeplock.h"
-#include "fs.h"
 #include "file.h"
 #include "user/user.h"
 #include "fcntl.h"
@@ -16,11 +13,7 @@ main(void)
 {
   int pid, wpid;
 
-  if(open("console", O_RDWR) < 0){
-    mknod("console", CONSOLE, 0);
-    mknod("statistics", STATS, 0);
-    open("console", O_RDWR);
-  }
+  dev(O_RDWR, CONSOLE, 0);
   dup(0);  // stdout
   dup(0);  // stderr
 

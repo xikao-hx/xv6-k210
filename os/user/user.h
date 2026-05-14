@@ -29,6 +29,10 @@ int sysinfo(struct sysinfo *);
 int symlink(char *target, char *path);
 void* mmap(void *addr, int length, int prot, int flags, int fd, int offset);
 int munmap(void *addr, int length);
+int dev(int, int, int);
+int readdir(int, struct stat*);
+int getcwd(char*);
+int remove(const char*);
 
 // ulib.c
 int stat(const char*, struct stat*);

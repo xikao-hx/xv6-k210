@@ -14,4 +14,10 @@
     * 参考/home/xikao/xv6-k210-opensbi/xv6-k210/Makefile，完成k210平台的构建支持
     * 增加 K210 入口相关文件 — `entry_k210.S` 和 `k210.ld` 链接脚本
     * 修改build.sh，增加k210平台的构建支持
- 
+* 任务5：
+    * 参考/home/xikao/xv6-k210-opensbi/xv6-k210/syscall/syscall.c
+    * /home/xikao/xv6-k210-opensbi/xv6-k210/kernel/exec.c
+    * /home/xikao/xv6-k210-opensbi/xv6-k210/kernel/sysfile.c
+    * /home/xikao/xv6-k210-opensbi/xv6-k210/Makefile，参考fs目标，修改直接qemu也使用FAT32格式的fs.img，不需要保留原来的文件系统格式
+* 任务6：
+    * 参考/home/xikao/xv6-k210-opensbi/os/Makefile，修改makefile和build.sh，更好适配fs.img的构建过程，和多平台的构建支持

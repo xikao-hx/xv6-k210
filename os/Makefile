@@ -15,7 +15,7 @@ U=user
 ifeq ($(platform), k210)
 ENTRY_OBJ = $K/entry_k210.o
 else
-ENTRY_OBJ = $K/entry.o
+ENTRY_OBJ = $K/entry_qemu.o
 endif
 
 # Common objects (all platforms)
@@ -29,13 +29,18 @@ OBJS = \
   $K/driver/plic.o \
   $K/driver/disk.o \
   $K/fs/bio.o \
+  $K/fs/fat32.o \
+  $K/fs/file.o \
   $K/ipc/pipe.o \
   $K/libc/printf.o \
   $K/libc/sprintf.o \
   $K/libc/string.o \
   $K/lock/sleeplock.o \
   $K/lock/spinlock.o \
+  $K/proc/exec.o \
   $K/proc/proc.o \
+  $K/syscall/syscall.o \
+  $K/syscall/sysfile.o \
   $K/syscall/sysproc.o \
   $K/vm/kalloc.o \
   $K/vm/vm.o \
@@ -53,21 +58,10 @@ OBJS += \
   $K/driver/utils.o \
   $K/driver/sdcard.o \
   $K/driver/dmac.o \
-  $K/driver/sysctl.o \
-  $K/fs/fat32.o \
-  $K/fs/file_k210.o \
-  $K/proc/exec_k210.o \
-  $K/syscall/syscall_k210.o \
-  $K/syscall/sysfile_k210.o
+  $K/driver/sysctl.o
 else
 OBJS += \
-  $K/driver/virtio_disk.o \
-  $K/fs/fs.o \
-  $K/fs/file.o \
-  $K/fs/log.o \
-  $K/proc/exec.o \
-  $K/syscall/syscall.o \
-  $K/syscall/sysfile.o
+  $K/driver/virtio_disk.o
 endif
 
 # riscv64-unknown-elf- or riscv64-linux-gnu-
@@ -111,7 +105,7 @@ LDFLAGS = -z max-page-size=4096
 ifeq ($(platform), k210)
 LINKER_SCRIPT = linker/k210.ld
 else
-LINKER_SCRIPT = linker/qemu-kernel.ld
+LINKER_SCRIPT = linker/qemu.ld
 endif
 
 $K/kernel: $(OBJS) $(LINKER_SCRIPT) $U/initcode
@@ -156,9 +150,6 @@ $U/_forktest: $U/forktest.o $(ULIB)
 # 	$(OBJDUMP) -S $@ > $*.asm
 # 	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $*.sym
 
-mkfs/mkfs: mkfs/mkfs.c $K/include/fs.h $K/include/param.h
-	gcc -Werror -Wall -I. -o mkfs/mkfs mkfs/mkfs.c -idirafter $K/include
-
 # Prevent deletion of intermediate files, e.g. cat.o, after first build, so
 # that disk image changes after first build are persistent until clean.  More
 # details:
@@ -178,8 +169,7 @@ UPROGS=\
 	$U/_sh\
 	$U/_grind\
 	$U/_wc\
-	$U/_zombie \
-	$U/_usertests
+	$U/_zombie
 
 # ifneq ($(filter pgtbl lock,$(LAB)),)
 # UPROGS += \
@@ -213,8 +203,16 @@ UPROGS=\
 # 	UEXTRA += user/xargstest.sh
 # endif
 
-fs.img: mkfs/mkfs README $(UEXTRA) $(UPROGS)
-	mkfs/mkfs fs.img README $(UEXTRA) $(UPROGS)
+dst := /mnt
+
+# Create FAT32 filesystem image populated with all user programs.
+# Uses pyfatfs (no sudo required).
+fs: $(UPROGS)
+	@echo "populating fs.img with user programs..."
+	@dd if=/dev/zero of=fs.img bs=512k count=512 2>/dev/null
+	@mkfs.vfat -F 32 fs.img 2>/dev/null
+	@python3 scripts/mkfs.py "$U"
+	@echo "done"
 
 -include kernel/*.d kernel/**/*.d user/*.d
 
@@ -223,7 +221,7 @@ clean:
 	*/*.o */*.d */*.asm */*.sym \
 	*/*/*.o */*/*.d */*/*.asm */*/*.sym \
 	$U/initcode $U/initcode.out $K/kernel $K/kernel.bin $K/kernel.elf fs.img \
-	mkfs/mkfs .gdbinit \
+	.gdbinit \
 	$U/usys.S \
 	$(UPROGS)
 
@@ -241,7 +239,7 @@ QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nogr
 QEMUOPTS += -drive file=fs.img,if=none,format=raw,id=x0
 QEMUOPTS += -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 
-qemu: $K/kernel fs.img
+qemu: $K/kernel fs
 #	$(QEMU) $(QEMUOPTS)
 
 .gdbinit: .gdbinit.tmpl-riscv

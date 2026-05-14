@@ -4,12 +4,7 @@
 #include "riscv.h"
 #include "defs.h"
 #include "sbi.h"
-#ifdef QEMU
 #include "disk.h"
-#else
-void sdcard_init(void);
-int  fat32_init(void);
-#endif
 
 volatile static int started = 0;
 volatile static int boot_leader_flag = 0;
@@ -46,13 +41,7 @@ main()
     plicinithart();  // ask PLIC for device interrupts
     binit();         // buffer cache
     fileinit();      // file table
-#ifdef QEMU
-    iinit();         // inode cache
-    disk_init(); // emulated hard disk
-#else
-    sdcard_init();   // SD card
-    fat32_init();    // FAT32 filesystem
-#endif
+    disk_init();     // initialize disk driver (virtio for QEMU, sdcard for K210)
     userinit();      // first user process
 
     // Start secondary harts via SBI HSM

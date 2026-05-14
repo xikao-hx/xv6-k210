@@ -41,3 +41,7 @@ entry("sysinfo");
 entry("symlink");
 entry("mmap");
 entry("munmap");
+entry("dev");
+entry("readdir");
+entry("getcwd");
+entry("remove");

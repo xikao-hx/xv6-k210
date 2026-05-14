@@ -122,6 +122,10 @@ extern uint64 sys_sysinfo(void);
 extern uint64 sys_symlink(void);
 extern uint64 sys_mmap(void);
 extern uint64 sys_munmap(void);
+extern uint64 sys_dev(void);
+extern uint64 sys_readdir(void);
+extern uint64 sys_getcwd(void);
+extern uint64 sys_remove(void);
 
 static char *syscalls_name[] = {
 [SYS_fork]    "fork",
@@ -148,6 +152,12 @@ static char *syscalls_name[] = {
 [SYS_trace]   "trace",
 [SYS_sysinfo] "sysinfo",
 [SYS_symlink] "sys_symlink",
+[SYS_mmap]    "mmap",
+[SYS_munmap]  "munmap",
+[SYS_dev]     "dev",
+[SYS_readdir] "readdir",
+[SYS_getcwd]  "getcwd",
+[SYS_remove]  "remove",
 };
 
 static char syscalls_argc[] = {
@@ -174,6 +184,12 @@ static char syscalls_argc[] = {
 [SYS_close]   1,
 [SYS_trace]   1,
 [SYS_sysinfo] 1,
+[SYS_mmap]    2,
+[SYS_munmap]  2,
+[SYS_dev]     3,
+[SYS_readdir] 2,
+[SYS_getcwd]  1,
+[SYS_remove]  1,
 };
 
 static uint64 (*syscalls[])(void) = {
@@ -203,6 +219,10 @@ static uint64 (*syscalls[])(void) = {
 [SYS_symlink]   sys_symlink,
 [SYS_mmap]      sys_mmap,
 [SYS_munmap]    sys_munmap,
+[SYS_dev]       sys_dev,
+[SYS_readdir]   sys_readdir,
+[SYS_getcwd]    sys_getcwd,
+[SYS_remove]    sys_remove,
 };
 
 // 尝试获取字符串参数，如果成功返回1，否则返回0

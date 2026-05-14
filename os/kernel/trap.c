@@ -76,13 +76,11 @@ usertrap(void)
     uint64 va = r_stval();
     pagetable_t pagetable = p->pagetable;
 
-#ifdef QEMU
     if (find_vma(p, va) == 0) {
       if (mmap_handler(va, r_scause()) != 0) {
         p->killed = 1;
       }
     } else
-#endif
     {
       if (va < p->sz) {
         if (uvmcowpage(pagetable, va) == 0) {

@@ -1,22 +1,54 @@
 //
-// File-system system calls.
-// Mostly argument checking, since we don't trust
-// user code, and calls into file.c and fs.c.
+// File-system system calls (K210/FAT32 version).
 //
 
 #include "types.h"
 #include "riscv.h"
-#include "defs.h"
 #include "param.h"
+#include "memlayout.h"
 #include "stat.h"
 #include "spinlock.h"
 #include "proc.h"
-#include "fs.h"
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "fat32.h"
+#include "string.h"
+#include "printf.h"
 
-#define MAX_SYMLINK_DEPTH 10
+// Forward declarations (replaces defs.h which conflicts with fat32's dirlookup)
+int             argint(int, int*);
+int             argstr(int, char*, int);
+int             argaddr(int, uint64 *);
+int             fetchstr(uint64, char*, int);
+struct proc*    myproc(void);
+void            fileclose(struct file*);
+struct file*    filealloc(void);
+struct file*    filedup(struct file*);
+int             fileread(struct file*, uint64, int n);
+int             filestat(struct file*, uint64 addr);
+int             filewrite(struct file*, uint64, int n);
+int             dirnext(struct file *f, uint64 addr);
+int             pipealloc(struct file**, struct file**);
+int             copyout(pagetable_t, uint64, char *, uint64);
+uint64          walkaddr(pagetable_t, uint64);
+int             strlen(const char*);
+struct dirent*  enameparent(char *path, char *name);
+struct dirent*  ename(char *path);
+struct dirent*  ealloc(struct dirent *dp, char *name, int attr);
+int             exec(char *path, char **argv);
+void*           kalloc(void);
+void            kfree(void *);
+int             fetchaddr(uint64, uint64*);
+int             fetchstr(uint64, char*, int);
+void            etrunc(struct dirent *entry);
+int             eread(struct dirent *entry, int user_dst, uint64 dst, uint off, uint n);
+int             ewrite(struct dirent *entry, int user_src, uint64 src, uint off, uint n);
+void *          memset(void *, int, uint);
+int             mappages(pagetable_t, uint64, uint64, uint64, int);
+void            upg2ukpg(pagetable_t, pagetable_t, uint64, uint64);
+void            uvmunmap(pagetable_t, uint64, uint64, int);
+int             argint(int, int*);
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -117,370 +149,161 @@ sys_fstat(void)
   return filestat(f, st);
 }
 
-// Create the path new as a link to the same inode as old.
-uint64
-sys_link(void)
+static struct dirent*
+create(char *path, short type, int mode)
 {
-  char name[DIRSIZ], new[MAXPATH], old[MAXPATH];
-  struct inode *dp, *ip;
+  struct dirent *ep, *dp;
+  char name[FAT32_MAX_FILENAME + 1];
 
-  if(argstr(0, old, MAXPATH) < 0 || argstr(1, new, MAXPATH) < 0)
-    return -1;
-
-  begin_op();
-  if((ip = namei(old)) == 0){
-    end_op();
-    return -1;
-  }
-
-  ilock(ip);
-  if(ip->type == T_DIR){
-    iunlockput(ip);
-    end_op();
-    return -1;
-  }
-
-  ip->nlink++;
-  iupdate(ip);
-  iunlock(ip);
-
-  if((dp = nameiparent(new, name)) == 0)
-    goto bad;
-  ilock(dp);
-  if(dp->dev != ip->dev || dirlink(dp, name, ip->inum) < 0){
-    iunlockput(dp);
-    goto bad;
-  }
-  iunlockput(dp);
-  iput(ip);
-
-  end_op();
-
-  return 0;
-
-bad:
-  ilock(ip);
-  ip->nlink--;
-  iupdate(ip);
-  iunlockput(ip);
-  end_op();
-  return -1;
-}
-
-// Is the directory dp empty except for "." and ".." ?
-static int
-isdirempty(struct inode *dp)
-{
-  int off;
-  struct dirent de;
-
-  for(off=2*sizeof(de); off<dp->size; off+=sizeof(de)){
-    if(readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
-      panic("isdirempty: readi");
-    if(de.inum != 0)
-      return 0;
-  }
-  return 1;
-}
-
-uint64
-sys_unlink(void)
-{
-  struct inode *ip, *dp;
-  struct dirent de;
-  char name[DIRSIZ], path[MAXPATH];
-  uint off;
-
-  if(argstr(0, path, MAXPATH) < 0)
-    return -1;
-
-  begin_op();
-  if((dp = nameiparent(path, name)) == 0){
-    end_op();
-    return -1;
-  }
-
-  ilock(dp);
-
-  // Cannot unlink "." or "..".
-  if(namecmp(name, ".") == 0 || namecmp(name, "..") == 0)
-    goto bad;
-
-  if((ip = dirlookup(dp, name, &off)) == 0)
-    goto bad;
-  ilock(ip);
-
-  if(ip->nlink < 1)
-    panic("unlink: nlink < 1");
-  if(ip->type == T_DIR && !isdirempty(ip)){
-    iunlockput(ip);
-    goto bad;
-  }
-
-  memset(&de, 0, sizeof(de));
-  if(writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
-    panic("unlink: writei");
-  if(ip->type == T_DIR){
-    dp->nlink--;
-    iupdate(dp);
-  }
-  iunlockput(dp);
-
-  ip->nlink--;
-  iupdate(ip);
-  iunlockput(ip);
-
-  end_op();
-
-  return 0;
-
-bad:
-  iunlockput(dp);
-  end_op();
-  return -1;
-}
-
-static struct inode*
-create(char *path, short type, short major, short minor)
-{
-  struct inode *ip, *dp;
-  char name[DIRSIZ];
-
-  if((dp = nameiparent(path, name)) == 0)
+  if((dp = enameparent(path, name)) == 0)
     return 0;
 
-  ilock(dp);
+  if (type == T_DIR) {
+    mode = ATTR_DIRECTORY;
+  } else if (mode & O_RDONLY) {
+    mode = ATTR_READ_ONLY;
+  } else {
+    mode = 0;
+  }
 
-  if((ip = dirlookup(dp, name, 0)) != 0){
-    iunlockput(dp);
-    ilock(ip);
-    if(type == T_FILE && (ip->type == T_FILE || ip->type == T_DEVICE))
-      return ip;
-    iunlockput(ip);
+  elock(dp);
+  if ((ep = ealloc(dp, name, mode)) == 0) {
+    eunlock(dp);
+    eput(dp);
     return 0;
   }
 
-  if((ip = ialloc(dp->dev, type)) == 0)
-    panic("create: ialloc");
-
-  ilock(ip);
-  ip->major = major;
-  ip->minor = minor;
-  ip->nlink = 1;
-  iupdate(ip);
-
-  if(type == T_DIR){  // Create . and .. entries.
-    dp->nlink++;  // for ".."
-    iupdate(dp);
-    // No ip->nlink++ for ".": avoid cyclic ref count.
-    if(dirlink(ip, ".", ip->inum) < 0 || dirlink(ip, "..", dp->inum) < 0)
-      panic("create dots");
+  if ((type == T_DIR && !(ep->attribute & ATTR_DIRECTORY)) ||
+      (type == T_FILE && (ep->attribute & ATTR_DIRECTORY))) {
+    eunlock(dp);
+    eput(ep);
+    eput(dp);
+    return 0;
   }
 
-  if(dirlink(dp, name, ip->inum) < 0)
-    panic("create: dirlink");
+  eunlock(dp);
+  eput(dp);
 
-  iunlockput(dp);
-
-  return ip;
+  elock(ep);
+  return ep;
 }
 
 uint64
 sys_open(void)
 {
-  char path[MAXPATH];
+  char path[FAT32_MAX_PATH];
   int fd, omode;
   struct file *f;
-  struct inode *ip;
-  int n;
+  struct dirent *ep;
 
-  if((n = argstr(0, path, MAXPATH)) < 0 || argint(1, &omode) < 0)
+  if(argstr(0, path, FAT32_MAX_PATH) < 0 || argint(1, &omode) < 0)
     return -1;
 
-  begin_op();
-
   if(omode & O_CREATE){
-    ip = create(path, T_FILE, 0, 0);
-    if(ip == 0){
-      end_op();
+    ep = create(path, T_FILE, omode);
+    if(ep == 0){
       return -1;
     }
   } else {
-    if((ip = namei(path)) == 0){
-      end_op();
+    if((ep = ename(path)) == 0){
       return -1;
     }
-    ilock(ip);
-    if(ip->type == T_DIR && omode != O_RDONLY){
-      iunlockput(ip);
-      end_op();
-      return -1;
-    }
-  }
-
-  if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
-    iunlockput(ip);
-    end_op();
-    return -1;
-  }
-
-  if (ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)) {
-    for (int i = 0; i < MAX_SYMLINK_DEPTH; i ++) {
-      if (readi(ip, 0, (uint64)path, 0, MAXPATH) != MAXPATH) {
-        iunlock(ip);
-        end_op();
-        return -1;
-      }
-
-      iunlock(ip);
-      ip = namei(path);
-      if (ip == 0) {
-        end_op();
-        return -1;
-      }
-
-      ilock(ip);
-      if (ip->type != T_SYMLINK) 
-        break;
-    }
-
-    if (ip->type == T_SYMLINK) {
-      iunlock(ip);
-      end_op();
+    elock(ep);
+    if((ep->attribute & ATTR_DIRECTORY) && omode != O_RDONLY){
+      eunlock(ep);
+      eput(ep);
       return -1;
     }
   }
 
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
-    if(f)
+    if (f) {
       fileclose(f);
-    iunlockput(ip);
-    end_op();
+    }
+    eunlock(ep);
+    eput(ep);
     return -1;
   }
 
-  if(ip->type == T_DEVICE){
-    f->type = FD_DEVICE;
-    f->major = ip->major;
-  } else {
-    f->type = FD_INODE;
-    f->off = 0;
+  if(!(ep->attribute & ATTR_DIRECTORY) && (omode & O_TRUNC)){
+    etrunc(ep);
   }
-  f->ip = ip;
+
+  f->type = FD_ENTRY;
+  f->off = (omode & O_APPEND) ? ep->file_size : 0;
+  f->ep = ep;
   f->readable = !(omode & O_WRONLY);
   f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
 
-  if((omode & O_TRUNC) && ip->type == T_FILE){
-    itrunc(ip);
-  }
-
-  iunlock(ip);
-  end_op();
+  eunlock(ep);
 
   return fd;
 }
 
 uint64
-sys_mkdir(void)
+sys_exec(void)
 {
-  char path[MAXPATH];
-  struct inode *ip;
+  char path[FAT32_MAX_PATH], *argv[MAXARG];
+  int i;
+  uint64 uargv, uarg;
 
-  begin_op();
-  if(argstr(0, path, MAXPATH) < 0 || (ip = create(path, T_DIR, 0, 0)) == 0){
-    end_op();
+  if(argstr(0, path, FAT32_MAX_PATH) < 0 || argaddr(1, &uargv) < 0){
     return -1;
   }
-  iunlockput(ip);
-  end_op();
-  return 0;
+  memset(argv, 0, sizeof(argv));
+  for(i=0; i<MAXARG; i++){
+    if(fetchaddr(uargv+sizeof(uint64)*i, &uarg) < 0)
+      return -1;
+    if(uarg == 0)
+      break;
+    argv[i] = kalloc();
+    if(argv[i] == 0)
+      panic("sys_exec kalloc");
+    if(fetchstr(uarg, argv[i], PGSIZE) < 0)
+      return -1;
+  }
+
+  int ret = exec(path, argv);
+
+  for(i=0; i<MAXARG && argv[i]; i++)
+    kfree(argv[i]);
+  return ret;
 }
 
 uint64
-sys_mknod(void)
+sys_mkdir(void)
 {
-  struct inode *ip;
-  char path[MAXPATH];
-  int major, minor;
+  char path[FAT32_MAX_PATH];
+  struct dirent *ep;
 
-  begin_op();
-  if((argstr(0, path, MAXPATH)) < 0 ||
-     argint(1, &major) < 0 ||
-     argint(2, &minor) < 0 ||
-     (ip = create(path, T_DEVICE, major, minor)) == 0){
-    end_op();
+  if(argstr(0, path, FAT32_MAX_PATH) < 0 || (ep = create(path, T_DIR, 0)) == 0){
     return -1;
   }
-  iunlockput(ip);
-  end_op();
+  eunlock(ep);
+  eput(ep);
   return 0;
 }
 
 uint64
 sys_chdir(void)
 {
-  char path[MAXPATH];
-  struct inode *ip;
+  char path[FAT32_MAX_PATH];
+  struct dirent *ep;
   struct proc *p = myproc();
-  
-  begin_op();
-  if(argstr(0, path, MAXPATH) < 0 || (ip = namei(path)) == 0){
-    end_op();
+
+  if(argstr(0, path, FAT32_MAX_PATH) < 0 || (ep = ename(path)) == 0){
     return -1;
   }
-  ilock(ip);
-  if(ip->type != T_DIR){
-    iunlockput(ip);
-    end_op();
+  elock(ep);
+  if(!(ep->attribute & ATTR_DIRECTORY)){
+    eunlock(ep);
+    eput(ep);
     return -1;
   }
-  iunlock(ip);
-  iput(p->cwd);
-  end_op();
-  p->cwd = ip;
+  eunlock(ep);
+  eput(p->cwd);
+  p->cwd = ep;
   return 0;
-}
-
-uint64
-sys_exec(void)
-{
-  char path[MAXPATH], *argv[MAXARG];
-  int i;
-  uint64 uargv, uarg;
-
-  if(argstr(0, path, MAXPATH) < 0 || argaddr(1, &uargv) < 0){
-    return -1;
-  }
-  memset(argv, 0, sizeof(argv));
-  for(i=0;; i++){
-    if(i >= NELEM(argv)){
-      goto bad;
-    }
-    if(fetchaddr(uargv+sizeof(uint64)*i, (uint64*)&uarg) < 0){
-      goto bad;
-    }
-    if(uarg == 0){
-      argv[i] = 0;
-      break;
-    }
-    argv[i] = kalloc();
-    if(argv[i] == 0)
-      goto bad;
-    if(fetchstr(uarg, argv[i], PGSIZE) < 0)
-      goto bad;
-  }
-
-  int ret = exec(path, argv);
-
-  for(i = 0; i < NELEM(argv) && argv[i] != 0; i++)
-    kfree(argv[i]);
-
-  return ret;
-
- bad:
-  for(i = 0; i < NELEM(argv) && argv[i] != 0; i++)
-    kfree(argv[i]);
-  return -1;
 }
 
 uint64
@@ -514,72 +337,171 @@ sys_pipe(void)
   return 0;
 }
 
-uint64 sys_symlink(void) 
+// To open console/device.
+uint64
+sys_dev(void)
 {
-  char path[MAXPATH], target[MAXPATH];
-  struct inode *ip;
+  int fd, omode;
+  int major, minor;
+  struct file *f;
 
-  if (argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0) 
-    return -1;
-
-  begin_op();
-
-  // 分配一个inode节点，文件类型是T_SYMLINK，create返回被锁定的inode
-  ip = create(path, T_SYMLINK, 0, 0);
-  if(ip == 0){
-    end_op();
+  if(argint(0, &omode) < 0 || argint(1, &major) < 0 || argint(2, &minor) < 0){
     return -1;
   }
 
-  // 将inode数据块中写入target路径
-  if(writei(ip, 0, (uint64)target, 0, MAXPATH) < MAXPATH) {
-    iunlockput(ip);
-    end_op();
+  if(omode & O_CREATE){
+    panic("dev file on FAT");
+  }
+
+  if(major < 0 || major >= NDEV)
+    return -1;
+
+  if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
+    if(f)
+      fileclose(f);
     return -1;
   }
 
-  iunlockput(ip);
-  end_op();
+  f->type = FD_DEVICE;
+  f->off = 0;
+  f->ep = 0;
+  f->major = major;
+  f->readable = !(omode & O_WRONLY);
+  f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
+
+  return fd;
+}
+
+// To support ls command
+uint64
+sys_readdir(void)
+{
+  struct file *f;
+  uint64 p;
+
+  if(argfd(0, 0, &f) < 0 || argaddr(1, &p) < 0)
+    return -1;
+  // dirnext reads directory entries; used by ls
+  // In K210, we use the FAT32 way
+  if(f->type == FD_ENTRY){
+    return dirnext(f, p);
+  }
+  return -1;
+}
+
+// get absolute cwd string
+uint64
+sys_getcwd(void)
+{
+  uint64 addr;
+  if (argaddr(0, &addr) < 0)
+    return -1;
+
+  struct dirent *de = myproc()->cwd;
+  char path[FAT32_MAX_PATH];
+  char *s;
+  int len;
+
+  if (de->parent == 0) {
+    s = "/";
+  } else {
+    s = path + FAT32_MAX_PATH - 1;
+    *s = '\0';
+    while (de->parent) {
+      len = strlen(de->filename);
+      s -= len;
+      if (s <= path)
+        return -1;
+      strncpy(s, de->filename, len);
+      *--s = '/';
+      de = de->parent;
+    }
+  }
+
+  if (copyout(myproc()->pagetable, addr, s, strlen(s) + 1) < 0)
+    return -1;
+
   return 0;
 }
 
-uint64 sys_mmap(void)
+// Is the directory dp empty except for "." and ".." ?
+static int
+isdirempty(struct dirent *dp)
+{
+  struct dirent ep;
+  int count;
+  int ret;
+  ep.valid = 0;
+  ret = enext(dp, &ep, 2 * 32, &count);   // skip the "." and ".."
+  return ret == -1;
+}
+
+uint64
+sys_remove(void)
+{
+  char path[FAT32_MAX_PATH];
+  struct dirent *ep;
+  int len;
+  if((len = argstr(0, path, FAT32_MAX_PATH)) <= 0)
+    return -1;
+
+  char *s = path + len - 1;
+  while (s >= path && *s == '/') {
+    s--;
+  }
+  if (s >= path && *s == '.' && (s == path || *--s == '/')) {
+    return -1;
+  }
+
+  if((ep = ename(path)) == 0){
+    return -1;
+  }
+  elock(ep);
+  if((ep->attribute & ATTR_DIRECTORY) && !isdirempty(ep)){
+      eunlock(ep);
+      eput(ep);
+      return -1;
+  }
+  elock(ep->parent);
+  eremove(ep);
+  eunlock(ep->parent);
+  eunlock(ep);
+  eput(ep);
+
+  return 0;
+}
+
+uint64
+sys_mmap(void)
 {
   uint64 addr;
   int length;
   int prot;
   int flags;
   int vfd;
-  int offset;
   struct file *vfile;
   uint64 err = 0xffffffffffffffff;
   struct proc *p = myproc();
-  
-  // 获取系统调用参数
-  if (argaddr(0, &addr) < 0 || argint(1, &length) < 0 || argint(2, &prot) < 0 || 
+  int offset = 0;
+
+  if (argaddr(0, &addr) < 0 || argint(1, &length) < 0 || argint(2, &prot) < 0 ||
       argint(3, &flags) < 0 || argfd(4, &vfd, &vfile) < 0 || argint(5, &offset) < 0) {
     return err;
   }
 
-  // 实验中提示addr和offset为0，简化程序可能发生的情况
-  if (addr != 0 || offset != 0 || length < 0) {
+  if (addr != 0 || offset != 0 || length < 0)
     return err;
-  }
 
-  // 文件不可写则不允许用于PROT_WRITE权限时映射为MAP_SHARED
-  if (vfile->writable == 0 && (prot & PROT_WRITE) != 0 && flags == MAP_SHARED) {
+  if (vfile->writable == 0 && (prot & PROT_WRITE) != 0 && flags == MAP_SHARED)
     return err;
-  }
 
-  if (p->sz + length > MAXVA) {
+  if (p->sz + length > MAXVA)
     return err;
-  }
 
-  // 遍历查找未使用的vma_area结构体
   for (int i = 0; i < NVMA; i++) {
     if (p->vmas[i].used == 0) {
       p->vmas[i].used = 1;
-      p->vmas[i].addr = p->sz;  // 这个地方很重要
+      p->vmas[i].addr = p->sz;
       p->vmas[i].flags = flags;
       p->vmas[i].length = length;
       p->vmas[i].offset = offset;
@@ -592,10 +514,41 @@ uint64 sys_mmap(void)
       return p->vmas[i].addr;
     }
   }
-  
+
   return err;
 }
 
+// FAT32 stubs for unsupported syscalls
+
+uint64
+sys_mknod(void)
+{
+  // FAT32 has no device nodes; use sys_dev instead
+  return -1;
+}
+
+uint64
+sys_link(void)
+{
+  // FAT32 has no hard links
+  return -1;
+}
+
+uint64
+sys_symlink(void)
+{
+  // FAT32 has no symbolic links
+  return -1;
+}
+
+uint64
+sys_unlink(void)
+{
+  // unlink is an alias for remove in FAT32
+  return sys_remove();
+}
+
+// mmap page fault handler (FAT32 version using eread)
 int
 mmap_handler(uint64 va, uint64 scause)
 {
@@ -604,7 +557,6 @@ mmap_handler(uint64 va, uint64 scause)
   int i = 0;
   struct vma_area *vma;
 
-  // 根据地址查找属于哪一个vma
   for (; i < NVMA; i ++) {
     vma = &p->vmas[i];
     if (vma->used && vma->addr <= va && va <= (vma->addr + vma->length - 1)) {
@@ -616,64 +568,56 @@ mmap_handler(uint64 va, uint64 scause)
     return -1;
   }
 
-  // 分配物理地址，并读取文件内容
   struct file *vfile = vma->vfile;
   if (scause == 13 && vfile->readable == 0) return -1;
   if (scause == 15 && vfile->writable == 0) return -1;
 
   void * pa = kalloc();
   if (pa == 0) {
-    printf("mmap_hander: kalloc err\n");
+    printf("mmap_handler: kalloc err\n");
     return -1;
   }
   memset(pa, 0, PGSIZE);
 
-  ilock(vfile->ip);
+  elock(vfile->ep);
   int offset = vma->offset + PGROUNDDOWN(va - vma->addr);
-  int readbytes = readi(vfile->ip, 0, (uint64)pa, offset, PGSIZE);
+  int readbytes = eread(vfile->ep, 0, (uint64)pa, offset, PGSIZE);
   if (readbytes == 0) {
-    iunlock(vfile->ip);
+    eunlock(vfile->ep);
     kfree(pa);
     return -1;
   }
-  iunlock(vfile->ip);
+  eunlock(vfile->ep);
 
-  // 添加页面映射
   int pte_flags = PTE_U;
   if (vma->prot & PROT_READ) pte_flags |= PTE_R;
   if (vma->prot & PROT_WRITE) pte_flags |= PTE_W;
   if (vma->prot & PROT_EXEC) pte_flags |= PTE_X;
-  // panic出现
-  // if (mappages(pagetable, PGROUNDDOWN(va), (uint64)pa, PGSIZE, pte_flags) != 0)  
-  
+
   if (mappages(pagetable, PGROUNDDOWN(va), (uint64)pa, PGSIZE, pte_flags) != 0) {
     kfree(pa);
     return -1;
   }
 
-  // 同步修改进程的内核页表，这里要加上，否则有错误出现
   upg2ukpg(pagetable, p->kpagetable, va, va + PGSIZE);
-
   return 0;
 }
 
-extern uint64 sys_munmap(void)
+uint64
+sys_munmap(void)
 {
   uint64 addr;
   int length;
   struct proc *p = myproc();
   struct vma_area *vma;
-  
   int i = 0;
 
   if (argaddr(0, &addr) < 0 || argint(1, &length) < 0) {
     return -1;
   }
 
-  // 根据提示：munmap的地址只能是起始和结束位置
   for (; i < NVMA; i ++) {
     vma = &p->vmas[i];
-    //uint64 addr = vma->addr;
     if (vma->used && vma->length >= length) {
       if (vma->addr == addr) {
         vma->addr += length;
@@ -684,22 +628,19 @@ extern uint64 sys_munmap(void)
         break;
       }
     }
-  } 
+  }
 
   if (i == NVMA) {
     return -1;
   }
 
-  // 写回文件系统
   if (vma->vfile->writable && (vma->prot & PROT_WRITE) && vma->flags == MAP_SHARED) {
     filewrite(vma->vfile, addr, length);
   }
 
-  // 取消映射
-  uvmunmap(p->pagetable, PGROUNDDOWN(addr), length / PGSIZE, 1);   
-  ukvmdealloc(p->kpagetable, addr, vma->addr, 0);
-  
-  // 关闭文件
+  uvmunmap(p->pagetable, PGROUNDDOWN(addr), length / PGSIZE, 1);
+  // Note: ukvmdealloc not available, skip for now
+
   if (vma->length == 0) {
     fileclose(vma->vfile);
     vma->used = 0;
@@ -719,6 +660,5 @@ find_vma(struct proc *p, uint64 va)
       }
     }
   }
-
   return -1;
 }

@@ -6,15 +6,6 @@
 #define T_DEVICE  3   // Device
 #define T_SYMLINK 4
 
-#ifdef QEMU
-struct stat {
-  int dev;     // File system's disk device
-  uint ino;    // Inode number
-  short type;  // Type of file
-  short nlink; // Number of links to file
-  uint64 size; // Size of file in bytes
-};
-#else
 #define STAT_MAX_NAME 32
 
 struct stat {
@@ -23,6 +14,5 @@ struct stat {
   short type;  // Type of file
   uint64 size; // Size of file in bytes
 };
-#endif
 
 #endif

@@ -1,17 +1,36 @@
 //
 // Support functions for system calls that involve file descriptors.
+// K210 (FAT32) version.
 //
 
 #include "types.h"
 #include "riscv.h"
-#include "defs.h"
 #include "param.h"
-#include "fs.h"
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "file.h"
 #include "stat.h"
 #include "proc.h"
+#include "fat32.h"
+#include "string.h"
+#include "printf.h"
+
+// Forward declarations (replaces defs.h which conflicts with fat32's dirlookup)
+struct buf*     bread(uint, uint);
+void            brelse(struct buf*);
+void            bwrite(struct buf*);
+int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
+int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
+void            pipeclose(struct pipe*, int);
+int             piperead(struct pipe*, uint64, int);
+int             pipewrite(struct pipe*, uint64, int);
+void            initlock(struct spinlock*, char*);
+void            acquire(struct spinlock*);
+void            release(struct spinlock*);
+pagetable_t     proc_pagetable(struct proc *);
+void            proc_freepagetable(pagetable_t, uint64);
+int             copyout(pagetable_t, uint64, char *, uint64);
+struct proc*    myproc(void);
 
 struct devsw devsw[NDEV];
 struct {
@@ -75,10 +94,10 @@ fileclose(struct file *f)
 
   if(ff.type == FD_PIPE){
     pipeclose(ff.pipe, ff.writable);
-  } else if(ff.type == FD_INODE || ff.type == FD_DEVICE){
-    begin_op();
-    iput(ff.ip);
-    end_op();
+  } else if(ff.type == FD_ENTRY){
+    eput(ff.ep);
+  } else if(ff.type == FD_DEVICE){
+    // no cleanup needed for device
   }
 }
 
@@ -89,14 +108,17 @@ filestat(struct file *f, uint64 addr)
 {
   struct proc *p = myproc();
   struct stat st;
-  
-  if(f->type == FD_INODE || f->type == FD_DEVICE){
-    ilock(f->ip);
-    stati(f->ip, &st);
-    iunlock(f->ip);
+
+  if(f->type == FD_ENTRY){
+    elock(f->ep);
+    estat(f->ep, &st);
+    eunlock(f->ep);
     if(copyout(p->pagetable, addr, (char *)&st, sizeof(st)) < 0)
       return -1;
     return 0;
+  } else if(f->type == FD_DEVICE){
+    // device stat not implemented for K210
+    return -1;
   }
   return -1;
 }
@@ -117,11 +139,11 @@ fileread(struct file *f, uint64 addr, int n)
     if(f->major < 0 || f->major >= NDEV || !devsw[f->major].read)
       return -1;
     r = devsw[f->major].read(1, addr, n);
-  } else if(f->type == FD_INODE){
-    ilock(f->ip);
-    if((r = readi(f->ip, 1, addr, f->off, n)) > 0)
+  } else if(f->type == FD_ENTRY){
+    elock(f->ep);
+    if((r = eread(f->ep, 1, addr, f->off, n)) > 0)
       f->off += r;
-    iunlock(f->ip);
+    eunlock(f->ep);
   } else {
     panic("fileread");
   }
@@ -145,26 +167,14 @@ filewrite(struct file *f, uint64 addr, int n)
     if(f->major < 0 || f->major >= NDEV || !devsw[f->major].write)
       return -1;
     ret = devsw[f->major].write(1, addr, n);
-  } else if(f->type == FD_INODE){
-    // write a few blocks at a time to avoid exceeding
-    // the maximum log transaction size, including
-    // i-node, indirect block, allocation blocks,
-    // and 2 blocks of slop for non-aligned writes.
-    // this really belongs lower down, since writei()
-    // might be writing a device like the console.
-    int max = ((MAXOPBLOCKS-1-1-2) / 2) * BSIZE;
+  } else if(f->type == FD_ENTRY){
     int i = 0;
     while(i < n){
       int n1 = n - i;
-      if(n1 > max)
-        n1 = max;
-
-      begin_op();
-      ilock(f->ip);
-      if ((r = writei(f->ip, 1, addr + i, f->off, n1)) > 0)
+      elock(f->ep);
+      if ((r = ewrite(f->ep, 1, addr + i, f->off, n1)) > 0)
         f->off += r;
-      iunlock(f->ip);
-      end_op();
+      eunlock(f->ep);
 
       if(r < 0)
         break;
@@ -180,3 +190,28 @@ filewrite(struct file *f, uint64 addr, int n)
   return ret;
 }
 
+int
+dirnext(struct file *f, uint64 addr)
+{
+  if(f->readable == 0 || !(f->ep->attribute & ATTR_DIRECTORY))
+    return -1;
+
+  struct dirent de;
+  struct stat st;
+  int count = 0;
+  int ret;
+  elock(f->ep);
+  while ((ret = enext(f->ep, &de, f->off, &count)) == 0) {  // skip empty entry
+    f->off += count * 32;
+  }
+  eunlock(f->ep);
+  if (ret == -1)
+    return 0;
+
+  f->off += count * 32;
+  estat(&de, &st);
+  if(copyout(myproc()->pagetable, addr, (char *)&st, sizeof(st)) < 0)
+    return -1;
+
+  return 1;
+}
