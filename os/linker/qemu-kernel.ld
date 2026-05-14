@@ -1,12 +1,8 @@
-OUTPUT_ARCH( "riscv" )
-ENTRY( _entry )
+OUTPUT_ARCH("riscv")
+ENTRY(_entry)
 
 SECTIONS
 {
-  /*
-   * ensure that entry.S / _entry is at 0x80200000,
-   * where qemu's -kernel jumps.
-   */
   . = 0x80200000;
 
   .text : {
@@ -21,21 +17,23 @@ SECTIONS
 
   .rodata : {
     . = ALIGN(16);
-    *(.srodata .srodata.*) /* do not need to distinguish this from .rodata */
+    *(.srodata .srodata.*)
     . = ALIGN(16);
     *(.rodata .rodata.*)
   }
 
   .data : {
     . = ALIGN(16);
-    *(.sdata .sdata.*) /* do not need to distinguish this from .data */
+    *(.sdata .sdata.*)
     . = ALIGN(16);
     *(.data .data.*)
   }
 
   .bss : {
     . = ALIGN(16);
-    *(.sbss .sbss.*) /* do not need to distinguish this from .bss */
+    *(.bss.stack)
+    . = ALIGN(16);
+    *(.sbss .sbss.*)
     . = ALIGN(16);
     *(.bss .bss.*)
   }

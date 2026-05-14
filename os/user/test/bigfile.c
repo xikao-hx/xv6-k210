@@ -1,8 +1,8 @@
-#include "kernel/types.h"
-#include "kernel/stat.h"
+#include "types.h"
+#include "stat.h"
 #include "user/user.h"
-#include "kernel/fcntl.h"
-#include "kernel/fs.h"
+#include "fcntl.h"
+#include "fs.h"
 
 int
 main()

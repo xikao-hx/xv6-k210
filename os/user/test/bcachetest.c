@@ -1,9 +1,9 @@
-#include "kernel/fcntl.h"
-#include "kernel/param.h"
-#include "kernel/types.h"
-#include "kernel/stat.h"
-#include "kernel/riscv.h"
-#include "kernel/fs.h"
+#include "fcntl.h"
+#include "param.h"
+#include "types.h"
+#include "stat.h"
+#include "riscv.h"
+#include "fs.h"
 #include "user/user.h"
 
 void test0();

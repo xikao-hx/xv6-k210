@@ -14,7 +14,6 @@
 #include "riscv.h"
 #include "defs.h"
 #include "proc.h"
-#include "symtab.h"
 
 volatile int panicked = 0;
 

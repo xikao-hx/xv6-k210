@@ -212,7 +212,7 @@ void            statsinc(void);
 // sprintf.c
 int             snprintf(char*, int, char*, ...);
 
-struct symtab_entry* lookup_sym(uint64 addr);
+
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

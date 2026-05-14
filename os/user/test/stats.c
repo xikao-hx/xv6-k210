@@ -1,6 +1,6 @@
-#include "kernel/types.h"
-#include "kernel/stat.h"
-#include "kernel/fcntl.h"
+#include "types.h"
+#include "stat.h"
+#include "fcntl.h"
 #include "user/user.h"
 
 #define SZ 4096
