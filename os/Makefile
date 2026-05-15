@@ -214,6 +214,14 @@ fs: $(UPROGS)
 	@python3 scripts/mkfs.py "$U"
 	@echo "done"
 
+sdcard: userprogs
+	@if [ ! -d "$(dst)/bin" ]; then sudo mkdir $(dst)/bin; fi
+	@for file in $$( ls $U/_* ); do \
+		sudo cp $$file $(dst)/bin/$${file#$U/_}; done
+	@sudo cp $U/_init $(dst)/init
+	@sudo cp $U/_sh $(dst)/sh
+	@sudo cp README $(dst)/README
+
 -include kernel/*.d kernel/**/*.d user/*.d
 
 clean:

@@ -83,8 +83,38 @@ static int k210_final_init(bool cold_boot)
 	return 0;
 }
 
+static void k210_fpioa_init(void)
+{
+	/* Enable APB0 bus clock for FPIOA and UARTHS */
+	writel(readl((void *)(K210_SYSCTL_BASE_ADDR + K210_CLK_EN_CENT)) |
+	       K210_CLK_EN_CENT_APB0,
+	       (void *)(K210_SYSCTL_BASE_ADDR + K210_CLK_EN_CENT));
+	/* Read-back to ensure clock enable takes effect before FPIOA access */
+	readl((void *)(K210_SYSCTL_BASE_ADDR + K210_CLK_EN_CENT));
+
+	/* Enable FPIOA peripheral clock */
+	writel(readl((void *)(K210_SYSCTL_BASE_ADDR + K210_CLK_EN_PERI)) |
+	       K210_CLK_EN_PERI_FPIOA,
+	       (void *)(K210_SYSCTL_BASE_ADDR + K210_CLK_EN_PERI));
+	/* Read-back to ensure clock enable takes effect before FPIOA access */
+	readl((void *)(K210_SYSCTL_BASE_ADDR + K210_CLK_EN_PERI));
+
+	/*
+	 * Configure FPIOA pins for UARTHS (values from K210 SDK defaults):
+	 *   IO4 (UARTHS_RX): input enabled, schmitt trigger for noise immunity
+	 *   IO5 (UARTHS_TX): max drive strength, output enabled
+	 */
+	writel(FPIOA_IO_CFG(K210_FUNC_UARTHS_RX, 0, FPIOA_IE_EN | FPIOA_ST),
+	       (void *)(K210_FPIOA_BASE_ADDR + 4 * 4));
+	writel(FPIOA_IO_CFG(K210_FUNC_UARTHS_TX, 15, FPIOA_OE_EN),
+	       (void *)(K210_FPIOA_BASE_ADDR + 5 * 4));
+}
+
 static int k210_console_init(void)
 {
+	/* FPIOA must be configured before UART can work on K210 */
+	k210_fpioa_init();
+
 	return sifive_uart_init(K210_UART_BASE_ADDR, k210_get_clk_freq(),
 				K210_UART_BAUDRATE);
 }
