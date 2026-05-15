@@ -22,7 +22,6 @@ endif
 OBJS = \
   $(ENTRY_OBJ) \
   $K/main.o \
-  $K/trap.o \
   $K/devsw/console.o \
   $K/devsw/stats.o \
   $K/driver/uart.o \
@@ -45,9 +44,10 @@ OBJS = \
   $K/vm/kalloc.o \
   $K/vm/vm.o \
   $K/vm/vmcopyin.o \
-  $K/asm/swtch.o \
-  $K/asm/trampoline.o \
-  $K/asm/kernelvec.o
+  $K/proc/swtch.o \
+  $K/trap/trap.o \
+  $K/trap/trampoline.o \
+  $K/trap/kernelvec.o
 
 # Platform-specific objects
 ifeq ($(platform), k210)

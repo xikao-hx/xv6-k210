@@ -4,6 +4,10 @@
 SHELL_FOLDER=$(cd "$(dirname "$0")";pwd)
 CROSS_PREFIX=riscv64-unknown-linux-gnu
 OUTPUT=$SHELL_FOLDER/output
+export ARCH=riscv  
+export CROSS_COMPILE=riscv64-unknown-linux-gnu- 
+export PATH=$PATH:/home/xikao/quard_star_tutorial/toolchain/gcc-riscv64-unknown-linux-gnu/bin/
+
 
 # 创建输出根目录
 mkdir -p $OUTPUT
