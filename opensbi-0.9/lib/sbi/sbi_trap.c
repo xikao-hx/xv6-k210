@@ -232,6 +232,26 @@ void sbi_trap_handler(struct sbi_trap_regs *regs)
 		case IRQ_M_SOFT:
 			sbi_ipi_process();
 			break;
+		case IRQ_M_EXT:
+			/*
+			 * Forward M-mode external interrupt to S-mode.
+			 * On platforms where mideleg[9] is not available
+			 * (e.g., K210 v1.9.1), external interrupts always
+			 * arrive at M-mode. Forward to S-mode as SSI (proxy for external interrupt).
+			 * Clear MIE/MPIE so the interrupt does not re-fire
+			 * until S-mode completes handling and calls
+			 * sbi_set_mie().
+			 */
+			regs->mstatus &= ~MSTATUS_MIE;
+			regs->mstatus &= ~MSTATUS_MPIE;
+			trap.epc = regs->mepc;
+			trap.cause = IRQ_S_SOFT |
+				     (1UL << (__riscv_xlen - 1));
+			trap.tval = IRQ_S_EXT; /* stval=9 → forwarded external interrupt */
+			trap.tval2 = 0;
+			trap.tinst = 0;
+			rc = sbi_trap_redirect(regs, &trap);
+			break;
 		default:
 			msg = "unhandled external interrupt";
 			goto trap_error;

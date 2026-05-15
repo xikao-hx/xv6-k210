@@ -30,6 +30,12 @@ void
 trapinithart(void)
 {
   w_stvec((uint64)kernelvec);
+  w_sstatus(r_sstatus() | SSTATUS_SIE);
+  // enable supervisor-mode timer interrupts.
+  w_sie(r_sie() | SIE_SEIE | SIE_SSIE | SIE_STIE);
+  
+  // set the first timer interrupt via SBI
+  sbi_set_timer(r_time() + 1000000);
 }
 
 //
@@ -210,8 +216,16 @@ devintr()
 {
   uint64 scause = r_scause();
 
-  if((scause & 0x8000000000000000L) &&
-     (scause & 0xff) == 9){
+  #ifdef QEMU 
+	// handle external interrupt 
+	if ((0x8000000000000000L & scause) && 9 == (scause & 0xff)) 
+	#else 
+	// on k210, supervisor software interrupt is used 
+	// in alternative to supervisor external interrupt, 
+	// which is not available on k210. 
+	if (0x8000000000000001L == scause && 9 == r_stval()) 
+	#endif 
+  {
     // this is a supervisor external interrupt, via PLIC.
 
     // irq indicates which device interrupted.
@@ -219,13 +233,8 @@ devintr()
 
     if(irq == UART0_IRQ){
       uartintr();
-#ifdef QEMU
-    } else if(irq == VIRTIO0_IRQ){
-      disk_intr();
-#else
     } else if(irq == DISK_IRQ){
       disk_intr();
-#endif
     } else if(irq){
       printf("unexpected interrupt irq=%d\n", irq);
     }
@@ -236,25 +245,17 @@ devintr()
     if(irq)
       plic_complete(irq);
 
+#ifndef QEMU 
+    // On K210 (v1.9.1), external interrupts are forwarded from M-mode.
+    // Re-enable M-mode external interrupts before returning.
+		w_sip(r_sip() & ~2);    // clear pending bit
+		sbi_set_mie();
+#endif 
+
     return 1;
-  } else if(scause == 0x8000000000000001L){
-    // software interrupt from a machine-mode timer interrupt,
-    // forwarded by timervec in kernelvec.S.
-
-    if(cpuid() == 0){
-      clockintr();
-    }
-
-    // acknowledge the software interrupt by clearing
-    // the SSIP bit in sip.
-    w_sip(r_sip() & ~2);
-
-    return 2;
   } else if(scause == 0x8000000000000005L){
     // S-mode timer interrupt from OpenSBI
-    if(cpuid() == 0){
-      clockintr();
-    }
+    clockintr();
     return 2;
   } else {
     return 0;

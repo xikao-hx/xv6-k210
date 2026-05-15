@@ -28,12 +28,6 @@ main()
     kinit();         // physical page allocator
     kvminit();       // create kernel page table
     kvminithart();   // turn on paging
-
-    // enable S-mode global interrupts
-    asm volatile("csrs sstatus, %0" : : "r"(1 << 1)); // SIE = 1
-    asm volatile("csrs sie, %0" : : "r"(1 << 9));     // SEIE = 1
-    asm volatile("csrs sie, %0" : : "r"(1 << 5));     // STIE = 1
-
     procinit();      // process table
     trapinit();      // trap vectors
     trapinithart();  // install kernel trap vector
@@ -67,14 +61,7 @@ main()
     kvminithart();    // turn on paging
     trapinithart();   // install kernel trap vector
     plicinithart();   // ask PLIC for device interrupts
-
-    // enable S-mode global interrupts
-    asm volatile("csrs sstatus, %0" : : "r"(1 << 1)); // SIE = 1
-    asm volatile("csrs sie, %0" : : "r"(1 << 9));     // SEIE = 1
-    asm volatile("csrs sie, %0" : : "r"(1 << 5));     // STIE = 1
   }
 
-  // set the first timer interrupt via SBI
-  sbi_set_timer(r_time() + 1000000);
   scheduler();
 }

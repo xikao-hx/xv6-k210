@@ -38,6 +38,28 @@ static int system_opcode_insn(ulong insn, struct sbi_trap_regs *regs)
 	int csr_num   = (u32)insn >> 20;
 	ulong csr_val, new_csr_val;
 
+	/*
+	 * K210 (RISC-V v1.9.1) does not have sfence.vma.
+	 * Emulate it using sptbr + mstatus.VM + sfence.vm.
+	 */
+	if ((insn & 0xFE007FFF) == 0x12000073) {
+		ulong satp_val = csr_read(CSR_SATP);
+		ulong ppn = satp_val & SATP64_PPN;
+		ulong mstatus_val;
+
+		csr_write(CSR_SATP, ppn & 0x3FFFFFFFFFUL);
+
+		mstatus_val = csr_read(CSR_MSTATUS);
+		mstatus_val &= ~0x1F000000UL;
+		mstatus_val |= (9UL << 24);
+		csr_write(CSR_MSTATUS, mstatus_val);
+
+		__asm__ __volatile__(".word 0x10400073" ::: "memory");
+
+		regs->mepc += 4;
+		return 0;
+	}
+
 	/* TODO: Ensure that we got CSR read/write instruction */
 
 	if (sbi_emulate_csr_read(csr_num, regs, &csr_val))

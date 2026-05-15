@@ -1,5 +1,7 @@
 //
-// low-level driver routines for 16550a UART.
+// Console I/O via SBI ecalls. OpenSBI (M-mode) manages the UART hardware.
+// The K210 uses a SiFive UART which is incompatible with the 16550a register
+// interface, so all direct MMIO UART access is replaced with SBI calls.
 //
 
 #include "types.h"
@@ -9,34 +11,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
-
-// the UART control registers are memory-mapped
-// at address UART0. this macro returns the
-// address of one of the registers.
-#define Reg(reg) ((volatile unsigned char *)(UART0 + reg))
-
-// the UART control registers.
-// some have different meanings for
-// read vs write.
-// see http://byterunner.com/16550.html
-#define RHR 0                 // receive holding register (for input bytes)
-#define THR 0                 // transmit holding register (for output bytes)
-#define IER 1                 // interrupt enable register
-#define IER_TX_ENABLE (1<<0)
-#define IER_RX_ENABLE (1<<1)
-#define FCR 2                 // FIFO control register
-#define FCR_FIFO_ENABLE (1<<0)
-#define FCR_FIFO_CLEAR (3<<1) // clear the content of the two FIFOs
-#define ISR 2                 // interrupt status register
-#define LCR 3                 // line control register
-#define LCR_EIGHT_BITS (3<<0)
-#define LCR_BAUD_LATCH (1<<7) // special mode to set baud rate
-#define LSR 5                 // line status register
-#define LSR_RX_READY (1<<0)   // input is waiting to be read from RHR
-#define LSR_TX_IDLE (1<<5)    // THR can accept another character to send
-
-#define ReadReg(reg) (*(Reg(reg)))
-#define WriteReg(reg, v) (*(Reg(reg)) = (v))
+#include "sbi.h"
 
 // the transmit output buffer.
 struct spinlock uart_tx_lock;
@@ -52,29 +27,20 @@ void uartstart();
 void
 uartinit(void)
 {
-  // disable interrupts.
-  WriteReg(IER, 0x00);
-
-  // special mode to set baud rate.
-  WriteReg(LCR, LCR_BAUD_LATCH);
-
-  // LSB for baud rate of 38.4K.
-  WriteReg(0, 0x03);
-
-  // MSB for baud rate of 38.4K.
-  WriteReg(1, 0x00);
-
-  // leave set-baud mode,
-  // and set word length to 8 bits, no parity.
-  WriteReg(LCR, LCR_EIGHT_BITS);
-
-  // reset and enable FIFOs.
-  WriteReg(FCR, FCR_FIFO_ENABLE | FCR_FIFO_CLEAR);
-
-  // enable transmit and receive interrupts.
-  WriteReg(IER, IER_TX_ENABLE | IER_RX_ENABLE);
-
+  // OpenSBI already initialized the UART (baud rate, tx/rx enable, FIFO).
+  // However, OpenSBI disables all UART interrupts (IER=0).
+  // Re-enable receive interrupts so uartintr() gets called on input.
+  uart_tx_w = 0;
+  uart_tx_r = 0;
   initlock(&uart_tx_lock, "uart");
+
+#ifdef QEMU
+  // ns16550a: IER offset 1, bit 0 = Received Data Available interrupt
+  *(volatile uint8*)(UART0 + 1) = 0x01;
+#else
+  // SiFive UART: IE register at offset 0x10, bit 1 = RXWM (receive watermark)
+  *(volatile uint32*)(UART0 + 0x10) = 0x02;
+#endif
 }
 
 // add a character to the output buffer and tell the
@@ -108,10 +74,10 @@ uartputc(int c)
   }
 }
 
-// alternate version of uartputc() that doesn't 
+// alternate version of uartputc() that doesn't
 // use interrupts, for use by kernel printf() and
-// to echo characters. it spins waiting for the uart's
-// output register to be empty.
+// to echo characters. Uses SBI ecall instead of
+// direct MMIO to avoid SiFive/16550a incompatibility.
 void
 uartputc_sync(int c)
 {
@@ -122,16 +88,13 @@ uartputc_sync(int c)
       ;
   }
 
-  // wait for Transmit Holding Empty to be set in LSR.
-  while((ReadReg(LSR) & LSR_TX_IDLE) == 0)
-    ;
-  WriteReg(THR, c);
+  sbi_console_putchar(c);
 
   pop_off();
 }
 
 // if the UART is idle, and a character is waiting
-// in the transmit buffer, send it.
+// in the transmit buffer, send it via SBI.
 // caller must hold uart_tx_lock.
 // called from both the top- and bottom-half.
 void
@@ -142,35 +105,24 @@ uartstart()
       // transmit buffer is empty.
       return;
     }
-    
-    if((ReadReg(LSR) & LSR_TX_IDLE) == 0){
-      // the UART transmit holding register is full,
-      // so we cannot give it another byte.
-      // it will interrupt when it's ready for a new byte.
-      return;
-    }
-    
+
     int c = uart_tx_buf[uart_tx_r];
     uart_tx_r = (uart_tx_r + 1) % UART_TX_BUF_SIZE;
-    
+
     // maybe uartputc() is waiting for space in the buffer.
     wakeup(&uart_tx_r);
-    
-    WriteReg(THR, c);
+
+    sbi_console_putchar(c);
   }
 }
 
-// read one input character from the UART.
+// read one input character from the UART via SBI.
 // return -1 if none is waiting.
 int
 uartgetc(void)
 {
-  if(ReadReg(LSR) & 0x01){
-    // input data is ready.
-    return ReadReg(RHR);
-  } else {
-    return -1;
-  }
+  int c = sbi_console_getchar();
+  return c;
 }
 
 // handle a uart interrupt, raised because input has

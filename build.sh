@@ -122,7 +122,7 @@ MODULE=${1:-all}
 
 case "$MODULE" in
     "sbi")      build_opensbi ;;
-    "trusted")  build_trusted ;;
+    # "trusted")  build_trusted ;;
     "xv6")      build_xv6 ;;
     "k210")
         build_k210
@@ -132,7 +132,7 @@ case "$MODULE" in
         ;;
     "all")
         build_opensbi
-        build_trusted
+        # build_trusted
         build_xv6
         ;;
     *)

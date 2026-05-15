@@ -159,6 +159,24 @@ static int k210_timer_init(bool cold_boot)
 	return clint_warm_timer_init();
 }
 
+static int k210_vendor_ext_provider(long extid, long funcid,
+				     const struct sbi_trap_regs *regs,
+				     unsigned long *out_val,
+				     struct sbi_trap_info *out_trap)
+{
+	switch (extid) {
+	case 0x0A000004:
+		/* Register external interrupt handler (RustSBI compat, no-op) */
+		return 0;
+	case 0x0A000005:
+		/* Re-enable M-mode external interrupts after S-mode handling */
+		csr_set(CSR_MSTATUS, MSTATUS_MIE);
+		return 0;
+	default:
+		return SBI_ENOTSUPP;
+	}
+}
+
 const struct sbi_platform_operations platform_ops = {
 	.final_init	= k210_final_init,
 
@@ -176,6 +194,8 @@ const struct sbi_platform_operations platform_ops = {
 	.timer_value	   = clint_timer_value,
 	.timer_event_stop  = clint_timer_event_stop,
 	.timer_event_start = clint_timer_event_start,
+
+	.vendor_ext_provider = k210_vendor_ext_provider,
 };
 
 const struct sbi_platform platform = {

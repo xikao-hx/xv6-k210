@@ -20,11 +20,21 @@
 #ifdef QEMU
 // qemu puts UART registers here in physical memory.
 #define UART0 0x10000000L
-#define UART0_IRQ 10
 // virtio mmio interface
 #define VIRTIO0 0x10001000
-#define VIRTIO0_IRQ 1
 #endif
+
+#ifndef QEMU
+#define UART0 0x38000000L
+#endif
+
+#ifdef QEMU     // QEMU 
+#define UART0_IRQ   10 
+#define DISK_IRQ    1
+#else           // k210 
+#define UART0_IRQ   33
+#define DISK_IRQ    27
+#endif 
 
 // local interrupt controller, which contains the timer.
 #define CLINT 0x2000000L
@@ -41,11 +51,6 @@
 #define PLIC_SPRIORITY(hart) (PLIC + 0x201000 + (hart)*0x2000)
 #define PLIC_MCLAIM(hart) (PLIC + 0x200004 + (hart)*0x2000)
 #define PLIC_SCLAIM(hart) (PLIC + 0x201004 + (hart)*0x2000)
-
-#ifndef QEMU
-#define UART0 0x38000000L
-#define UART0_IRQ 33
-#endif
 
 // K210 peripheral base addresses (physical, identity-mapped)
 #ifndef QEMU
