@@ -86,7 +86,9 @@ build_xv6_k210() {
     cd $SHELL_FOLDER/os
     make clean
     make platform=k210
+    make platform=k210 fs
     cp $SHELL_FOLDER/os/kernel/kernel $OUTPUT/os/kernel
+    cp $SHELL_FOLDER/os/fs.img $OUTPUT/os/fs.img
 }
 
 build_k210() {
@@ -105,9 +107,11 @@ build_k210() {
 boot_k210() {
     # download firmware and boot
     k210_serialport=/dev/ttyUSB0
-    # sudo chmod 777 $k210_serialport
+    sudo chmod 777 $k210_serialport
 	python3 $SHELL_FOLDER/tools/kflash.py -p $k210_serialport -b 115200 -t $k210
 }
+
+# sudo dd if=output/os/fs.img of=/dev/<SD卡设备> bs=1M status=progress
 
 # --- 逻辑控制 ---
 usage() {

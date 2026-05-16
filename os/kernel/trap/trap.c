@@ -215,7 +215,6 @@ int
 devintr()
 {
   uint64 scause = r_scause();
-
   #ifdef QEMU 
 	// handle external interrupt 
 	if ((0x8000000000000000L & scause) && 9 == (scause & 0xff)) 

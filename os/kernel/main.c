@@ -5,6 +5,10 @@
 #include "defs.h"
 #include "sbi.h"
 #include "disk.h"
+#ifndef QEMU
+#include "fpioa.h"
+#include "dmac.h"
+#endif
 
 volatile static int started = 0;
 volatile static int boot_leader_flag = 0;
@@ -35,6 +39,10 @@ main()
     plicinithart();  // ask PLIC for device interrupts
     binit();         // buffer cache
     fileinit();      // file table
+#ifndef QEMU
+    fpioa_pin_init(); // configure SPI0 pins for SD card
+    dmac_init();      // initialize DMA controller
+#endif
     disk_init();     // initialize disk driver (virtio for QEMU, sdcard for K210)
     userinit();      // first user process
 
