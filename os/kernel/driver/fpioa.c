@@ -5,6 +5,7 @@
 #include "riscv.h"
 #include "sysctl.h"
 #include "memlayout.h"
+#include "defs.h"
 
 /* Copyright 2018 Canaan Inc.
  *

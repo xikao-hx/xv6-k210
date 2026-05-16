@@ -237,20 +237,22 @@ void sbi_trap_handler(struct sbi_trap_regs *regs)
 			 * Forward M-mode external interrupt to S-mode.
 			 * On platforms where mideleg[9] is not available
 			 * (e.g., K210 v1.9.1), external interrupts always
-			 * arrive at M-mode. Forward to S-mode as SSI (proxy for external interrupt).
-			 * Clear MIE/MPIE so the interrupt does not re-fire
-			 * until S-mode completes handling and calls
+			 * arrive at M-mode.
+			 *
+			 * Use the same approach as RustSBI: set the S-mode
+			 * software interrupt pending bit (mip.SSIP) and let
+			 * the hardware take the S-mode trap when mret returns
+			 * to S-mode. This ensures the hardware properly does
+			 * SIE->SPIE, SIE=0 on trap entry.
+			 *
+			 * Clear M-mode external and timer interrupt enables
+			 * (mie.MEIE, mie.MTIE) so the interrupt does not
+			 * re-fire until S-mode completes handling and calls
 			 * sbi_set_mie().
 			 */
-			regs->mstatus &= ~MSTATUS_MIE;
-			regs->mstatus &= ~MSTATUS_MPIE;
-			trap.epc = regs->mepc;
-			trap.cause = IRQ_S_SOFT |
-				     (1UL << (__riscv_xlen - 1));
-			trap.tval = IRQ_S_EXT; /* stval=9 → forwarded external interrupt */
-			trap.tval2 = 0;
-			trap.tinst = 0;
-			rc = sbi_trap_redirect(regs, &trap);
+			csr_write(CSR_STVAL, IRQ_S_EXT);
+			csr_set(CSR_MIP, MIP_SSIP);
+			csr_clear(CSR_MIE, MIP_MEIP | MIP_MTIP);
 			break;
 		default:
 			msg = "unhandled external interrupt";

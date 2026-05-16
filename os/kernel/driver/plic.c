@@ -32,6 +32,8 @@ plicinithart(void)
   *hart_m_enable = *hart_m_enable | (1 << DISK_IRQ);
   uint32 *hart_m_enable_hi = hart_m_enable + 1;
   *hart_m_enable_hi = *hart_m_enable_hi | (1 << (UART_IRQ % 32));
+  // set M-mode priority threshold to 0 (OpenSBI set it to 0x7).
+  *(uint32*)PLIC_MPRIORITY(hart) = 0;
 #endif
 }
 

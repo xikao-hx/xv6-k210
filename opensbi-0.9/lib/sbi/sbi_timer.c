@@ -82,12 +82,12 @@ void sbi_timer_event_start(u64 next_event)
 {
 	sbi_platform_timer_event_start(sbi_platform_thishart_ptr(), next_event);
 	csr_clear(CSR_MIP, MIP_STIP);
-	csr_set(CSR_MIE, MIP_MTIP);
+	csr_set(CSR_MIE, MIP_MEIP | MIP_MTIP);
 }
 
 void sbi_timer_process(void)
 {
-	csr_clear(CSR_MIE, MIP_MTIP);
+	csr_clear(CSR_MIE, MIP_MEIP | MIP_MTIP);
 	csr_set(CSR_MIP, MIP_STIP);
 }
 

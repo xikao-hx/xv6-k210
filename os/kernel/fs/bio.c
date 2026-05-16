@@ -174,6 +174,10 @@ bread(uint dev, uint blockno)
     disk_read(b);
     b->valid = 1;
   }
+  #ifdef DEBUG
+  printf("bread: dev %d blockno %d\n", dev, blockno);
+  #endif
+  
   return b;
 }
 

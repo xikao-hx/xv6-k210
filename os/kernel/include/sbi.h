@@ -119,11 +119,11 @@ static inline int sbi_hart_start(unsigned long hartid,
 
 static inline void sbi_set_extern_interrupt(unsigned long func_pointer) {
 	asm volatile("mv a6, %0" : : "r" (0x210));
-	SBI_CALL_1(0x0A000004, func_pointer);
+	SBI_CALL_1(0x09000004, func_pointer);
 }
 
 static inline void sbi_set_mie(void) {
-	SBI_CALL_0(0x0A000005);
+	SBI_CALL_0(0x09000005);
 }
 
 #endif

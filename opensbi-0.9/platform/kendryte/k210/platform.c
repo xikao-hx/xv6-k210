@@ -165,12 +165,13 @@ static int k210_vendor_ext_provider(long extid, long funcid,
 				     struct sbi_trap_info *out_trap)
 {
 	switch (extid) {
-	case 0x0A000004:
+	case 0x09000004:
 		/* Register external interrupt handler (RustSBI compat, no-op) */
 		return 0;
-	case 0x0A000005:
-		/* Re-enable M-mode external interrupts after S-mode handling */
+	case 0x09000005:
+		/* Re-enable M-mode external and timer interrupts after S-mode handling */
 		csr_set(CSR_MSTATUS, MSTATUS_MIE);
+		csr_set(CSR_MIE, MIP_MEIP | MIP_MTIP);
 		return 0;
 	default:
 		return SBI_ENOTSUPP;
