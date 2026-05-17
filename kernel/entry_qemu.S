@@ -1,7 +1,6 @@
     .section .text
     .globl _entry
 _entry:
-    mv tp, a0           // save hart ID for cpuid()
     add t0, a0, 1
     slli t0, t0, 14
     la sp, boot_stack

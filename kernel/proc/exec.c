@@ -12,23 +12,7 @@
 #include "fat32.h"
 #include "string.h"
 #include "printf.h"
-
-// Forward declarations (replaces defs.h which conflicts with fat32's dirlookup)
-int             eread(struct dirent *entry, int user_dst, uint64 dst, uint off, uint n);
-void            eunlock(struct dirent *entry);
-void            eput(struct dirent *entry);
-void            elock(struct dirent *entry);
-pagetable_t     proc_pagetable(struct proc *);
-void            proc_freepagetable(pagetable_t, uint64);
-uint64          walkaddr(pagetable_t, uint64);
-uint64          uvmalloc(pagetable_t, uint64, uint64);
-void            uvmclear(pagetable_t, uint64);
-int             copyout(pagetable_t, uint64, char *, uint64);
-int             copyinstr(pagetable_t, char *, uint64, uint64);
-void            upg2ukpg(pagetable_t, pagetable_t, uint64, uint64);
-void            uvmunmap(pagetable_t, uint64, uint64, int);
-struct dirent*  ename(char *path);
-struct proc*    myproc(void);
+#include "defs.h"
 
 static int
 loadseg(pagetable_t pagetable, uint64 va, struct dirent *ep, uint offset, uint sz)

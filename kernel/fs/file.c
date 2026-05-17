@@ -14,23 +14,7 @@
 #include "fat32.h"
 #include "string.h"
 #include "printf.h"
-
-// Forward declarations (replaces defs.h which conflicts with fat32's dirlookup)
-struct buf*     bread(uint, uint);
-void            brelse(struct buf*);
-void            bwrite(struct buf*);
-int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
-int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
-void            pipeclose(struct pipe*, int);
-int             piperead(struct pipe*, uint64, int);
-int             pipewrite(struct pipe*, uint64, int);
-void            initlock(struct spinlock*, char*);
-void            acquire(struct spinlock*);
-void            release(struct spinlock*);
-pagetable_t     proc_pagetable(struct proc *);
-void            proc_freepagetable(pagetable_t, uint64);
-int             copyout(pagetable_t, uint64, char *, uint64);
-struct proc*    myproc(void);
+#include "defs.h"
 
 struct devsw devsw[NDEV];
 struct {

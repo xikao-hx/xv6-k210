@@ -15,40 +15,7 @@
 #include "fat32.h"
 #include "string.h"
 #include "printf.h"
-
-// Forward declarations (replaces defs.h which conflicts with fat32's dirlookup)
-int             argint(int, int*);
-int             argstr(int, char*, int);
-int             argaddr(int, uint64 *);
-int             fetchstr(uint64, char*, int);
-struct proc*    myproc(void);
-void            fileclose(struct file*);
-struct file*    filealloc(void);
-struct file*    filedup(struct file*);
-int             fileread(struct file*, uint64, int n);
-int             filestat(struct file*, uint64 addr);
-int             filewrite(struct file*, uint64, int n);
-int             dirnext(struct file *f, uint64 addr);
-int             pipealloc(struct file**, struct file**);
-int             copyout(pagetable_t, uint64, char *, uint64);
-uint64          walkaddr(pagetable_t, uint64);
-int             strlen(const char*);
-struct dirent*  enameparent(char *path, char *name);
-struct dirent*  ename(char *path);
-struct dirent*  ealloc(struct dirent *dp, char *name, int attr);
-int             exec(char *path, char **argv);
-void*           kalloc(void);
-void            kfree(void *);
-int             fetchaddr(uint64, uint64*);
-int             fetchstr(uint64, char*, int);
-void            etrunc(struct dirent *entry);
-int             eread(struct dirent *entry, int user_dst, uint64 dst, uint off, uint n);
-int             ewrite(struct dirent *entry, int user_src, uint64 src, uint off, uint n);
-void *          memset(void *, int, uint);
-int             mappages(pagetable_t, uint64, uint64, uint64, int);
-void            upg2ukpg(pagetable_t, pagetable_t, uint64, uint64);
-void            uvmunmap(pagetable_t, uint64, uint64, int);
-int             argint(int, int*);
+#include "defs.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.

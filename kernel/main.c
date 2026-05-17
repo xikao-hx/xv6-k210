@@ -10,20 +10,21 @@
 #include "dmac.h"
 #endif
 
+static inline void inithartid(unsigned long hartid) {
+  asm volatile("mv tp, %0" : : "r" (hartid & 0x1));
+}
+
 volatile static int started = 0;
-volatile static int boot_leader_flag = 0;
 
-// start() jumps here in supervisor mode on all CPUs.
 void
-main()
+main(unsigned long hartid, unsigned long dtb_pa)
 {
-  int hartid = cpuid();
-  int is_leader = __sync_bool_compare_and_swap(&boot_leader_flag, 0, 1);
-
-  if(is_leader){
+  inithartid(hartid);
+  
+  if (hartid == 0) {
     consoleinit();
     printfinit();
-    // print_logo();
+    print_logo();
     printf("\n");
     printf("xv6 kernel is booting\n");
     printf("\n");
