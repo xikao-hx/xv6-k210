@@ -35,6 +35,12 @@ $
 ## 依赖
 * k210 开发板或者 qemu-system-riscv64
 * RISC-V GCC 编译链: riscv-gnu-toolchain
+* 编译前需要设置环境变量，如下所示：
+```shell
+export ARCH=riscv  
+export CROSS_COMPILE=riscv64-unknown-linux-gnu- 
+export PATH=$PATH:/home/xikao/quard_star_tutorial/toolchain/gcc-riscv64-unknown-linux-gnu/bin/
+```
 
 ## 在 qemu-system-riscv64 模拟器上运行
 首先，确保 qemu-system-riscv64 已经下载到您的机器上并且加到了环境变量中；
@@ -47,7 +53,7 @@ make qemu platform=qemu
 首先，将SD卡插入到读卡器上，并连接到PC上
 ```shell
 sudo mkfs.vfat -I -F 32 /dev/sdb    # 格式化为 FAT32 格式
-sudo dd if=kernel/fs.img of=/dev/<SD卡设备> bs=1M status=progress  # 下载到SD卡
+sudo dd if=target/fs.img of=/dev/<SD卡设备> bs=1M status=progress  # 下载到SD卡
 make fs
 make qemu platform=k210   # 编译并连接到 k210 开发板串口
 ```

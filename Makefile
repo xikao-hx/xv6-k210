@@ -213,7 +213,7 @@ k210-serialport := /dev/ttyUSB0
 boot:
 	@python3 -m serial.tools.miniterm --raw --dtr 0 --rts 0 $(k210-serialport) 115200
 	
-run: build
+run: build fs
 ifeq ($(platform), k210)
 	@$(OBJCOPY) $T/kernel --strip-all -O binary $(image)
 	@$(OBJCOPY) $(RUSTSBI) --strip-all -O binary $(k210)
@@ -234,5 +234,6 @@ fs: $(UPROGS)
 	@mkfs.vfat -F 32 fs.img 2>/dev/null
 	@python3 scripts/mkfs.py "$U"
 	@echo "done"
+	@cp -f fs.img $T/
 
 .PHONY: xv6_image handin tarball tarball-pref clean grade handin-check

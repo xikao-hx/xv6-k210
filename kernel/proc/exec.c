@@ -50,14 +50,12 @@ exec(char *path, char **argv)
   struct proc *p = myproc();
 
   sz = 0;
-  printf("ename\n");
   if((ep = ename(path)) == 0){
     return -1;
   }
   elock(ep);
 
   // Check ELF header
-  printf("eread\n");
   if(eread(ep, 0, (uint64)&elf, 0, sizeof(elf)) != sizeof(elf))
     goto bad;
   if(elf.magic != ELF_MAGIC)

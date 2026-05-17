@@ -45,6 +45,9 @@ main(unsigned long hartid, unsigned long dtb_pa)
     disk_init();     // initialize disk driver (virtio for QEMU, sdcard for K210)
     userinit();      // first user process
 
+    /* workaround: wait some time, k210 need this to boot success */
+    printf("hart 0 init done\n");
+    
     // Start secondary harts via SBI HSM
     for(int i = 0; i < NCPU; i++) {
       if(i == hartid)
