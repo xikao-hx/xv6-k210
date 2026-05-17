@@ -41,7 +41,7 @@ int
 exec(char *path, char **argv)
 {
   int i, off;
-  uint64 argc, sz, sp, ustack[3+MAXARG+1];
+  uint64 argc, sz, sp, ustack[MAXARG+1], stackbase;
   struct elfhdr elf;
   struct proghdr ph;
   pagetable_t pagetable = 0, oldpagetable;
@@ -92,25 +92,31 @@ exec(char *path, char **argv)
   sz = sz3;
   uvmclear(pagetable, sz-2*PGSIZE);
   sp = sz;
+  stackbase = sp - PGSIZE;
 
-  // Push argument strings, prepare argc/argv
+  // Push argument strings, prepare rest of stack in ustack.
   for(argc = 0; argv[argc]; argc++) {
     if(argc >= MAXARG)
       goto bad;
-    sp = (sp - (strlen(argv[argc]) + 1)) & ~(sizeof(uint64)-1);
+    sp -= strlen(argv[argc]) + 1;
+    sp -= sp % 16;
+    if(sp < stackbase)
+      goto bad;
     if(copyout(pagetable, sp, argv[argc], strlen(argv[argc]) + 1) < 0)
       goto bad;
-    ustack[3+argc] = sp;
+    ustack[argc] = sp;
   }
-  ustack[3+argc] = 0;
+  ustack[argc] = 0;
 
-  ustack[0] = 0xffffffff;  // fake return PC
-  ustack[1] = argc;
-  ustack[2] = sp - (argc+1)*sizeof(uint64);  // argv pointer
-
-  sp -= (3+argc+1) * sizeof(uint64);
-  if(copyout(pagetable, sp, (char *)ustack, (3+argc+1)*sizeof(uint64)) < 0)
+  // push the array of argv[] pointers.
+  sp -= (argc+1) * sizeof(uint64);
+  sp -= sp % 16;
+  if(sp < stackbase)
     goto bad;
+  if(copyout(pagetable, sp, (char *)ustack, (argc+1)*sizeof(uint64)) < 0)
+    goto bad;
+
+  p->trapframe->a1 = sp;
 
   // Save process state
   oldpagetable = p->pagetable;
@@ -130,7 +136,7 @@ exec(char *path, char **argv)
   eunlock(ep);
   eput(ep);
 
-  return 0;
+  return argc;
 
  bad:
   if(pagetable)

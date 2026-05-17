@@ -208,7 +208,7 @@ QEMUOPTS += -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 # k210
 image = $T/kernel.bin
 k210 = $T/k210.bin
-k210-serialport := /dev/ttyUSB0
+k210-serialport := /dev/ttyUSB1
 
 boot:
 	@python3 -m serial.tools.miniterm --raw --dtr 0 --rts 0 $(k210-serialport) 115200
