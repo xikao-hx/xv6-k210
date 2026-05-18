@@ -11,7 +11,7 @@ K=kernel
 U=user
 T=target
 
-BUILD = kernel/build
+BUILD = build
 KBUILD = $(BUILD)/kernel
 UBUILD = $(BUILD)/user
 
@@ -224,7 +224,7 @@ endif
 QEMUOPTS = -machine virt -kernel $T/kernel -m 8M -nographic
 QEMUOPTS += -smp $(CPUS)
 QEMUOPTS += -bios $(RUSTSBI)
-QEMUOPTS += -drive file=fs.img,if=none,format=raw,id=x0 
+QEMUOPTS += -drive file=$T/fs.img,if=none,format=raw,id=x0 
 QEMUOPTS += -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 
 # k210

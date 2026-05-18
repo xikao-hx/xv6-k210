@@ -77,3 +77,4 @@ make qemu platform=k210   # 编译并连接到 k210 开发板串口
 * ✅修改文件系统格式为 FAT32
 * ✅移植到k210开发板
 * ✅支持SD卡读写：GPIO、SPI、DMA和SD卡
+* ❌支持通过I2C和SPI协议读写设备
