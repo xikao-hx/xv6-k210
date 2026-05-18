@@ -11,7 +11,7 @@ import os
 import sys
 
 user_dir = sys.argv[1] if len(sys.argv) > 1 else "user"
-vfs = fs.open_fs("fat://fs.img")
+vfs = fs.open_fs("fat://target/fs.img")
 if not vfs.exists("/bin"):
     vfs.makedir("/bin")
 

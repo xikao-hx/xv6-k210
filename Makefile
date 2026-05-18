@@ -11,6 +11,10 @@ K=kernel
 U=user
 T=target
 
+BUILD = kernel/build
+KBUILD = $(BUILD)/kernel
+UBUILD = $(BUILD)/user
+
 # Entry point must be the first object in link order
 # (OpenSBI jumps to the beginning of the kernel image)
 ifeq ($(platform), k210)
@@ -66,6 +70,9 @@ OBJS += \
   $K/driver/virtio_disk.o
 endif
 
+# Map kernel objects to build directory
+OBJS := $(patsubst $K/%.o,$(KBUILD)/%.o,$(OBJS))
+
 # riscv64-unknown-elf- or riscv64-linux-gnu-
 TOOLPREFIX = riscv64-unknown-linux-gnu-
 QEMU = qemu-system-riscv64
@@ -111,60 +118,75 @@ RUSTSBI = ./bootloader/sbi-qemu
 endif
 
 # -------- kernel compile --------
-$T/kernel: $(OBJS) $(LINKER_SCRIPT) $U/initcode
+$(KBUILD)/%.o: $K/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(KBUILD)/%.o: $K/%.S
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$T/kernel: $(OBJS) $(LINKER_SCRIPT) $(UBUILD)/initcode
 	$(LD) $(LDFLAGS) -T $(LINKER_SCRIPT) -o $T/kernel $(OBJS)
 	$(OBJDUMP) -S $T/kernel > $T/kernel.asm
 	$(OBJDUMP) -t $T/kernel | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $T/kernel.sym
 
-$U/initcode: $U/initcode.S
-	$(CC) $(CFLAGS) -march=rv64g -nostdinc -I. -I$K/include -c $U/initcode.S -o $U/initcode.o
-	$(LD) $(LDFLAGS) -N -e start -Ttext 0 -o $U/initcode.out $U/initcode.o
-	$(OBJCOPY) -S -O binary $U/initcode.out $U/initcode
-	$(OBJDUMP) -S $U/initcode.o > $U/initcode.asm
+$(UBUILD)/initcode: $U/initcode.S
+	@mkdir -p $(UBUILD)
+	$(CC) $(CFLAGS) -march=rv64g -nostdinc -I. -I$K/include -c $U/initcode.S -o $(UBUILD)/initcode.o
+	$(LD) $(LDFLAGS) -N -e start -Ttext 0 -o $(UBUILD)/initcode.out $(UBUILD)/initcode.o
+	$(OBJCOPY) -S -O binary $(UBUILD)/initcode.out $(UBUILD)/initcode
+	$(OBJDUMP) -S $(UBUILD)/initcode.o > $(UBUILD)/initcode.asm
 
-tags: $(OBJS) _init
+tags: $(OBJS) $(UBUILD)/_init
 	etags *.S *.c
 
 # -------- user compiler --------
+$(UBUILD)/%.o: $U/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 # user lib
-ULIB = $U/ulib.o $U/usys.o $U/printf.o $U/umalloc.o
+ULIB = $(UBUILD)/ulib.o $(UBUILD)/usys.o $(UBUILD)/printf.o $(UBUILD)/umalloc.o
 
 # user programe compile rule
-_%: %.o $(ULIB)
+$(UBUILD)/_%: $(UBUILD)/%.o $(ULIB)
+	@mkdir -p $(UBUILD)
 	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o $@ $^
-	$(OBJDUMP) -S $@ > $*.asm
-	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $*.sym
+	$(OBJDUMP) -S $@ > $(UBUILD)/$*.asm
+	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(UBUILD)/$*.sym
 
 # system call
-$U/usys.S : $U/usys.pl
-	perl $U/usys.pl > $U/usys.S
+$(UBUILD)/usys.S : $U/usys.pl
+	@mkdir -p $(UBUILD)
+	perl $U/usys.pl > $@
 
-$U/usys.o : $U/usys.S
-	$(CC) $(CFLAGS) -c -o $U/usys.o $U/usys.S
+$(UBUILD)/usys.o : $(UBUILD)/usys.S
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Prevent deletion of intermediate files, e.g. cat.o, after first build, so
 # that disk image changes after first build are persistent until clean.  More
 # details:
 # http://www.gnu.org/software/make/manual/html_node/Chained-Rules.html
-.PRECIOUS: %.o
+.PRECIOUS: $(UBUILD)/%.o $(KBUILD)/%.o
 
 # user programe list
 UPROGS=\
-	$U/_cat\
-	$U/_echo\
-	$U/_grep\
-	$U/_init\
-	$U/_kill\
-	$U/_ln\
-	$U/_ls\
-	$U/_mkdir\
-	$U/_rm\
-	$U/_sh\
-	$U/_grind\
-	$U/_wc\
-	$U/_zombie
+	$(UBUILD)/_cat\
+	$(UBUILD)/_echo\
+	$(UBUILD)/_grep\
+	$(UBUILD)/_init\
+	$(UBUILD)/_kill\
+	$(UBUILD)/_ln\
+	$(UBUILD)/_ls\
+	$(UBUILD)/_mkdir\
+	$(UBUILD)/_rm\
+	$(UBUILD)/_sh\
+	$(UBUILD)/_grind\
+	$(UBUILD)/_wc\
+	$(UBUILD)/_zombie
 
--include kernel/*.d kernel/**/*.d user/*.d
+-include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
 # -------- build --------
 # Compile kernel
@@ -174,10 +196,12 @@ build: $T/kernel $(UPROGS)
 RUSTSBI:
 ifeq ($(platform), k210)
 	@cd ./bootloader/rustsbi-k210 && cargo build && cp ./target/riscv64gc-unknown-none-elf/debug/rustsbi-k210 ../sbi-k210
-	@$(OBJDUMP) -S ./bootloader/SBI/sbi-k210 > $T/rustsbi-k210.asm
+	@cp ../sbi-k210 $T
+	@$(OBJDUMP) -S ./bootloader/sbi-k210 > $T/rustsbi-k210.asm
 else
 	@cd ./bootloader/rustsbi-qemu && cargo build && cp ./target/riscv64gc-unknown-none-elf/debug/rustsbi-qemu ../sbi-qemu
-	@$(OBJDUMP) -S ./bootloader/SBI/sbi-qemu > $T/rustsbi-qemu.asm
+	@cp ../sbi-qemu $T
+	@$(OBJDUMP) -S ./bootloader/sbi-qemu > $T/rustsbi-qemu.asm
 endif
 
 rustsbi-clean:
@@ -185,13 +209,11 @@ rustsbi-clean:
 	@cd ./bootloader/rustsbi-qemu && cargo clean
 
 clean: # rustsbi-clean
+	rm -rf $(BUILD)
 	rm -f *.tex *.dvi *.idx *.aux *.log *.ind *.ilg \
-	*/*.o */*.d */*.asm */*.sym \
-	*/*/*.o */*/*.d */*/*.asm */*/*.sym \
-	$U/initcode $U/initcode.out $K/kernel $K/kernel.bin $K/kernel.elf fs.img \
-	.gdbinit \
-	$U/usys.S \
-	$(UPROGS)
+	fs.img .gdbinit
+	rm -f $T/kernel $T/kernel.asm $T/kernel.sym $T/kernel.bin $T/k210.bin $T/fs.img
+# rm -f bootloader/sbi-k210 bootloader/sbi-qemu
 
 # -------- run --------
 # qemu
@@ -230,10 +252,9 @@ endif
 # Uses pyfatfs (no sudo required).
 fs: $(UPROGS)
 	@echo "populating fs.img with user programs..."
-	@dd if=/dev/zero of=fs.img bs=512k count=512 2>/dev/null
-	@mkfs.vfat -F 32 fs.img 2>/dev/null
-	@python3 scripts/mkfs.py "$U"
+	@dd if=/dev/zero of=$T/fs.img bs=512k count=512 2>/dev/null
+	@mkfs.vfat -F 32 $T/fs.img 2>/dev/null
+	@python3 scripts/mkfs.py "$(UBUILD)"
 	@echo "done"
-	@cp -f fs.img $T/
 
 .PHONY: xv6_image handin tarball tarball-pref clean grade handin-check
