@@ -31,7 +31,7 @@ OBJS = \
   $K/devsw/stats.o \
   $K/driver/uart.o \
   $K/driver/plic.o \
-  $K/driver/disk.o \
+  $K/fs/disk.o \
   $K/fs/bio.o \
   $K/fs/fat32.o \
   $K/fs/file.o \
@@ -74,7 +74,8 @@ endif
 OBJS := $(patsubst $K/%.o,$(KBUILD)/%.o,$(OBJS))
 
 # riscv64-unknown-elf- or riscv64-linux-gnu-
-TOOLPREFIX = riscv64-unknown-linux-gnu-
+TOOLPREFIX = riscv64-unknown-elf-
+# TOOLPREFIX = riscv64-unknown-linux-gnu-
 QEMU = qemu-system-riscv64
 
 CC = $(TOOLPREFIX)gcc
@@ -230,7 +231,7 @@ QEMUOPTS += -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 # k210
 image = $T/kernel.bin
 k210 = $T/k210.bin
-k210-serialport := /dev/ttyUSB1
+k210-serialport := /dev/ttyUSB0
 
 boot:
 	@python3 -m serial.tools.miniterm --raw --dtr 0 --rts 0 $(k210-serialport) 115200

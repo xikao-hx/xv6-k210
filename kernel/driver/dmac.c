@@ -192,7 +192,7 @@ void dmac_disable_channel_interrupt(dmac_channel_number_t channel_num)
     writeq(0, &dmac->channel[channel_num].intstatus_en);
 }
 
-static void dmac_chanel_interrupt_clear(dmac_channel_number_t channel_num)
+static void dmac_channel_interrupt_clear(dmac_channel_number_t channel_num)
 {
     writeq(0xffffffff, &dmac->channel[channel_num].intclear);
 }
@@ -206,7 +206,10 @@ int dmac_set_channel_param(dmac_channel_number_t channel_num,
     dmac_ch_ctl_u_t ctl;
     dmac_ch_cfg_u_t cfg_u;
 
+    /* check addr type: peripheral or memory */
     int mem_type_src = is_memory((uintptr_t)src), mem_type_dest = is_memory((uintptr_t)dest);
+
+    /* select transfer flow control mode  */
     dmac_transfer_flow_t flow_control;
     if(mem_type_src == 0 && mem_type_dest == 0)
     {
@@ -222,60 +225,73 @@ int dmac_set_channel_param(dmac_channel_number_t channel_num,
      * cfg register must configure before ts_block and
      * sar dar register
      */
+    /* configurate channel control register */
+    /* cfg register */
     cfg_u.data = readq(&dmac->channel[channel_num].cfg);
 
     cfg_u.ch_cfg.tt_fc = flow_control;
+    /*
+        源/目标是内存 → 使用软件握手（无硬件请求信号）
+        源/目标是外设 → 使用硬件握手（需要外设请求 DMA）
+    */
     cfg_u.ch_cfg.hs_sel_src = mem_type_src ? DMAC_HS_SOFTWARE : DMAC_HS_HARDWARE;
     cfg_u.ch_cfg.hs_sel_dst = mem_type_dest ? DMAC_HS_SOFTWARE : DMAC_HS_HARDWARE;
     cfg_u.ch_cfg.src_per = channel_num;
     cfg_u.ch_cfg.dst_per = channel_num;
     cfg_u.ch_cfg.src_multblk_type = 0;
     cfg_u.ch_cfg.dst_multblk_type = 0;
-
     writeq(cfg_u.data, &dmac->channel[channel_num].cfg);
 
+    /* set source addr and dest addr */
     dmac->channel[channel_num].sar = (uint64)src;
     dmac->channel[channel_num].dar = (uint64)dest;
 
+    /* ctl register */
     ctl.data = readq(&dmac->channel[channel_num].ctl);
-    ctl.ch_ctl.sms = DMAC_MASTER1;
-    ctl.ch_ctl.dms = DMAC_MASTER2;
     /* master select */
+    // 两个 Master 的作用：支持源和目标使用不同总线端口，提高并行传输效率。
+    ctl.ch_ctl.sms = DMAC_MASTER1;  
+    ctl.ch_ctl.dms = DMAC_MASTER2;
+    /* address incrememt */
     ctl.ch_ctl.sinc = src_inc;
     ctl.ch_ctl.dinc = dest_inc;
-    /* address incrememt */
+    /* transfer width */
     ctl.ch_ctl.src_tr_width = dmac_trans_width;
     ctl.ch_ctl.dst_tr_width = dmac_trans_width;
-    /* transfer width */
+    /* burst transfer size */
     ctl.ch_ctl.src_msize = dmac_burst_size;
     ctl.ch_ctl.dst_msize = dmac_burst_size;
-
     writeq(ctl.data, &dmac->channel[channel_num].ctl);
 
+    /* 
+    set up transport block size:
+        the number of (blcok_ts +1) data of width SRC_TR_WIDTF to be 
+        transferred in a dma block transfer */
     writeq(blockSize - 1, &dmac->channel[channel_num].block_ts);
-    /*the number of (blcok_ts +1) data of width SRC_TR_WIDTF to be */
-    /* transferred in a dma block transfer */
+    
     return 0;
 }
 
 void dmac_init(void)
 {
     uint64 tmp;
+    /* union data type */
     dmac_commonreg_intclear_u_t intclear;
     dmac_cfg_u_t dmac_cfg;
     dmac_reset_u_t dmac_reset;
 
+    /* enable DMA clock */
     sysctl_clock_enable(SYSCTL_CLOCK_DMA);
     // printf("[dmac_init] dma clk=%d\n", sysctl_clock_get_freq(SYSCTL_CLOCK_DMA));
 
+    /* reset dmac */
     dmac_reset.data = readq(&dmac->reset);
     dmac_reset.reset.rst = 1;
     writeq(dmac_reset.data, &dmac->reset);
-    while(dmac_reset.reset.rst)
+    while(dmac_reset.reset.rst)   // reset finish
         dmac_reset.data = readq(&dmac->reset);
 
-    /*reset dmac */
-
+    /* clear common register interrupt */
     intclear.data = readq(&dmac->com_intclear);
     intclear.com_intclear.clear_slvif_dec_err_intstat = 1;
     intclear.com_intclear.clear_slvif_wr2ro_err_intstat = 1;
@@ -283,19 +299,20 @@ void dmac_init(void)
     intclear.com_intclear.clear_slvif_wronhold_err_intstat = 1;
     intclear.com_intclear.clear_slvif_undefinedreg_dec_err_intstat = 1;
     writeq(intclear.data, &dmac->com_intclear);
-    /* clear common register interrupt */
 
-    dmac_cfg.data = readq(&dmac->cfg);
-    dmac_cfg.cfg.dmac_en = 0;
-    dmac_cfg.cfg.int_en = 0;
-    writeq(dmac_cfg.data, &dmac->cfg);
     /* disable dmac and disable interrupt */
-
-    while(readq(&dmac->cfg))
+    dmac_cfg.data = readq(&dmac->cfg);
+    dmac_cfg.cfg.dmac_en = 0;    // DMA global enable
+    dmac_cfg.cfg.int_en = 0;     // DMA global interrupt
+    writeq(dmac_cfg.data, &dmac->cfg);
+    while(readq(&dmac->cfg))     // read back to ensure configuate finish
         ;
+
+    /* disable all channel */
     tmp = readq(&dmac->chen);
     tmp &= ~0xf;
     writeq(tmp, &dmac->chen);
+
     /* disable all channel before configure */
     dmac_enable();
 }
@@ -307,7 +324,8 @@ void dmac_set_single_mode(dmac_channel_number_t channel_num,
                           dmac_transfer_width_t dmac_trans_width,
                           uint64 block_size)
 {
-    dmac_chanel_interrupt_clear(channel_num);
+    /* configuate DMA channel, starting single transfer */
+    dmac_channel_interrupt_clear(channel_num);
     dmac_channel_disable(channel_num);
     dmac_wait_idle(channel_num);
     dmac_set_channel_param(channel_num, src, dest, src_inc, dest_inc,
@@ -344,19 +362,15 @@ static void *dmac_chan = (void *) DMAC_V;
 
 void dmac_wait_idle(dmac_channel_number_t channel_num)
 {
-    // printf("dmac_wait_idle\n");
     while(!dmac_is_idle(channel_num)) {
         acquire(&myproc()->lock);
         sleep(dmac_chan, &myproc()->lock);
         release(&myproc()->lock);
     }
-    // printf("dmac_wait_idle finish\n");
 }
 
 void dmac_intr(dmac_channel_number_t channel_num)
 {
-    // printf("dmac_intr: %d\n", dmac_chan);
-    dmac_chanel_interrupt_clear(channel_num);
+    dmac_channel_interrupt_clear(channel_num);
     wakeup(dmac_chan);
-    // printf("dmac_intr finish\n");
 }

@@ -236,8 +236,8 @@ void spi_init(spi_device_num_t spi_num, spi_work_mode_t work_mode, spi_frame_for
  * @param[in]   instruction_address_trans_mode          Spi transfer mode
  *
  */
-void spi_init_non_standard(spi_device_num_t spi_num, uint32 instruction_length, uint32 address_length,
-                           uint32 wait_cycles, spi_instruction_address_trans_mode_t instruction_address_trans_mode);
+// void spi_init_non_standard(spi_device_num_t spi_num, uint32 instruction_length, uint32 address_length,
+//                            uint32 wait_cycles, spi_instruction_address_trans_mode_t instruction_address_trans_mode);
 
 /**
  * @brief       Spi send data
@@ -287,8 +287,8 @@ void spi_receive_data_standard(spi_device_num_t spi_num, spi_chip_select_t chip_
  *     - 0      Success
  *     - Other  Fail
  */
-void spi_receive_data_multiple(spi_device_num_t spi_num, spi_chip_select_t chip_select, const uint32 *cmd_buff,
-                               uint64 cmd_len, uint8 *rx_buff, uint64 rx_len);
+// void spi_receive_data_multiple(spi_device_num_t spi_num, spi_chip_select_t chip_select, const uint32 *cmd_buff,
+//                                uint64 cmd_len, uint8 *rx_buff, uint64 rx_len);
 
 /**
  * @brief       Spi special send data
@@ -304,8 +304,8 @@ void spi_receive_data_multiple(spi_device_num_t spi_num, spi_chip_select_t chip_
  *     - 0      Success
  *     - Other  Fail
  */
-void spi_send_data_multiple(spi_device_num_t spi_num, spi_chip_select_t chip_select, const uint32 *cmd_buff,
-                            uint64 cmd_len, const uint8 *tx_buff, uint64 tx_len);
+// void spi_send_data_multiple(spi_device_num_t spi_num, spi_chip_select_t chip_select, const uint32 *cmd_buff,
+//                             uint64 cmd_len, const uint8 *tx_buff, uint64 tx_len);
 
 /**
  * @brief       Spi send data by dma
@@ -429,7 +429,7 @@ void spi_send_data_normal_dma(dmac_channel_number_t channel_num, spi_device_num_
  *
  * @return      The real spi clock rate
  */
-uint32 spi_set_clk_rate(spi_device_num_t spi_num, uint32 spi_clk);
+// uint32 spi_set_clk_rate(spi_device_num_t spi_num, uint32 spi_clk);
 
 /**
  * @brief       Spi full duplex send receive data by dma

@@ -1,5 +1,5 @@
 # XV6-RISCV On K210
-在 K210 开发板上运行 xv6-riscv 操作系统
+**以下启动日志为QEMU上运行，K210上运行部分日志会看不到**
 ```
 (base) xikao@xikao-virtual-machine:~/xv6_k210 $ make run platform=qemu
 [rustsbi] RustSBI version 0.1.1
@@ -36,11 +36,19 @@ $
 * k210 开发板或者 qemu-system-riscv64
 * RISC-V GCC 编译链: riscv-gnu-toolchain
 * 编译前需要设置环境变量，如下所示：
-```shell
-export ARCH=riscv  
-export CROSS_COMPILE=riscv64-unknown-linux-gnu- 
-export PATH=$PATH:/home/xikao/quard_star_tutorial/toolchain/gcc-riscv64-unknown-linux-gnu/bin/
-```
+  * 工具链1:
+    ```shell
+    export ARCH=riscv  
+    export CROSS_COMPILE=riscv64-unknown-linux-gnu- 
+    export PATH=$PATH:/home/xikao/
+    TOOLPREFIX = riscv64-unknown-linux-gnu-
+    ```
+  * 工具链2:
+    ```shell
+    sudo apt update
+    sudo apt install gcc-riscv64-unknown-elf
+    TOOLPREFIX = riscv64-unknown-elf-
+    ```
 
 ## 在 qemu-system-riscv64 模拟器上运行
 首先，确保 qemu-system-riscv64 已经下载到您的机器上并且加到了环境变量中；

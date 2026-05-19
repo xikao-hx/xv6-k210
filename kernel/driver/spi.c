@@ -135,6 +135,7 @@ void spi_send_data_normal(spi_device_num_t spi_num, spi_chip_select_t chip_selec
 
     uint8 v_misalign_flag = 0;
     uint32 v_send_data;
+    /* check the addr aligen */
     if((uintptr_t)tx_buff % frame_width)
         v_misalign_flag = 1;
 
@@ -154,6 +155,7 @@ void spi_send_data_normal(spi_device_num_t spi_num, spi_chip_select_t chip_selec
                     for(index = 0; index < fifo_len; index += 4)
                     {
                         // memcpy(&v_send_data, tx_buff + i, 4);
+                        /* use temp variable to ensure the addr aligen  */
                         memmove(&v_send_data, tx_buff + i, 4);
                         spi_handle->dr[0] = v_send_data;
                         i += 4;
@@ -250,11 +252,13 @@ void spi_receive_data_standard(spi_device_num_t spi_num, spi_chip_select_t chip_
 
     while(v_cmd_len)
     {
+        /* max len is fifi size */
         fifo_len = 32 - spi_handle->txflr;
         fifo_len = fifo_len < v_cmd_len ? fifo_len : v_cmd_len;
         switch(frame_width)
         {
             case SPI_TRANS_INT:
+                /* press fifo */
                 for(index = 0; index < fifo_len; index++)
                     spi_handle->dr[0] = ((uint32 *)cmd_buff)[i++];
                 break;
@@ -333,34 +337,46 @@ void spi_receive_data_normal_dma(dmac_channel_number_t dma_send_channel_num,
 {
     // configASSERT(spi_num < SPI_DEVICE_MAX && spi_num != 2);
 
+    /* set up transfer pattern */
     if(cmd_len == 0)
-        spi_set_tmod(spi_num, SPI_TMOD_RECV);
+        spi_set_tmod(spi_num, SPI_TMOD_RECV);    // only receive
     else
-        spi_set_tmod(spi_num, SPI_TMOD_EEROM);
+        spi_set_tmod(spi_num, SPI_TMOD_EEROM);   // receive and send
 
     volatile spi_t *spi_handle = spi[spi_num];
+ 
+    /* configuration spi controller register */
+    spi_handle->ctrlr1 = (uint32)(rx_len - 1);   // set receive data len
+    spi_handle->dmacr = 0x3;                     // enable send and receive dma
+    spi_handle->ssienr = 0x01;                   // enable spi controller
 
-    spi_handle->ctrlr1 = (uint32)(rx_len - 1);
-    spi_handle->dmacr = 0x3;
-    spi_handle->ssienr = 0x01;
+    /* configuration dma request source */
     if(cmd_len)
         sysctl_dma_select((sysctl_dma_channel_t)dma_send_channel_num, SYSCTL_DMA_SELECT_SSI0_TX_REQ + spi_num * 2);
     sysctl_dma_select((sysctl_dma_channel_t)dma_receive_channel_num, SYSCTL_DMA_SELECT_SSI0_RX_REQ + spi_num * 2);
 
+    /* configuration dma transfer */
     dmac_set_single_mode(dma_receive_channel_num, (void *)(&spi_handle->dr[0]), rx_buff, DMAC_ADDR_NOCHANGE, DMAC_ADDR_INCREMENT,
                          DMAC_MSIZE_1, DMAC_TRANS_WIDTH_32, rx_len);
     if(cmd_len)
         dmac_set_single_mode(dma_send_channel_num, cmd_buff, (void *)(&spi_handle->dr[0]), DMAC_ADDR_INCREMENT, DMAC_ADDR_NOCHANGE,
                              DMAC_MSIZE_4, DMAC_TRANS_WIDTH_32, cmd_len);
+
+    /* only receive & standard mode: trigger transfer */
     if(cmd_len == 0 && spi_get_frame_format(spi_num) == SPI_FF_STANDARD)
         spi[spi_num]->dr[0] = 0xffffffff;
+
+    /* start transfer: set select chip low */
     spi_handle->ser = 1U << chip_select;
+    
+    /* wait dma trasfer finish */
     if(cmd_len)
         dmac_wait_done(dma_send_channel_num);
     dmac_wait_done(dma_receive_channel_num);
 
-    spi_handle->ser = 0x00;
-    spi_handle->ssienr = 0x00;
+    /* transfer clear work */
+    spi_handle->ser = 0x00;      // cancel select chip
+    spi_handle->ssienr = 0x00;   // forbid spi controller
 }
 
 void spi_send_data_normal_dma(dmac_channel_number_t channel_num, spi_device_num_t spi_num,
@@ -368,6 +384,7 @@ void spi_send_data_normal_dma(dmac_channel_number_t channel_num, spi_device_num_
                               const void *tx_buff, uint64 tx_len, spi_transfer_width_t spi_transfer_width)
 {
     // configASSERT(spi_num < SPI_DEVICE_MAX && spi_num != 2);
+    /* only send */
     spi_set_tmod(spi_num, SPI_TMOD_TRANS);
     volatile spi_t *spi_handle = spi[spi_num];
     uint32 *buf;
@@ -401,6 +418,8 @@ void spi_send_data_normal_dma(dmac_channel_number_t channel_num, spi_device_num_
     if(spi_transfer_width != SPI_TRANS_INT)
         kfree((void *)buf);
 
+    /* wait spi bus idle */
+    // sr: bit 0 -> send fifi not empty; bit 1 -> spi bus busy flag
     while((spi_handle->sr & 0x05) != 0x04)
         ;
     spi_handle->ser = 0x00;
@@ -415,19 +434,20 @@ void spi_receive_data_standard_dma(dmac_channel_number_t dma_send_channel_num,
     // configASSERT(spi_num < SPI_DEVICE_MAX && spi_num != 2);
     volatile spi_t *spi_handle = spi[spi_num];
 
+    /* read control register to get data frame width */
     uint8 dfs_offset = 0;
     switch(spi_num)
     {
         case 0:
         case 1:
-            dfs_offset = 16;
+            dfs_offset = 16;    // SPI0/1 use bit 16-20
             break;
         case 2:
             // configASSERT(!"Spi Bus 2 Not Support!");
             break;
         case 3:
         default:
-            dfs_offset = 0;
+            dfs_offset = 0;     // SPI3 use bit 0-4
             break;
     }
     uint32 data_bit_length = (spi_handle->ctrlr0 >> dfs_offset) & 0x1F;
@@ -435,14 +455,18 @@ void spi_receive_data_standard_dma(dmac_channel_number_t dma_send_channel_num,
 
     uint64 i;
 
+    /* alloc dma data buffer to send command data and receive data */
     uint32 *write_cmd;
     uint32 *read_buf;
     uint64 v_recv_len;
     uint64 v_cmd_len;
+    
+    /* according to frame width reorganization data */
     switch(frame_width)
     {
         case SPI_TRANS_INT:
-            write_cmd = kalloc();
+            write_cmd = kalloc();    
+            // copy data: solve addr aligen and convert data len to 32bit
             for(i = 0; i < cmd_len / 4; i++)
                 write_cmd[i] = ((uint32 *)cmd_buff)[i];
             read_buf = &write_cmd[i];
@@ -466,7 +490,11 @@ void spi_receive_data_standard_dma(dmac_channel_number_t dma_send_channel_num,
             v_cmd_len = cmd_len;
             break;
     }
+
+    /* dma transfer */
     spi_receive_data_normal_dma(dma_send_channel_num, dma_receive_channel_num, spi_num, chip_select, write_cmd, v_cmd_len, read_buf, v_recv_len);
+    
+    /* according to frame width reorganization receive data */
     switch(frame_width)
     {
         case SPI_TRANS_INT:
