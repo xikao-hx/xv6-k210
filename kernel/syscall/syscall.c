@@ -127,6 +127,8 @@ extern uint64 sys_readdir(void);
 extern uint64 sys_getcwd(void);
 extern uint64 sys_remove(void);
 
+extern uint64 sys_ioctl(void);
+
 static char *syscalls_name[] = {
 [SYS_fork]    "fork",
 [SYS_exit]    "exit",
@@ -158,6 +160,7 @@ static char *syscalls_name[] = {
 [SYS_readdir] "readdir",
 [SYS_getcwd]  "getcwd",
 [SYS_remove]  "remove",
+[SYS_ioctl]   "ioctl",
 };
 
 static char syscalls_argc[] = {
@@ -190,6 +193,7 @@ static char syscalls_argc[] = {
 [SYS_readdir] 2,
 [SYS_getcwd]  1,
 [SYS_remove]  1,
+[SYS_ioctl]   3,
 };
 
 static uint64 (*syscalls[])(void) = {
@@ -223,6 +227,7 @@ static uint64 (*syscalls[])(void) = {
 [SYS_readdir]   sys_readdir,
 [SYS_getcwd]    sys_getcwd,
 [SYS_remove]    sys_remove,
+[SYS_ioctl]     sys_ioctl,
 };
 
 // 尝试获取字符串参数，如果成功返回1，否则返回0

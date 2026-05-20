@@ -59,6 +59,7 @@ OBJS = \
 ifeq ($(platform), k210)
 OBJS += \
   $K/driver/spi.o \
+  $K/devsw/spidev.o \
   $K/driver/gpiohs.o \
   $K/driver/fpioa.o \
   $K/driver/utils.o \
@@ -185,7 +186,8 @@ UPROGS=\
 	$(UBUILD)/_sh\
 	$(UBUILD)/_grind\
 	$(UBUILD)/_wc\
-	$(UBUILD)/_zombie
+	$(UBUILD)/_zombie\
+	$(UBUILD)/_w25q64_test
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
@@ -231,9 +233,10 @@ QEMUOPTS += -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 # k210
 image = $T/kernel.bin
 k210 = $T/k210.bin
-k210-serialport := /dev/ttyUSB0
+k210-serialport := /dev/ttyUSB1
 
 boot:
+	@sudo chmod 777 $(k210-serialport)
 	@python3 -m serial.tools.miniterm --raw --dtr 0 --rts 0 $(k210-serialport) 115200
 	
 run: build fs
@@ -259,3 +262,7 @@ fs: $(UPROGS)
 	@echo "done"
 
 .PHONY: xv6_image handin tarball tarball-pref clean grade handin-check
+
+download: fs
+	@sudo dd if=target/fs.img of=/dev/sde bs=1M status=progress
+	@sudo eject /dev/sde

@@ -4934,11 +4934,20 @@ int fpioa_get_io_by_function(fpioa_function_t function)
 }
 
 void fpioa_pin_init() {
+
+    /* spi pin */
     fpioa_set_function(27, FUNC_SPI0_SCLK);
     fpioa_set_function(28, FUNC_SPI0_D0);
     fpioa_set_function(26, FUNC_SPI0_D1);
 	fpioa_set_function(32, FUNC_GPIOHS7);
     fpioa_set_function(29, FUNC_SPI0_SS3);
+
+    /* spi1 pin (W25Q64): adjust physical pins to match your wiring */
+    fpioa_set_function(15, FUNC_SPI1_D0);    // MOSI
+    fpioa_set_function(16, FUNC_SPI1_D1);    // MISO
+    fpioa_set_function(17, FUNC_SPI1_SCLK);  // SCLK
+    fpioa_set_function(18, FUNC_SPI1_SS0);   // CS
+
     #ifdef DEBUG
     printf("fpioa_pin_init\n");
     #endif

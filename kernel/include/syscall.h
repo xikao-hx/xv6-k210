@@ -29,3 +29,4 @@
 #define SYS_readdir 28
 #define SYS_getcwd 29
 #define SYS_remove 30
+#define SYS_ioctl 31

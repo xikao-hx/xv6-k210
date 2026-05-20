@@ -200,6 +200,7 @@ int copyinstr_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max);
 
 // stats.c
 void            statsinit(void);
+void            spidev_init(void);
 void            statsinc(void);
 
 // sprintf.c

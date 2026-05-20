@@ -333,10 +333,27 @@ sys_dev(void)
   f->off = 0;
   f->ep = 0;
   f->major = major;
+  f->minor = minor;
   f->readable = !(omode & O_WRONLY);
   f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
 
   return fd;
+}
+
+uint64
+sys_ioctl(void)
+{
+  struct file *f;
+  int cmd;
+  uint64 arg;
+
+  if(argfd(0, 0, &f) < 0 || argint(1, &cmd) < 0 || argaddr(2, &arg) < 0)
+    return -1;
+  if(f->type != FD_DEVICE)
+    return -1;
+  if(f->major < 0 || f->major >= NDEV || !devsw[f->major].ioctl)
+    return -1;
+  return devsw[f->major].ioctl(f->minor, cmd, arg);
 }
 
 // To support ls command

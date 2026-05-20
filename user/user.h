@@ -33,6 +33,7 @@ int dev(int, int, int);
 int readdir(int, struct stat*);
 int getcwd(char*);
 int remove(const char*);
+int ioctl(int, int, uint64);
 
 // ulib.c
 int stat(const char*, struct stat*);

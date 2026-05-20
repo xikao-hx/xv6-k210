@@ -41,6 +41,7 @@ main(unsigned long hartid, unsigned long dtb_pa)
 #ifndef QEMU
     fpioa_pin_init(); // configure SPI0 pins for SD card
     dmac_init();      // initialize DMA controller
+    spidev_init();   // register SPI device for user-space access
 #endif
     disk_init();     // initialize disk driver (virtio for QEMU, sdcard for K210)
     userinit();      // first user process

@@ -45,3 +45,4 @@ entry("dev");
 entry("readdir");
 entry("getcwd");
 entry("remove");
+entry("ioctl");
