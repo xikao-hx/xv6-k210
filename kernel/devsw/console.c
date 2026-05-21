@@ -1,10 +1,9 @@
 //
 // Console input and output, to the uart.
-// Reads are line at a time.
-// Implements special input characters:
+// Reads are character at a time (non-canonical).
+// No kernel line editing — the shell handles backspace, tab, etc.
+// Special input characters:
 //   newline -- end of line
-//   control-h -- backspace
-//   control-u -- kill line
 //   control-d -- end of file
 //   control-p -- print process list
 //
@@ -134,8 +133,9 @@ consoleread(int user_dst, uint64 dst, int n)
 //
 // the console input interrupt handler.
 // uartintr() calls this for input character.
-// do erase/kill processing, append to cons.buf,
-// wake up consoleread() if a whole line has arrived.
+// In non-canonical mode: every character is echoed and passed
+// through to the reader immediately (no kernel line editing).
+// The shell handles backspace, tab completion, and kill-line.
 //
 void
 consoleintr(int c)
@@ -146,20 +146,6 @@ consoleintr(int c)
   case C('P'):  // Print process list.
     procdump();
     break;
-  case C('U'):  // Kill line.
-    while(cons.e != cons.w &&
-          cons.buf[(cons.e-1) % INPUT_BUF] != '\n'){
-      cons.e--;
-      consputc(BACKSPACE);
-    }
-    break;
-  case C('H'): // Backspace
-  case '\x7f':
-    if(cons.e != cons.w){
-      cons.e--;
-      consputc(BACKSPACE);
-    }
-    break;
   default:
     if(c != 0 && cons.e-cons.r < INPUT_BUF){
 #ifndef QEMU
@@ -168,22 +154,20 @@ consoleintr(int c)
       c = (c == '\r') ? '\n' : c;
 #endif
 
-      // echo back to the user.
-      consputc(c);
+      // echo back to the user (printable chars and newline only).
+      if((c >= ' ' && c <= '~') || c == '\n')
+        consputc(c);
 
       // store for consumption by consoleread().
       cons.buf[cons.e++ % INPUT_BUF] = c;
 
-      if(c == '\n' || c == C('D') || cons.e == cons.r+INPUT_BUF){
-        // wake up consoleread() if a whole line (or end-of-file)
-        // has arrived.
-        cons.w = cons.e;
-        wakeup(&cons.r);
-      }
+      // wake up consoleread() on every character (non-canonical mode)
+      cons.w = cons.e;
+      wakeup(&cons.r);
     }
     break;
   }
-  
+
   release(&cons.lock);
 }
 

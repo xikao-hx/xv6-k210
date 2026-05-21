@@ -1,6 +1,7 @@
 // Shell.
 
 #include "types.h"
+#include "stat.h"
 #include "user/user.h"
 #include "fcntl.h"
 
@@ -130,15 +131,137 @@ runcmd(struct cmd *cmd)
   exit(0);
 }
 
+static int complete_word(char *buf, int *pos);
+
 int
 getcmd(char *buf, int nbuf)
 {
+  int i = 0;
+  char c;
+
   fprintf(2, "$ ");
   memset(buf, 0, nbuf);
-  gets(buf, nbuf);
-  if(buf[0] == 0) // EOF
-    return -1;
-  return 0;
+
+  while (1) {
+    if (read(0, &c, 1) != 1) {
+      buf[i] = 0;
+      return -1;
+    }
+
+    if (c == '\n') {
+      buf[i++] = '\n';
+      buf[i] = 0;
+      return 0;
+    }
+
+    if (c == 0x04) {          /* C('D'): EOF */
+      if (i == 0)
+        return -1;
+      continue;               /* ignore in middle of line */
+    }
+
+    if (c == 0x15) {          /* C('U'): kill line */
+      while (i > 0) {
+        fprintf(2, "\b \b");
+        i--;
+      }
+      buf[0] = 0;
+      continue;
+    }
+
+    if (c == 0x7f || c == '\b') {  /* backspace */
+      if (i > 0) {
+        i--;
+        fprintf(2, "\b \b");
+      }
+      continue;
+    }
+
+    if (c == '\t') {                /* tab completion */
+      if (i > 0) {
+        int start = i;
+        while (start > 0 && buf[start - 1] != ' ')
+          start--;
+        if (i - start > 0)          /* non-empty prefix */
+          complete_word(buf, &i);
+      }
+      continue;
+    }
+
+    if (i < nbuf - 2)
+      buf[i++] = c;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Tab completion: match the current word against directory entries  */
+/* ------------------------------------------------------------------ */
+static int
+complete_word(char *buf, int *pos)
+{
+  int i = *pos;
+  int start = i;
+
+  while (start > 0 && buf[start - 1] != ' ')
+    start--;
+
+  int plen = i - start;
+  char *prefix = buf + start;
+
+  int fd = open(".", 0);
+  if (fd < 0)
+    return 0;
+
+  /* Enumerate directory entries for matches */
+  struct stat st;
+  char matches[32][STAT_MAX_NAME + 1];
+  int nmatch = 0;
+
+  while (readdir(fd, &st) == 1) {
+    if (strcmp(st.name, ".") == 0 || strcmp(st.name, "..") == 0)
+      continue;
+    /* prefix match */
+    int nlen = strlen(st.name);
+    if (nlen >= plen && memcmp(st.name, prefix, plen) == 0) {
+      if (nmatch < 32) {
+        memmove(matches[nmatch], st.name, nlen + 1);
+        nmatch++;
+      }
+    }
+  }
+  close(fd);
+
+  if (nmatch == 0)
+    return 0;
+
+  if (nmatch == 1) {
+    /* Single match: complete the word */
+    char *name = matches[0];
+    int nlen = strlen(name);
+
+    /* Erase the current prefix from the display */
+    for (int k = 0; k < plen; k++)
+      fprintf(2, "\b \b");
+
+    /* Write the completed name */
+    fprintf(2, "%s", name);
+
+    /* Update buffer */
+    *pos = start;
+    if (nlen > 0) {
+      memmove(buf + start, name, nlen);
+      *pos = start + nlen;
+    }
+    buf[*pos] = 0;
+    return 1;
+  }
+
+  /* Multiple matches: list them below and redisplay */
+  fprintf(2, "\n");
+  for (int k = 0; k < nmatch; k++)
+    fprintf(2, "%s  ", matches[k]);
+  fprintf(2, "\n$ %s", buf);
+  return -1;
 }
 
 int
