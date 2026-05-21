@@ -49,6 +49,9 @@ kvminit()
   kvmmap(SPI0_V, SPI0, PGSIZE, PTE_R | PTE_W);
   kvmmap(SPI1_V, SPI1, PGSIZE, PTE_R | PTE_W);
   kvmmap(SPI2_V, SPI2, PGSIZE, PTE_R | PTE_W);
+  kvmmap(I2C0_V, I2C0, PGSIZE, PTE_R | PTE_W);
+  kvmmap(I2C1_V, I2C1, PGSIZE, PTE_R | PTE_W);
+  kvmmap(I2C2_V, I2C2, PGSIZE, PTE_R | PTE_W);
 #endif
 
   // CLINT
@@ -89,6 +92,9 @@ ukvminit(void)
   ukvmmap(pagetable, SPI0_V, SPI0, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, SPI1_V, SPI1, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, SPI2_V, SPI2, PGSIZE, PTE_R | PTE_W);
+  ukvmmap(pagetable, I2C0_V, I2C0, PGSIZE, PTE_R | PTE_W);
+  ukvmmap(pagetable, I2C1_V, I2C1, PGSIZE, PTE_R | PTE_W);
+  ukvmmap(pagetable, I2C2_V, I2C2, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
   ukvmmap(pagetable, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
   ukvmmap(pagetable, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
@@ -280,6 +286,9 @@ ukvmunmap(pagetable_t pagetable)
   uvmunmap(pagetable, SPI0_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, SPI1_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, SPI2_V, PGSIZE / PGSIZE, 0);
+  uvmunmap(pagetable, I2C0_V, PGSIZE / PGSIZE, 0);
+  uvmunmap(pagetable, I2C1_V, PGSIZE / PGSIZE, 0);
+  uvmunmap(pagetable, I2C2_V, PGSIZE / PGSIZE, 0);
 #endif
   uvmunmap(pagetable, PLIC, 0x400000 / PGSIZE, 0);
   uvmunmap(pagetable, KERNBASE, ((uint64)etext-KERNBASE) / PGSIZE, 0);

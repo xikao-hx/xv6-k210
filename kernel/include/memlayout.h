@@ -63,6 +63,9 @@
 #define SPI0        0x52000000
 #define SPI1        0x53000000
 #define SPI2        0x54000000
+#define I2C0        0x50280000
+#define I2C1        0x50290000
+#define I2C2        0x502A0000
 
 // Virtual addresses (identity-mapped on os/ tree)
 #define GPIOHS_V    GPIOHS
@@ -74,6 +77,9 @@
 #define SPI0_V      SPI0
 #define SPI1_V      SPI1
 #define SPI2_V      SPI2
+#define I2C0_V      I2C0
+#define I2C1_V      I2C1
+#define I2C2_V      I2C2
 #endif
 
 // the kernel expects there to be RAM

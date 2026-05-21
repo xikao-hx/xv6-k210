@@ -4942,6 +4942,10 @@ void fpioa_pin_init() {
 	fpioa_set_function(32, FUNC_GPIOHS7);
     fpioa_set_function(29, FUNC_SPI0_SS3);
 
+    /* i2c pin */
+    fpioa_set_function(30, FUNC_I2C0_SCLK);
+    fpioa_set_function(31, FUNC_I2C0_SDA);
+
     /* spi1 pin (W25Q64): adjust physical pins to match your wiring */
     fpioa_set_function(15, FUNC_SPI1_D0);    // MOSI
     fpioa_set_function(16, FUNC_SPI1_D1);    // MISO
