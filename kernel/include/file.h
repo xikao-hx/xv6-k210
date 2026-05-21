@@ -24,3 +24,4 @@ int             dirnext(struct file *f, uint64 addr);
 #define CONSOLE 1
 #define STATS   2
 #define SPI_DEV 3
+#define I2C_DEV 4

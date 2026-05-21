@@ -189,6 +189,29 @@ static void w64_write_enable(void) {
 }
 
 void
+w25q64_get_id(void)
+{
+  uint8 rx[4];
+  uint8 cmd[4];
+
+  printf("\n--- W25Q64 test on SPI1 (kernel-space) ---\n");
+
+  /* Configure SPI1: mode 0, standard, 8-bit */
+  spi_init(SPI_DEVICE_1, SPI_WORK_MODE_0, SPI_FF_STANDARD, 8, 0);
+  /* Start with ~1 MHz */
+  spi[SPI_DEVICE_1]->baudr = 200;
+
+  /* ---- 1. Read JEDEC ID ---- */
+  cmd[0] = W64_CMD_JEDEC_ID;
+  spi_receive_data_standard(SPI_DEVICE_1, SPI_CHIP_SELECT_0, cmd, 1, rx, 3);
+  printf("  JEDEC ID: %x %x %x\n", rx[0], rx[1], rx[2]);
+
+  if(rx[0] != 0xEF && rx[0] != 0x1C && rx[0] != 0xC8) {
+    printf("  WARNING: unexpected manufacturer ID (is W25Q64 connected?)\n");
+  }
+}
+
+void
 spidev_test_w25q64(void)
 {
   uint8 rx[4];

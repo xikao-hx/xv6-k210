@@ -17,7 +17,6 @@ import json
 import re
 import os
 
-
 class KFlash:
     print_callback = None
 

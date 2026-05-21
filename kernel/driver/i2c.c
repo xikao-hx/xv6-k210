@@ -22,7 +22,6 @@
 #include "kalloc.h"
 #include "string.h"
 #include "defs.h"
-#include "oled_font.h"
 
 volatile i2c_t *const i2c[3] =
     {
@@ -30,12 +29,12 @@ volatile i2c_t *const i2c[3] =
         (volatile i2c_t *)I2C1_V,
         (volatile i2c_t *)I2C2_V};
 
-static void i2c_clk_init(i2c_device_number_t i2c_num)
-{
-    // configASSERT(i2c_num < I2C_MAX_NUM);
-    sysctl_clock_enable(SYSCTL_CLOCK_I2C0 + i2c_num);
-    sysctl_clock_set_threshold(SYSCTL_THRESHOLD_I2C0 + i2c_num, 3);  // I2C_clk = PLL0 / 8 ≈ 100MHz
-}
+// static void i2c_clk_init(i2c_device_number_t i2c_num)
+// {
+//     // configASSERT(i2c_num < I2C_MAX_NUM);
+//     sysctl_clock_enable(SYSCTL_CLOCK_I2C0 + i2c_num);
+//     sysctl_clock_set_threshold(SYSCTL_THRESHOLD_I2C0 + i2c_num, 3);  // I2C_clk = PLL0 / 8 ≈ 100MHz
+// }
 
 void i2c_init(i2c_device_number_t i2c_num, uint32_t slave_address, uint32_t address_width,
               uint32_t i2c_clk)
@@ -46,7 +45,7 @@ void i2c_init(i2c_device_number_t i2c_num, uint32_t slave_address, uint32_t addr
     volatile i2c_t *i2c_adapter = i2c[i2c_num];
 
     /* clock init */
-    i2c_clk_init(i2c_num);
+    // i2c_clk_init(i2c_num);
 
     /* calculation divider value */
     // NOTE: Both sysctl_clock_get_freq(I2C0) and sysctl_clock_get_threshold()

@@ -5,10 +5,12 @@
 #include "defs.h"
 #include "sbi.h"
 #include "disk.h"
+#include "sysctl.h"
 #ifndef QEMU
 #include "fpioa.h"
 #include "dmac.h"
 #endif
+#include "i2cdev.h"
 
 static inline void inithartid(unsigned long hartid) {
   asm volatile("mv tp, %0" : : "r" (hartid & 0x1));
@@ -42,6 +44,7 @@ main(unsigned long hartid, unsigned long dtb_pa)
     fpioa_pin_init(); // configure SPI0 pins for SD card
     dmac_init();      // initialize DMA controller
     spidev_init();   // register SPI device for user-space access
+    i2cdev_init();   // register I2C device for user-space access
 #endif
     disk_init();     // initialize disk driver (virtio for QEMU, sdcard for K210)
     userinit();      // first user process

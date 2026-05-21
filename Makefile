@@ -61,6 +61,7 @@ OBJS += \
   $K/driver/spi.o \
   $K/driver/i2c.o \
   $K/devsw/spidev.o \
+  $K/devsw/i2cdev.o \
   $K/driver/gpiohs.o \
   $K/driver/fpioa.o \
   $K/driver/utils.o \
@@ -86,8 +87,9 @@ LD = $(TOOLPREFIX)ld
 OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
 
-CFLAGS = -Wall -Werror -O -fno-omit-frame-pointer -ggdb -g
+CFLAGS = -Wall  -O -fno-omit-frame-pointer -ggdb -g
 CFLAGS += -MD
+# CFLAGS += -D TEST
 CFLAGS += -mcmodel=medany
 CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
 CFLAGS += -I.
@@ -188,7 +190,8 @@ UPROGS=\
 	$(UBUILD)/_grind\
 	$(UBUILD)/_wc\
 	$(UBUILD)/_zombie\
-	$(UBUILD)/_w25q64_test
+	$(UBUILD)/_w25q64_test\
+	$(UBUILD)/_mpu6050_test
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
@@ -265,5 +268,5 @@ fs: $(UPROGS)
 .PHONY: xv6_image handin tarball tarball-pref clean grade handin-check
 
 download: fs
-	@sudo dd if=target/fs.img of=/dev/sde bs=1M status=progress
-	@sudo eject /dev/sde
+	@sudo dd if=target/fs.img of=/dev/sdb bs=1M status=progress
+	@sudo eject /dev/sdb
