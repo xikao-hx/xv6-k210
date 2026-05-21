@@ -239,13 +239,7 @@ devintr()
     // ===============================
 
     if(irq == UART0_IRQ){
-      // uartintr();
-      // keyboard input 
-      // sbi_console_putchar('h');
-			int c = sbi_console_getchar();
-			if (-1 != c) {
-				consoleintr(c);
-			}
+      uartintr();
     } else if(irq == DISK_IRQ){
       disk_intr();
     } else if(irq){

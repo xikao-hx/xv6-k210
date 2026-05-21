@@ -27,7 +27,7 @@ kvminit()
   memset(kernel_pagetable, 0, PGSIZE);
 
   // uart registers
-  kvmmap(UART0, UART0, PGSIZE, PTE_R | PTE_W);
+  kvmmap(UART0_V, UART0, PGSIZE, PTE_R | PTE_W);
   
 #ifdef QEMU
   // virtio mmio disk interface
@@ -75,14 +75,14 @@ ukvminit(void)
   memset(pagetable, 0, PGSIZE);
 
 #ifdef QEMU
-  ukvmmap(pagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+  ukvmmap(pagetable, UART0_V, UART0, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
   ukvmmap(pagetable, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
   ukvmmap(pagetable, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
   ukvmmap(pagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 #else
-  ukvmmap(pagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+  ukvmmap(pagetable, UART0_V, UART0, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, GPIOHS_V, GPIOHS, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, DMAC_V, DMAC, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, GPIO_V, GPIO, PGSIZE, PTE_R | PTE_W);
@@ -273,7 +273,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 void
 ukvmunmap(pagetable_t pagetable)
 {
-  uvmunmap(pagetable, UART0, PGSIZE / PGSIZE, 0);
+  uvmunmap(pagetable, UART0_V, PGSIZE / PGSIZE, 0);
 #ifdef QEMU
   uvmunmap(pagetable, VIRTIO0, PGSIZE / PGSIZE, 0);
 #else

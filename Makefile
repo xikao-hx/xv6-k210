@@ -29,7 +29,7 @@ OBJS = \
   $K/main.o \
   $K/devsw/console.o \
   $K/devsw/stats.o \
-  $K/driver/uart.o \
+  $K/driver/uarths.o \
   $K/driver/plic.o \
   $K/fs/disk.o \
   $K/fs/bio.o \

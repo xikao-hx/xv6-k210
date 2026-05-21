@@ -20,7 +20,6 @@
 #include "riscv.h"
 #include "defs.h"
 #include "proc.h"
-#include "sbi.h"
 
 #define BACKSPACE 0x100
 #define C(x)  ((x)-'@')  // Control-x
@@ -35,11 +34,11 @@ consputc(int c)
 {
   if(c == BACKSPACE){
     // if the user typed backspace, overwrite with a space.
-    sbi_console_putchar('\b'); 
-    sbi_console_putchar(' '); 
-    sbi_console_putchar('\b');
+    uartputc_sync('\b');
+    uartputc_sync(' ');
+    uartputc_sync('\b');
   } else {
-    sbi_console_putchar(c);
+    uartputc_sync(c);
   }
 }
 
@@ -67,7 +66,9 @@ consolewrite(int user_src, uint64 src, int n)
     char c;
     if(either_copyin(&c, user_src, src+i, 1) == -1)
       break;
-    sbi_console_putchar(c);
+    
+    /* BUG: panic: sched locks */
+    uartputc_sync(c);
   }
   release(&cons.lock);
 
@@ -148,11 +149,7 @@ consoleintr(int c)
     break;
   default:
     if(c != 0 && cons.e-cons.r < INPUT_BUF){
-#ifndef QEMU
-      if(c == '\r') break;     // on k210, "enter" will input \n and \r
-#else
-      c = (c == '\r') ? '\n' : c;
-#endif
+      c = (c == '\r') ? '\n' : c;   // terminals send CR, we need LF
 
       // echo back to the user (printable chars and newline only).
       if((c >= ' ' && c <= '~') || c == '\n')
@@ -176,7 +173,7 @@ consoleinit(void)
 {
   initlock(&cons.lock, "cons");
 
-  // uartinit();
+  uartinit();
 
   // connect read and write system calls
   // to consoleread and consolewrite.

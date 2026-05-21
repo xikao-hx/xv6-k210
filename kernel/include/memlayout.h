@@ -24,10 +24,6 @@
 #define VIRTIO0 0x10001000
 #endif
 
-#ifndef QEMU
-#define UART0 0x38000000L
-#endif
-
 #ifdef QEMU     // QEMU 
 #define UART0_IRQ   10 
 #define DISK_IRQ    1
@@ -54,6 +50,7 @@
 
 // K210 peripheral base addresses (physical, identity-mapped)
 #ifndef QEMU
+#define UART0       0x38000000
 #define GPIOHS      0x38001000
 #define DMAC        0x50000000
 #define GPIO        0x50200000
@@ -81,6 +78,8 @@
 #define I2C1_V      I2C1
 #define I2C2_V      I2C2
 #endif
+
+#define UART0_V     UART0
 
 // the kernel expects there to be RAM
 // for use by the kernel and user pages
