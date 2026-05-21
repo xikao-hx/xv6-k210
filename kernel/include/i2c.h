@@ -462,4 +462,14 @@ void i2c_recv_data_dma(dmac_channel_number_t dma_send_channel_num, dmac_channel_
 }
 #endif
 
+#ifdef SW
+
+/* software i2c */
+void sw_i2c_init(void);
+void sw_i2c_start(void);
+void sw_i2c_stop(void);
+void sw_i2c_send_byte(uint8_t byte);
+
+#endif
+
 #endif /* _DRIVER_I2C_H */
