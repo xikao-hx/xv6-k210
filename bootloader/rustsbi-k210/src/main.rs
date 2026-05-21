@@ -228,9 +228,8 @@ fn main() -> ! {
         medeleg::set_instruction_fault();
         medeleg::set_load_fault();
         medeleg::set_store_fault();
-        // 打开mie::set_mext 使得M态可以收到外部中断
-        // 不打开mie::set_mtimer（时钟中断代理到S态处理）
-        mie::set_mext();
+        // 默认不打开mie::set_mext
+        // 不打开mie::set_mtimer
         mie::set_msoft();
     }
 
@@ -380,6 +379,7 @@ extern "C" fn start_trap_rust(trap_frame: &mut TrapFrame) {
             } else if trap_frame.a7 == 0x0A000005 {
                 unsafe {
                     mie::set_mext();
+                    mie::set_mtimer();
                 }
                 trap_frame.a0 = 0; // SbiRet::error = SBI_SUCCESS
                 trap_frame.a1 = 0; // SbiRet::value = 0
@@ -438,6 +438,7 @@ extern "C" fn start_trap_rust(trap_frame: &mut TrapFrame) {
                 llvm_asm!("csrw stval, $0" :: "r"(9) :: "volatile");
                 mip::set_ssoft(); // set S-soft interrupt flag
                 mie::clear_mext();
+                mie::clear_mtimer();
             }
             /* legacy software delegation
             // to make UARTHS interrupt soft delegation work; ref: pull request #1
