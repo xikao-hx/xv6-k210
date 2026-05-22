@@ -25,3 +25,5 @@ int             dirnext(struct file *f, uint64 addr);
 #define STATS   2
 #define SPI_DEV 3
 #define I2C_DEV 4
+#define SDCARD_DEV 5
+#define UART_DEV 6

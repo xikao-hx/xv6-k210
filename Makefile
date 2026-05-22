@@ -10,6 +10,7 @@ platform ?= qemu
 K=kernel
 U=user
 T=target
+FS_SIZE_MB ?= 64
 
 BUILD = build
 KBUILD = $(BUILD)/kernel
@@ -62,6 +63,8 @@ OBJS += \
   $K/driver/i2c.o \
   $K/devsw/spidev.o \
   $K/devsw/i2cdev.o \
+  $K/devsw/sdcarddev.o \
+  $K/devsw/uartdev.o \
   $K/driver/gpiohs.o \
   $K/driver/fpioa.o \
   $K/driver/utils.o \
@@ -152,7 +155,7 @@ $(UBUILD)/%.o: $U/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # user lib
-ULIB = $(UBUILD)/ulib.o $(UBUILD)/usys.o $(UBUILD)/printf.o $(UBUILD)/umalloc.o
+ULIB = $(UBUILD)/ulib.o $(UBUILD)/usys.o $(UBUILD)/printf.o $(UBUILD)/umalloc.o $(UBUILD)/oled.o
 
 # user programe compile rule
 $(UBUILD)/_%: $(UBUILD)/%.o $(ULIB)
@@ -191,7 +194,9 @@ UPROGS=\
 	$(UBUILD)/_wc\
 	$(UBUILD)/_zombie\
 	$(UBUILD)/_w25q64_test\
-	$(UBUILD)/_mpu6050_test
+	$(UBUILD)/_mpu6050_test\
+	$(UBUILD)/_burn\
+	$(UBUILD)/_uartcomm
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
@@ -260,13 +265,15 @@ endif
 # Uses pyfatfs (no sudo required).
 fs: $(UPROGS)
 	@echo "populating fs.img with user programs..."
-	@dd if=/dev/zero of=$T/fs.img bs=512k count=512 2>/dev/null
+	@dd if=/dev/zero of=$T/fs.img bs=1M count=$(FS_SIZE_MB) 2>/dev/null
 	@mkfs.vfat -F 32 $T/fs.img 2>/dev/null
 	@python3 scripts/mkfs.py "$(UBUILD)"
 	@echo "done"
 
 .PHONY: xv6_image handin tarball tarball-pref clean grade handin-check
 
+dev-sd := /dev/sdc
 download: fs
-	@sudo dd if=target/fs.img of=/dev/sdb bs=1M status=progress
-	@sudo eject /dev/sdb
+	@test -b "$(dev-sd)" || (echo "$(dev-sd) is not a block device; refusing to write fs.img"; exit 1)
+	@sudo dd if=target/fs.img of=$(dev-sd) bs=1M status=progress
+	@sudo eject $(dev-sd)

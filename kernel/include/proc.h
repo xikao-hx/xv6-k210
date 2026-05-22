@@ -120,6 +120,7 @@ struct proc {
   struct dirent *cwd;          // Current directory (FAT32)
   char name[16];               // Process name (debugging)
   int trace_mask;
+  int no_preempt;               // If set, kerneltrap won't yield (used by UART raw mode)
   struct vma_area vmas[NVMA];
 };
 

@@ -193,6 +193,82 @@ uartstart()
 }
 
 //
+// Disable UART receive interrupts (for raw polling mode).
+//
+void
+uartrx_disable(void)
+{
+#ifdef QEMU
+    WriteReg(IER, IER_TX_ENABLE);
+#else
+    uarths->ie.rxwm = 0;
+#endif
+}
+
+//
+// Re-enable UART receive interrupts after uartrx_disable().
+//
+void
+uartrx_enable(void)
+{
+#ifdef QEMU
+    WriteReg(IER, IER_TX_ENABLE | IER_RX_ENABLE);
+#else
+    uarths->ie.rxwm = 1;
+#endif
+}
+
+//
+// Wait for the UART TX to finish transmitting all buffered data.
+// Necessary before changing baud rate to avoid corrupting the byte
+// currently being shifted out.
+//
+void
+uart_wait_tx_idle(void)
+{
+#ifndef QEMU
+    // Set TX watermark to 1 so ip.txwm fires when FIFO becomes empty
+    uint32 old_txcnt = uarths->txctrl.txcnt;
+    uarths->txctrl.txcnt = 1;
+
+    // Spin until the TX FIFO drains (all bytes moved to shift register)
+    while (!uarths->ip.txwm)
+        ;
+
+    uarths->txctrl.txcnt = old_txcnt;
+
+    // The shift register may still be transmitting the last byte.
+    // Calculate wait time for 2 byte-times (20 bits) at the current baud rate.
+    uint32 freq = sysctl_clock_get_freq(SYSCTL_CLOCK_CPU);
+    uint32 cur_div = uarths->div.div;
+    uint32 baud = freq / (cur_div + 1);
+    uint32 ncycles = (20UL * freq) / baud + 1000;
+
+    if (ncycles > 500000)
+        ncycles = 500000;
+
+    for (volatile uint32 i = 0; i < ncycles; i++)
+        ;
+#endif
+}
+
+//
+// Set UART baud rate.
+//
+void
+uart_set_baud(int baud)
+{
+#ifndef QEMU
+    // Complete any in-flight transmission before changing divisor
+    uart_wait_tx_idle();
+
+    uint32 freq = sysctl_clock_get_freq(SYSCTL_CLOCK_CPU);
+    uint16 div = freq / baud - 1;
+    uarths->div.div = div;
+#endif
+}
+
+//
 // Read one input character.
 // Return -1 if none is waiting.
 //

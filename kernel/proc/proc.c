@@ -138,6 +138,7 @@ found:
   p->context.sp = p->kstack + PGSIZE;
 
   memset(&p->vmas, 0, sizeof(p->vmas));
+  p->no_preempt = 0;
 
   return p;
 }

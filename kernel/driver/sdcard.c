@@ -320,6 +320,66 @@ static int sd_init(void) {
 
 static struct sleeplock sdcard_lock;
 
+// CSD register (16 bytes) — read after card init to get capacity
+static uint8 csd[16];
+static int  csd_valid = 0;
+static uint32 card_nsectors = 0;
+
+static void sd_read_csd(void) {
+	uint8 start;
+	SD_CS_LOW();
+
+	sd_send_cmd(9, 0, 0);           // CMD9 — SEND_CSD
+	(void)sd_get_response_R1();      // ignore R1 (we assume cmd succeeded)
+
+	int timeout = 0xffffff;
+	while (--timeout) {
+		sd_read_data(&start, 1);
+		if (0xfe == start) break;   // data start token
+	}
+	if (0 == timeout) {
+		printf("sdcard: timeout reading CSD\n");
+		SD_CS_HIGH();
+		return;
+	}
+
+	sd_read_data(csd, 16);
+
+	uint8 dummy[2];
+	sd_read_data(dummy, 2);         // CRC-16 (discard)
+	SD_CS_HIGH();
+
+	csd_valid = 1;
+
+	// Parse CSD version
+	uint8 csd_ver = (csd[0] >> 6) & 0x03;
+
+	if (csd_ver == 1) {
+		// CSD v2.0 — SDHC / SDXC
+		uint32 c_size = ((uint32)(csd[7] & 0x3F) << 16)
+		              | ((uint32)csd[8] << 8)
+		              |  (uint32)csd[9];
+		card_nsectors = (c_size + 1) * 1024;
+	} else if (csd_ver == 0) {
+		// CSD v1.0 — SDSC
+		uint16 c_size = ((uint16)(csd[6] & 0x03) << 10)
+		              | ((uint16)csd[7] << 2)
+		              | ((uint16)csd[8] >> 6);
+		uint8 c_size_mult = ((csd[9] & 0x03) << 1) | (csd[10] >> 7);
+		uint8 read_bl_len = csd[5] & 0x0F;
+		uint32 capacity = (uint32)(c_size + 1)
+		                * (1UL << (c_size_mult + 2))
+		                * (1UL << read_bl_len);
+		card_nsectors = capacity / 512;
+	} else {
+		printf("sdcard: unknown CSD version %d\n", csd_ver);
+	}
+}
+
+uint32 sdcard_nsectors(void) {
+	return card_nsectors;
+}
+
 void sdcard_init(void) {
 	int result = sd_init();
 	initsleeplock(&sdcard_lock, "sdcard");
@@ -327,8 +387,11 @@ void sdcard_init(void) {
 	if (0 != result) {
 		panic("sdcard_init failed");
 	}
+
+	sd_read_csd();
+
 	#ifdef DEBUG
-	printf("sdcard_init\n");
+	printf("sdcard_init: %u sectors\n", card_nsectors);
 	#endif
 }
 

@@ -130,6 +130,10 @@ void            uartintr(void);
 void            uartputc(int);
 void            uartputc_sync(int);
 int             uartgetc(void);
+void            uartrx_disable(void);
+void            uartrx_enable(void);
+void            uart_set_baud(int);
+void            uart_wait_tx_idle(void);
 
 // vm.c
 void            kvminit(void);
@@ -172,6 +176,12 @@ void            disk_read(struct buf *b);
 void            disk_write(struct buf *b);
 void            disk_intr(void);
 
+// sdcard.c
+void            sdcard_init(void);
+void            sdcard_read_sector(uint8*, int);
+void            sdcard_write_sector(uint8*, int);
+uint32          sdcard_nsectors(void);
+
 // virtio_disk.c
 void            virtio_disk_init(void);
 void            virtio_disk_rw(struct buf *, int);
@@ -202,6 +212,12 @@ int copyinstr_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max);
 void            statsinit(void);
 void            spidev_init(void);
 void            statsinc(void);
+
+// sdcarddev.c
+void            sdcarddev_init(void);
+
+// uartdev.c
+void            uartdev_init(void);
 
 // sprintf.c
 int             snprintf(char*, int, char*, ...);
