@@ -195,8 +195,7 @@ UPROGS=\
 	$(UBUILD)/_zombie\
 	$(UBUILD)/_w25q64_test\
 	$(UBUILD)/_mpu6050_test\
-	$(UBUILD)/_burn\
-	$(UBUILD)/_uartcomm
+	$(UBUILD)/_burn
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
