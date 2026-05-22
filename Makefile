@@ -273,7 +273,10 @@ fs: $(UPROGS)
 .PHONY: xv6_image handin tarball tarball-pref clean grade handin-check
 
 dev-sd := /dev/sdc
-download: fs
+sdcard: fs
 	@test -b "$(dev-sd)" || (echo "$(dev-sd) is not a block device; refusing to write fs.img"; exit 1)
 	@sudo dd if=target/fs.img of=$(dev-sd) bs=1M status=progress
 	@sudo eject $(dev-sd)
+
+download: fs
+	@python3 tools/burn.py $(k210-serialport) target/fs.img

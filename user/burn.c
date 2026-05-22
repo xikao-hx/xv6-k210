@@ -20,7 +20,6 @@
 #include "fcntl.h"
 
 #define MAX_RETRY    5
-#define CONSOLE_BAUD 115200
 
 #define PKT_INFO   0x01  // Host to board: payload is total image size.
 #define PKT_DATA   0x02  // Host to board: payload is one 512-byte sector.
@@ -116,17 +115,19 @@ crc32(const uint8 *data, int len, uint32 crc)
   return ~crc;
 }
 
-// Read exactly n bytes through UART_IOCTL_GETC.  Staying on this polling
-// path avoids allocating buffers while the K210's small RX FIFO is filling.
+// Read exactly n bytes from the interrupt-fed raw UART ring.
 static int
 read_bytes(int fd, uint8 *buf, int n)
 {
-  for (int i = 0; i < n; i++) {
-    int v = ioctl(fd, UART_IOCTL_GETC, 0);
-    if (v < 0)
+  int off = 0;
+
+  while (off < n) {
+    int r = read(fd, buf + off, n - off);
+    if (r <= 0)
       return -1;
-    buf[i] = (uint8)v;
+    off += r;
   }
+
   return 0;
 }
 
@@ -164,10 +165,10 @@ recv_msg(int fd, uint32 *seq_out, uint8 *payload_buf, uint16 *plen_out)
 
 resync:
   while (1) {
-    int v = ioctl(fd, UART_IOCTL_GETC, 0);
-    if (v < 0)
+    uint8 ch;
+    if (read_bytes(fd, &ch, 1) < 0)
       return -1;
-    sync[si] = (uint8)v;
+    sync[si] = ch;
     si = (si + 1) & 3;
 
     uint8 w[4];
@@ -394,7 +395,6 @@ main(void)
     }
   }
 
-  ioctl(uart_fd, UART_IOCTL_SET_BAUD, CONSOLE_BAUD);
   ioctl(uart_fd, UART_IOCTL_RAW_END, 0);
   show_phase("BURN SUCCESS!");
   oled_write_row(1, "");
@@ -404,7 +404,6 @@ main(void)
   exit(0);
 
 fail:
-  ioctl(uart_fd, UART_IOCTL_SET_BAUD, CONSOLE_BAUD);
   ioctl(uart_fd, UART_IOCTL_RAW_END, 0);
   show_phase("BURN FAILED!");
   printf("Burn failed\n");

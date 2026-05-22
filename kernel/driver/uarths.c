@@ -56,6 +56,15 @@ char uart_tx_buf[UART_TX_BUF_SIZE];
 int uart_tx_w; // write next to uart_tx_buf[uart_tx_w++]
 int uart_tx_r; // read next from uart_tx_buf[uart_tx_r++]
 
+// Raw receive buffer used by /dev/uart while binary transfers are active.
+struct spinlock uart_raw_lock;
+#define UART_RAW_RX_BUF_SIZE 8192
+static char uart_raw_buf[UART_RAW_RX_BUF_SIZE];
+static uint uart_raw_r;
+static uint uart_raw_w;
+static uint uart_raw_dropped;
+static int uart_raw_mode;
+
 extern volatile int panicked; // from printf.c
 
 void uartstart();
@@ -101,6 +110,7 @@ uartinit(void)
 #endif
 
   initlock(&uart_tx_lock, "uart");
+  initlock(&uart_raw_lock, "uartraw");
 }
 
 //
@@ -193,7 +203,7 @@ uartstart()
 }
 
 //
-// Disable UART receive interrupts (for raw polling mode).
+// Disable UART receive interrupts while changing raw RX state.
 //
 void
 uartrx_disable(void)
@@ -218,54 +228,83 @@ uartrx_enable(void)
 #endif
 }
 
-//
-// Wait for the UART TX to finish transmitting all buffered data.
-// Necessary before changing baud rate to avoid corrupting the byte
-// currently being shifted out.
-//
-void
-uart_wait_tx_idle(void)
+static int
+uart_raw_input(int c)
 {
-#ifndef QEMU
-    // Set TX watermark to 1 so ip.txwm fires when FIFO becomes empty
-    uint32 old_txcnt = uarths->txctrl.txcnt;
-    uarths->txctrl.txcnt = 1;
+  acquire(&uart_raw_lock);
 
-    // Spin until the TX FIFO drains (all bytes moved to shift register)
-    while (!uarths->ip.txwm)
-        ;
+  if (!uart_raw_mode) {
+    release(&uart_raw_lock);
+    return 0;
+  }
 
-    uarths->txctrl.txcnt = old_txcnt;
+  uint next = (uart_raw_w + 1) % UART_RAW_RX_BUF_SIZE;
+  if (next == uart_raw_r) {
+    uart_raw_dropped++;
+  } else {
+    uart_raw_buf[uart_raw_w] = (char)c;
+    uart_raw_w = next;
+    wakeup(&uart_raw_r);
+  }
 
-    // The shift register may still be transmitting the last byte.
-    // Calculate wait time for 2 byte-times (20 bits) at the current baud rate.
-    uint32 freq = sysctl_clock_get_freq(SYSCTL_CLOCK_CPU);
-    uint32 cur_div = uarths->div.div;
-    uint32 baud = freq / (cur_div + 1);
-    uint32 ncycles = (20UL * freq) / baud + 1000;
-
-    if (ncycles > 500000)
-        ncycles = 500000;
-
-    for (volatile uint32 i = 0; i < ncycles; i++)
-        ;
-#endif
+  release(&uart_raw_lock);
+  return 1;
 }
 
-//
-// Set UART baud rate.
-//
 void
-uart_set_baud(int baud)
+uart_raw_start(void)
 {
-#ifndef QEMU
-    // Complete any in-flight transmission before changing divisor
-    uart_wait_tx_idle();
+  acquire(&uart_raw_lock);
+  uart_raw_r = 0;
+  uart_raw_w = 0;
+  uart_raw_dropped = 0;
+  uart_raw_mode = 1;
+  release(&uart_raw_lock);
+}
 
-    uint32 freq = sysctl_clock_get_freq(SYSCTL_CLOCK_CPU);
-    uint16 div = freq / baud - 1;
-    uarths->div.div = div;
-#endif
+void
+uart_raw_end(void)
+{
+  acquire(&uart_raw_lock);
+  uart_raw_mode = 0;
+  wakeup(&uart_raw_r);
+  release(&uart_raw_lock);
+}
+
+void
+uart_raw_flush(void)
+{
+  acquire(&uart_raw_lock);
+  uart_raw_r = uart_raw_w;
+  uart_raw_dropped = 0;
+  release(&uart_raw_lock);
+}
+
+int
+uart_raw_read(char *dst, int n)
+{
+  int i;
+
+  acquire(&uart_raw_lock);
+  for (i = 0; i < n; i++) {
+    while (uart_raw_r == uart_raw_w) {
+      if (!uart_raw_mode) {
+        release(&uart_raw_lock);
+        return i > 0 ? i : -1;
+      }
+      if (myproc() && myproc()->killed) {
+        release(&uart_raw_lock);
+        return -1;
+      }
+      sleep(&uart_raw_r, &uart_raw_lock);
+    }
+
+    dst[i] = uart_raw_buf[uart_raw_r];
+    uart_raw_r = (uart_raw_r + 1) % UART_RAW_RX_BUF_SIZE;
+  }
+  release(&uart_raw_lock);
+
+  return i;
 }
 
 //
@@ -301,7 +340,8 @@ uartintr(void)
     int c = uartgetc();
     if(c == -1)
       break;
-    consoleintr(c);
+    if(!uart_raw_input(c))
+      consoleintr(c);
   }
 
   acquire(&uart_tx_lock);
