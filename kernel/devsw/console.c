@@ -149,7 +149,11 @@ consoleintr(int c)
     break;
   default:
     if(c != 0 && cons.e-cons.r < INPUT_BUF){
-      c = (c == '\r') ? '\n' : c;   // terminals send CR, we need LF
+#ifndef QEMU
+      if(c == '\r') break;     // on k210, "enter" will input \n and \r
+#else
+      c = (c == '\r') ? '\n' : c;
+#endif
 
       // echo back to the user (printable chars and newline only).
       if((c >= ' ' && c <= '~') || c == '\n')
