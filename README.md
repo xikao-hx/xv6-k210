@@ -1,5 +1,11 @@
 # XV6-RISCV On K210
-**以下启动日志为QEMU上运行，K210上运行部分日志会看不到**
+## 参考说明
+* 移植XV6到K210的部分，完全是照搬的如下仓库，对此表示感谢
+https://github.com/HUST-OS/xv6-k210#
+* 我的主要工作是对XV6内核增加相应功能，新增功能如下进度章节所示
+
+## 启动日志
+### QEMU
 ```
 (base) xikao@xikao-virtual-machine:~/xv6_k210 $ make run platform=qemu
 [rustsbi] RustSBI version 0.1.1
@@ -32,6 +38,24 @@ hart 1 starting
 init: starting sh
 $ 
 ```
+
+### K210
+```shell
+\ / (_/ /  .'    ( OO).-> |  .'   / \_,-.  | /_  |  /  ..  \
+  \    .')  \   /   / .  / -.  (,------. |      /)    .' .'  |  | |  /  \  .
+  .'    \  _ \     /_)'  .-. \  `------' |  .   '   .'  /_   |  | '  \  /  '
+ /  .'.  \ \-'\   /   \  `-' /           |  |\   \ |      |  |  |  \  `'  /
+`--'   '--'    `-'     `----'            `--' '--' `------'  `--'   `---''
+
+xv6 kernel is booting
+
+SDHC/SDXC detected
+hart 0 init done
+hart 1 starting
+init: starting sh
+$ 
+```
+
 ## 依赖
 * k210 开发板或者 qemu-system-riscv64
 * RISC-V GCC 编译链: riscv-gnu-toolchain
@@ -58,12 +82,27 @@ make qemu platform=qemu
 ```
 
 ## 在 k210 开发板上运行
+### 烧写SDK到Flash中
+```shell
+make qemu platform=k210   # 编译并连接到 k210 开发板串口
+```
+
+### 烧写文件系统
+**方式1**：读卡器
 首先，将SD卡插入到读卡器上，并连接到PC上
 ```shell
-sudo mkfs.vfat -I -F 32 /dev/sdb    # 格式化为 FAT32 格式
-sudo dd if=target/fs.img of=/dev/<SD卡设备> bs=1M status=progress  # 下载到SD卡
-make fs
-make qemu platform=k210   # 编译并连接到 k210 开发板串口
+make sdcard dev-sd=/dev/sdX
+```
+
+**方式2**：直接烧写
+```shell
+# 1.首先确保板子是正常启动状态
+# 2.执行下载
+make download
+# 默认 115200 握手，主机 230400 传输，板端 baud 自动补偿到约 253440
+python3 tools/burn.py /dev/ttyUSB0 target/fs.img
+# 如需手动指定补偿值：
+python3 tools/burn.py --baud 230400 --board-baud 253400 /dev/ttyUSB0 target/fs.img
 ```
 
 ## 关于 Shell
@@ -73,6 +112,7 @@ make qemu platform=k210   # 编译并连接到 k210 开发板串口
 * Ctrl-U -- 删除行
 * Ctrl-D -- 文件尾（EOF）
 * Ctrl-P -- 打印进程列表
+* Tab    -- 联想功能
 
 ## 进度
 * ✅完善xv6内核
@@ -81,8 +121,13 @@ make qemu platform=k210   # 编译并连接到 k210 开发板串口
   * ✅内存分配器的共享空闲链表拆分成每个CPU的内存池
   * ✅对磁盘块号进行哈希分桶并拆分锁
   * ✅修改inode添加大文件支持，并添加符号链接功能
-* ✅多核启动
+* ✅多核启动：2个CPU
 * ✅修改文件系统格式为 FAT32
 * ✅移植到k210开发板
 * ✅支持SD卡读写：GPIO、SPI、DMA和SD卡
-* ❌支持通过I2C和SPI协议读写设备
+* ✅支持通过I2C和SPI协议读写设备
+  * ✅编写设备驱动
+  * ✅增加 ioctl 系统调用支持用户态完成读取
+* ✅支持 UARTHS 驱动: 目前分析来看高波特下存在BUG，具体原因还不清楚，先强行解决
+  * ✅raw UART 使用中断 + ring buffer 接收二进制数据
+  * ✅通过 UART 高速接收 `fs.img`，并写入到 SD 卡中
