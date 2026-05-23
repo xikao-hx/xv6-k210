@@ -8,6 +8,7 @@
 // write: write 512 bytes from user buffer to the current sector
 // ioctl: SDCARD_IOCTL_SEEK  — set sector position
 //        SDCARD_IOCTL_TELL  — get sector position
+//        SDCARD_IOCTL_INVALIDATE_CACHE — drop FS caches after raw writes
 //
 
 #include "types.h"
@@ -20,6 +21,7 @@
 #include "defs.h"
 #include "sdcard.h"
 #include "sdcarddev.h"
+#include "fat32.h"
 
 static uint32 sdcard_sector;  // current sector position
 
@@ -91,6 +93,11 @@ sdcarddev_ioctl(int minor, uint64 cmd, uint64 arg)
       return -1;
     return 0;
   }
+
+  case SDCARD_IOCTL_INVALIDATE_CACHE:
+    fat32_invalidate();
+    binvalidate(0);
+    return 0;
 
   default:
     return -1;

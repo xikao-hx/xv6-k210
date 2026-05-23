@@ -1,11 +1,12 @@
 // Burn a FAT filesystem image to the SD card through the raw UART device.
 //
 // Host flow:
-//   1. Send "burn\n" to the shell, which starts this program.
+//   1. Send "/burn\n" to the shell, which starts this program.
 //   2. Wait for "BURN\n".
-//   3. Send INFO with total image size.
-//   4. Send one 512-byte DATA packet per sector.
-//   5. Send DONE after all sectors are acknowledged.
+//   3. Send INFO with image size and optional transfer baud.
+//   4. Optionally switch UART baud with a BAUD/ACK sync.
+//   5. Send one 512-byte DATA packet per sector.
+//   6. Send DONE after all sectors are acknowledged.
 //
 // Packet format:
 //   magic(4: 55 AA 55 AA), seq(4 LE), type(1), plen(2 LE),
@@ -39,6 +40,7 @@
 #define ACK_BAUD     0x04
 
 #define OLED_PROGRESS_STEP 128
+#define BURN_PROGRESS_TITLE "WRITING FS V2"
 
 static void
 put32le(uint8 *p, uint32 v)
@@ -60,6 +62,15 @@ show_hex_value(uint8 row, const char *label, uint32 value)
 }
 
 static void
+show_dec_value(uint8 row, const char *label, uint32 value)
+{
+  char buf[17];
+
+  snprintf(buf, sizeof(buf), "%s%u", label, value);
+  oled_write_row(row, buf);
+}
+
+static void
 show_phase(const char *phase)
 {
   oled_write_row(0, phase);
@@ -68,7 +79,7 @@ show_phase(const char *phase)
 static void
 show_image_info(uint32 nsectors)
 {
-  show_hex_value(1, "TOT ", nsectors);
+  show_dec_value(1, "TOT ", nsectors);
   oled_write_row(2, "");
   oled_write_row(3, "");
 }
@@ -78,7 +89,7 @@ show_error(const char *msg, uint32 sec)
 {
   show_phase("BURN ERROR");
   oled_write_row(2, msg);
-  show_hex_value(3, "SEC ", sec);
+  show_dec_value(3, "SEC ", sec);
 }
 
 static void
@@ -86,18 +97,22 @@ show_retry(const char *why, uint32 sec, int retry)
 {
   show_phase("RETRY");
   oled_printf(2, 0, "%s %d/%d", why, retry + 1, MAX_RETRY);
-  show_hex_value(3, "SEC ", sec);
+  show_dec_value(3, "SEC ", sec);
 }
 
 static void
 show_progress(uint32 sec, uint32 nsectors)
 {
   uint32 pct = nsectors ? (sec * 100) / nsectors : 0;
+  char buf[17];
 
-  show_phase("WRITING fs.img");
-  oled_printf(1, 0, "SEC %u", sec);
-  oled_printf(2, 0, "TOT %u", nsectors);
-  oled_printf(3, 0, "PROGRESS %u%%", pct);
+  show_phase(BURN_PROGRESS_TITLE);
+  snprintf(buf, sizeof(buf), "SEC %u", sec);
+  oled_write_row(1, buf);
+  snprintf(buf, sizeof(buf), "TOT %u", nsectors);
+  oled_write_row(2, buf);
+  snprintf(buf, sizeof(buf), "PROGRESS %u%%", pct);
+  oled_write_row(3, buf);
 }
 
 // CRC32, reflected polynomial 0xEDB88320, compatible with zlib.crc32().
@@ -289,33 +304,37 @@ send_nak(int fd, uint32 seq, uint8 err)
   send_msg(fd, seq, PKT_NAK, &err, 1);
 }
 
+static void
+log_open_failed(const char *name)
+{
+  printf("burn: open %s failed\n", name);
+}
+
 int
 main(void)
 {
   int uart_fd, sdcard_fd;
   uint32 transfer_baud = CONSOLE_BAUD;
 
-  printf("burn: start\n");
+  printf("burn: init\n");
 
+  // Open all devices before raw UART mode.  After RAW_START, stdout is no
+  // longer a safe debug channel because the host owns the UART stream.
   uart_fd = dev(O_RDWR, UART_DEV, 0);
   if (uart_fd < 0) {
-    printf("Error: cannot open /dev/uart\n");
+    log_open_failed("uart");
     exit(1);
   }
-  printf("burn: uart ok\n");
 
   sdcard_fd = dev(O_RDWR, SDCARD_DEV, 0);
   if (sdcard_fd < 0) {
-    printf("Error: cannot open /dev/sdcard\n");
+    log_open_failed("sdcard");
     exit(1);
   }
-  printf("burn: sd ok\n");
 
-  printf("burn: oled init\n");
   int oled_rc = oled_init();
-  printf("burn: oled rc=%d\n", oled_rc);
-
-  printf("SD Card Burn Utility\n");
+  printf("burn: ready uart=%d sd=%d oled=%d\n",
+         uart_fd, sdcard_fd, oled_rc);
 
   // Raw mode prevents the console interrupt handler from stealing bytes.
   ioctl(uart_fd, UART_IOCTL_RAW_START, 0);
@@ -327,6 +346,8 @@ main(void)
   show_phase("WAIT INFO");
   write(uart_fd, "BURN\n", 5);
 
+  // INFO defines the exact number of image bytes the host will send.  The
+  // host may trim unused FAT32 space, so this can be much smaller than fs.img.
   uint32 total_size, nsectors;
   uint32 seq;
   uint8  payload[512];
@@ -361,9 +382,11 @@ main(void)
     goto fail;
   }
 
-  show_phase("WRITING fs.img");
   show_progress(0, nsectors);
   send_ack_payload(uart_fd, seq, ACK_INFO, 0);
+
+  // Baud switching is two-step: first ACK the request at console baud, then
+  // switch locally and wait for one more BAUD packet at the new rate.
   if (transfer_baud != CONSOLE_BAUD) {
     show_hex_value(2, "BAUD ", transfer_baud);
     show_phase("BAUD WAIT");
@@ -394,6 +417,8 @@ main(void)
     show_progress(0, nsectors);
   }
 
+  // Each DATA packet writes exactly one sector.  ACK only after the SD write
+  // succeeds so the host can safely retry on timeout or NAK.
   for (uint32 sec = 0; sec < nsectors; ) {
     int retries = 0;
     int ok = 0;
@@ -454,10 +479,13 @@ main(void)
     }
 
     sec++;
+    // OLED/I2C is slow; refresh progress sparsely so UART RX stays responsive.
     if (sec == nsectors || (sec % OLED_PROGRESS_STEP) == 0)
       show_progress(sec, nsectors);
   }
 
+  // DONE lets the host distinguish "all sectors ACKed" from a clean protocol
+  // close.  Restore the console before printing the final text summary.
   show_phase("WAIT DONE");
   {
     uint32 seq;
@@ -474,12 +502,14 @@ main(void)
 
   if (transfer_baud != CONSOLE_BAUD)
     ioctl(uart_fd, UART_IOCTL_SET_BAUD, CONSOLE_BAUD);
+  int cache_rc = ioctl(sdcard_fd, SDCARD_IOCTL_INVALIDATE_CACHE, 0);
   ioctl(uart_fd, UART_IOCTL_RAW_END, 0);
   show_phase("BURN SUCCESS!");
   oled_write_row(1, "");
   oled_write_row(2, "");
   oled_write_hexrow(3, "DONE", 0, 0);
-  printf("Done: %u sectors, %u bytes\n", nsectors, total_size);
+  printf("burn: done sectors=%u bytes=%u cache=%d\n",
+         nsectors, total_size, cache_rc);
   exit(0);
 
 fail:
@@ -487,6 +517,6 @@ fail:
     ioctl(uart_fd, UART_IOCTL_SET_BAUD, CONSOLE_BAUD);
   ioctl(uart_fd, UART_IOCTL_RAW_END, 0);
   show_phase("BURN FAILED!");
-  printf("Burn failed\n");
+  printf("burn: failed\n");
   exit(1);
 }

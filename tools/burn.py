@@ -221,6 +221,22 @@ def readall(ser, n, label="bytes"):
     return data
 
 
+def read_console_tail(ser, timeout=0.8):
+    old_timeout = ser.timeout
+    ser.timeout = 0.05
+    end = time.monotonic() + timeout
+    data = b""
+    try:
+        while time.monotonic() < end:
+            chunk = ser.read(128)
+            if chunk:
+                data += chunk
+                end = time.monotonic() + 0.2
+    finally:
+        ser.timeout = old_timeout
+    return data
+
+
 def send_msg(ser, seq, type_, payload=b''):
     """Send a framed message over serial."""
     hdr = MAGIC + struct.pack('<IB', seq, type_) + struct.pack('<H', len(payload))
@@ -300,6 +316,8 @@ def main():
                         help="Baud value sent to the board (default: compensated from --baud)")
     parser.add_argument("--console-baud", type=int, default=CONSOLE_BAUD,
                         help="Shell handshake baud (default: 115200)")
+    parser.add_argument("--burn-cmd", default="/burn",
+                        help="Command used to start the board burn program (default: /burn)")
     parser.add_argument("--full-image", action="store_true",
                         help="Send the whole image file instead of trimming FAT32 free space")
     parser.add_argument("--dry-run", action="store_true",
@@ -363,8 +381,15 @@ def main():
     ser.reset_output_buffer()
 
     # Phase 1: shell handshake at console baud.
-    print(f"Sending 'burn' command to board at {args.console_baud} baud...")
-    send_shell_command(ser, "burn")
+    burn_candidates = []
+    for cmd in (args.burn_cmd, "burn", "/bin/burn", "bin/burn"):
+        if cmd not in burn_candidates:
+            burn_candidates.append(cmd)
+    burn_idx = 0
+    burn_cmd = burn_candidates[burn_idx]
+
+    print(f"Sending '{burn_cmd}' command to board at {args.console_baud} baud...")
+    send_shell_command(ser, burn_cmd)
 
     print("Waiting for BURN signal...")
     buf = b""
@@ -375,12 +400,26 @@ def main():
             retries += 1
             print(
                 "Timeout waiting for BURN, retrying "
-                f"'burn' ({retries}); last serial='{printable_serial(buf[-96:])}'")
-            send_shell_command(ser, "burn")
+                f"'{burn_cmd}' ({retries}); last serial='{printable_serial(buf[-96:])}'")
+            send_shell_command(ser, burn_cmd)
             continue
         buf += c
         if buf.endswith(b"BURN\n"):
             break
+        failed = f"exec {burn_cmd} failed".encode("ascii")
+        if failed in buf:
+            if burn_idx + 1 >= len(burn_candidates):
+                print(
+                    "Board shell could not exec burn program; "
+                    f"last serial='{printable_serial(buf[-160:])}'")
+                ser.close()
+                sys.exit(1)
+            burn_idx += 1
+            burn_cmd = burn_candidates[burn_idx]
+            print(f"Board could not exec previous command, trying '{burn_cmd}'...")
+            buf = b""
+            send_shell_command(ser, burn_cmd)
+            continue
         if len(buf) > 256:
             buf = buf[-256:]
 
@@ -529,6 +568,12 @@ def main():
 
     if args.baud != args.console_baud:
         ser.baudrate = args.console_baud
+        time.sleep(0.05)
+
+    tail = read_console_tail(ser)
+    if tail:
+        print("Board console tail:")
+        print(printable_serial(tail))
 
     ser.close()
 

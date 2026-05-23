@@ -187,6 +187,24 @@ bwrite(struct buf *b)
   disk_write(b);
 }
 
+// Drop cached clean block contents for a device.  Raw SD writes bypass the
+// buffer cache, so cached FAT blocks must be marked invalid before the file
+// system is used again.
+void
+binvalidate(uint dev)
+{
+  struct buf *b;
+
+  for (int i = 0; i < NBUCKET; i++) {
+    acquire(&bcache.buckets[i].lock);
+    for (b = bcache.buckets[i].head.next; b != &bcache.buckets[i].head; b = b->next) {
+      if (b->dev == dev && b->refcnt == 0)
+        b->valid = 0;
+    }
+    release(&bcache.buckets[i].lock);
+  }
+}
+
 // Release a locked buffer.
 // Move to the head of the most-recently-used list.
 void
@@ -237,5 +255,4 @@ bunpin(struct buf *b) {
   b->refcnt--;
   release(&bcache.buckets[bid].lock);
 }
-
 

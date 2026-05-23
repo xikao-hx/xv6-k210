@@ -134,6 +134,23 @@ int fat32_init()
     return 0;
 }
 
+// Raw SD writes replace the on-card FAT contents without going through this
+// layer.  Clear cached directory entries so later path lookup re-reads them
+// from disk instead of using entries from the previous fs.img.
+void
+fat32_invalidate(void)
+{
+    acquire(&ecache.lock);
+    for(struct dirent *de = ecache.entries; de < ecache.entries + ENTRY_CACHE_NUM; de++) {
+        if(de->ref == 0) {
+            de->valid = 0;
+            de->dirty = 0;
+            de->parent = 0;
+        }
+    }
+    release(&ecache.lock);
+}
+
 /**
  * @param   cluster   cluster number starts from 2, which means no 0 and 1
  */
