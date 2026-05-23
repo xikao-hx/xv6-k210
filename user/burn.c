@@ -20,10 +20,12 @@
 #include "fcntl.h"
 
 #define MAX_RETRY    5
+#define CONSOLE_BAUD 115200
 
 #define PKT_INFO   0x01  // Host to board: payload is total image size.
 #define PKT_DATA   0x02  // Host to board: payload is one 512-byte sector.
 #define PKT_DONE   0x03  // Host to board: transfer complete.
+#define PKT_BAUD   0x04  // Host to board: request/confirm baud switch.
 #define PKT_ACK    0x81  // Board to host: packet accepted.
 #define PKT_NAK    0x82  // Board to host: packet rejected; payload is error.
 
@@ -34,6 +36,9 @@
 #define ACK_DUP      0x01
 #define ACK_INFO     0x02
 #define ACK_DONE     0x03
+#define ACK_BAUD     0x04
+
+#define OLED_PROGRESS_STEP 128
 
 static void
 put32le(uint8 *p, uint32 v)
@@ -82,6 +87,17 @@ show_retry(const char *why, uint32 sec, int retry)
   show_phase("RETRY");
   oled_printf(2, 0, "%s %d/%d", why, retry + 1, MAX_RETRY);
   show_hex_value(3, "SEC ", sec);
+}
+
+static void
+show_progress(uint32 sec, uint32 nsectors)
+{
+  uint32 pct = nsectors ? (sec * 100) / nsectors : 0;
+
+  show_phase("WRITING fs.img");
+  oled_printf(1, 0, "SEC %u", sec);
+  oled_printf(2, 0, "TOT %u", nsectors);
+  oled_printf(3, 0, "PROGRESS %u%%", pct);
 }
 
 // CRC32, reflected polynomial 0xEDB88320, compatible with zlib.crc32().
@@ -193,6 +209,7 @@ resync:
   // Payload bytes can contain the magic pattern.  If the following header
   // is impossible, treat it as false magic and keep scanning.
   if (type != PKT_INFO && type != PKT_DATA && type != PKT_DONE &&
+      type != PKT_BAUD &&
       type != PKT_ACK && type != PKT_NAK) {
     // Re-seed the sliding window with bytes that followed the false magic,
     // so a real magic that overlaps this region is not skipped.
@@ -250,6 +267,22 @@ send_ack_payload(int fd, uint32 seq, uint8 reason, uint32 ticks)
   send_msg(fd, seq, PKT_ACK, payload, sizeof(payload));
 }
 
+static uint32
+get_uart_actual_baud(int fd, uint32 *div)
+{
+  struct uart_baud_info info;
+
+  if (ioctl(fd, UART_IOCTL_GET_BAUD_INFO, (uint64)&info) < 0) {
+    if (div)
+      *div = 0;
+    return 0;
+  }
+
+  if (div)
+    *div = info.div;
+  return info.actual;
+}
+
 static void
 send_nak(int fd, uint32 seq, uint8 err)
 {
@@ -260,25 +293,31 @@ int
 main(void)
 {
   int uart_fd, sdcard_fd;
+  uint32 transfer_baud = CONSOLE_BAUD;
+
+  printf("burn: start\n");
 
   uart_fd = dev(O_RDWR, UART_DEV, 0);
   if (uart_fd < 0) {
     printf("Error: cannot open /dev/uart\n");
     exit(1);
   }
+  printf("burn: uart ok\n");
 
   sdcard_fd = dev(O_RDWR, SDCARD_DEV, 0);
   if (sdcard_fd < 0) {
     printf("Error: cannot open /dev/sdcard\n");
     exit(1);
   }
+  printf("burn: sd ok\n");
 
-  oled_init();
+  printf("burn: oled init\n");
+  int oled_rc = oled_init();
+  printf("burn: oled rc=%d\n", oled_rc);
 
   printf("SD Card Burn Utility\n");
 
-  // Raw mode prevents the console interrupt handler from stealing bytes
-  // while this program polls the UART.
+  // Raw mode prevents the console interrupt handler from stealing bytes.
   ioctl(uart_fd, UART_IOCTL_RAW_START, 0);
 
   // Until RAW_END, host communication must use uart_fd, not printf().
@@ -301,6 +340,12 @@ main(void)
 
   total_size = (uint32)payload[0] | ((uint32)payload[1] << 8)
               | ((uint32)payload[2] << 16) | ((uint32)payload[3] << 24);
+  if (plen >= 8) {
+    transfer_baud = (uint32)payload[4] | ((uint32)payload[5] << 8)
+                  | ((uint32)payload[6] << 16) | ((uint32)payload[7] << 24);
+    if (transfer_baud < 9600 || transfer_baud > 5000000)
+      transfer_baud = CONSOLE_BAUD;
+  }
   nsectors  = (total_size + 511) / 512;
   show_image_info(nsectors);
 
@@ -317,7 +362,37 @@ main(void)
   }
 
   show_phase("WRITING fs.img");
+  show_progress(0, nsectors);
   send_ack_payload(uart_fd, seq, ACK_INFO, 0);
+  if (transfer_baud != CONSOLE_BAUD) {
+    show_hex_value(2, "BAUD ", transfer_baud);
+    show_phase("BAUD WAIT");
+
+    type = recv_msg(uart_fd, &seq, payload, &plen);
+    if (type != PKT_BAUD) {
+      show_error("BAUD REQ", nsectors);
+      goto fail;
+    }
+
+    show_phase("BAUD READY");
+    send_ack_payload(uart_fd, seq, ACK_BAUD, transfer_baud);
+
+    ioctl(uart_fd, UART_IOCTL_SET_BAUD, transfer_baud);
+    show_phase("BAUD SET");
+    {
+      uint32 div;
+      get_uart_actual_baud(uart_fd, &div);
+      show_hex_value(3, "DIV ", div);
+    }
+
+    type = recv_msg(uart_fd, &seq, payload, &plen);
+    if (type != PKT_BAUD) {
+      show_error("BAUD SYNC", nsectors);
+      goto fail;
+    }
+    send_ack_payload(uart_fd, seq, ACK_BAUD, get_uart_actual_baud(uart_fd, 0));
+    show_progress(0, nsectors);
+  }
 
   for (uint32 sec = 0; sec < nsectors; ) {
     int retries = 0;
@@ -379,6 +454,8 @@ main(void)
     }
 
     sec++;
+    if (sec == nsectors || (sec % OLED_PROGRESS_STEP) == 0)
+      show_progress(sec, nsectors);
   }
 
   show_phase("WAIT DONE");
@@ -395,6 +472,8 @@ main(void)
     }
   }
 
+  if (transfer_baud != CONSOLE_BAUD)
+    ioctl(uart_fd, UART_IOCTL_SET_BAUD, CONSOLE_BAUD);
   ioctl(uart_fd, UART_IOCTL_RAW_END, 0);
   show_phase("BURN SUCCESS!");
   oled_write_row(1, "");
@@ -404,6 +483,8 @@ main(void)
   exit(0);
 
 fail:
+  if (transfer_baud != CONSOLE_BAUD)
+    ioctl(uart_fd, UART_IOCTL_SET_BAUD, CONSOLE_BAUD);
   ioctl(uart_fd, UART_IOCTL_RAW_END, 0);
   show_phase("BURN FAILED!");
   printf("Burn failed\n");

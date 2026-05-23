@@ -195,7 +195,8 @@ UPROGS=\
 	$(UBUILD)/_zombie\
 	$(UBUILD)/_w25q64_test\
 	$(UBUILD)/_mpu6050_test\
-	$(UBUILD)/_burn
+	$(UBUILD)/_burn\
+	$(UBUILD)/_uartbaud
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
@@ -271,11 +272,13 @@ fs: $(UPROGS)
 
 .PHONY: xv6_image handin tarball tarball-pref clean grade handin-check
 
-dev-sd := /dev/sdc
+dev-sd := /dev/sdb
 sdcard: fs
 	@test -b "$(dev-sd)" || (echo "$(dev-sd) is not a block device; refusing to write fs.img"; exit 1)
 	@sudo dd if=target/fs.img of=$(dev-sd) bs=1M status=progress
 	@sudo eject $(dev-sd)
 
+# BUG: The baud rate of K210 must be increased.
 download: fs
-	@python3 tools/burn.py $(k210-serialport) target/fs.img
+	@python3 tools/burn.py --verbose --baud 460800 --board-baud 500000 $(k210-serialport) target/fs.img
+

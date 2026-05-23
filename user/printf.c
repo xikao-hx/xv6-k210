@@ -95,6 +95,8 @@ out_vprintf(OutCtx *o, const char *fmt, va_list ap)
     } else if (state == '%') {
       if (c == 'd') {
         out_printint(o, va_arg(ap, int), 10, 1);
+      } else if (c == 'u') {
+        out_printint(o, va_arg(ap, uint), 10, 0);
       } else if (c == 'l') {
         out_printint(o, va_arg(ap, uint64), 10, 0);
       } else if (c == 'x') {

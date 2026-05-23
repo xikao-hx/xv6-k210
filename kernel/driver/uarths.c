@@ -58,12 +58,13 @@ int uart_tx_r; // read next from uart_tx_buf[uart_tx_r++]
 
 // Raw receive buffer used by /dev/uart while binary transfers are active.
 struct spinlock uart_raw_lock;
-#define UART_RAW_RX_BUF_SIZE 8192
+#define UART_RAW_RX_BUF_SIZE 32768
 static char uart_raw_buf[UART_RAW_RX_BUF_SIZE];
 static uint uart_raw_r;
 static uint uart_raw_w;
 static uint uart_raw_dropped;
 static int uart_raw_mode;
+static uint32 uart_requested_baud = 115200;
 
 extern volatile int panicked; // from printf.c
 
@@ -228,6 +229,71 @@ uartrx_enable(void)
 #endif
 }
 
+void
+uart_wait_tx_idle(void)
+{
+#ifndef QEMU
+    uint32 old_txcnt = uarths->txctrl.txcnt;
+    uarths->txctrl.txcnt = 1;
+
+    while (!uarths->ip.txwm)
+        ;
+
+    uarths->txctrl.txcnt = old_txcnt;
+
+    uint32 freq = sysctl_clock_get_freq(SYSCTL_CLOCK_CPU);
+    uint32 cur_div = uarths->div.div;
+    uint32 baud = freq / (cur_div + 1);
+    uint32 ncycles = (20UL * freq) / baud + 1000;
+
+    if (ncycles > 500000)
+        ncycles = 500000;
+
+    for (volatile uint32 i = 0; i < ncycles; i++)
+        ;
+#endif
+}
+
+void
+uart_set_baud(int baud)
+{
+#ifndef QEMU
+    if (baud <= 0)
+        return;
+
+    uart_wait_tx_idle();
+    uarths->ie.rxwm = 0;
+    while (uartgetc() != -1)
+        ;
+
+    uint32 freq = sysctl_clock_get_freq(SYSCTL_CLOCK_CPU);
+    uint32 div = freq / (uint32)baud;
+    if (div == 0)
+        div = 1;
+    uarths->div.div = div - 1;
+    uart_requested_baud = (uint32)baud;
+    uarths->ie.rxwm = 1;
+#endif
+}
+
+void
+uart_get_baud_info(uint32 *info)
+{
+#ifdef QEMU
+  info[0] = uart_requested_baud;
+  info[1] = uart_requested_baud;
+  info[2] = 0;
+  info[3] = 0;
+#else
+  uint32 freq = sysctl_clock_get_freq(SYSCTL_CLOCK_CPU);
+  uint32 div = uarths->div.div;
+  info[0] = uart_requested_baud;
+  info[1] = freq / (div + 1);
+  info[2] = div;
+  info[3] = freq;
+#endif
+}
+
 static int
 uart_raw_input(int c)
 {
@@ -249,6 +315,37 @@ uart_raw_input(int c)
 
   release(&uart_raw_lock);
   return 1;
+}
+
+static int
+uart_raw_drain_fifo(void)
+{
+  int did_raw = 0;
+  int did_wakeup = 0;
+
+  acquire(&uart_raw_lock);
+  if (uart_raw_mode) {
+    did_raw = 1;
+    while (1) {
+      int c = uartgetc();
+      if (c == -1)
+        break;
+
+      uint next = (uart_raw_w + 1) % UART_RAW_RX_BUF_SIZE;
+      if (next == uart_raw_r) {
+        uart_raw_dropped++;
+      } else {
+        uart_raw_buf[uart_raw_w] = (char)c;
+        uart_raw_w = next;
+        did_wakeup = 1;
+      }
+    }
+  }
+  if (did_wakeup)
+    wakeup(&uart_raw_r);
+  release(&uart_raw_lock);
+
+  return did_raw;
 }
 
 void
@@ -336,12 +433,14 @@ uartgetc(void)
 void
 uartintr(void)
 {
-  while(1){
-    int c = uartgetc();
-    if(c == -1)
-      break;
-    if(!uart_raw_input(c))
-      consoleintr(c);
+  if (!uart_raw_drain_fifo()) {
+    while(1){
+      int c = uartgetc();
+      if(c == -1)
+        break;
+      if(!uart_raw_input(c))
+        consoleintr(c);
+    }
   }
 
   acquire(&uart_tx_lock);
