@@ -617,10 +617,15 @@ uint32 sysctl_pll_get_freq(sysctl_pll_t pll)
     }
 
     /*
-     * Get final PLL output freq
-     * FOUT = FIN / NR * NF / OD
+     * Get final PLL output freq:
+     *   FOUT = FIN / NR * NF / OD
+     *
+     * Keep this integer-only. The K210 kernel does not enable floating-point
+     * state, so compiler-generated fdiv.d/fmul.d traps in RustSBI.
      */
-    freq_out = (double)freq_in / (double)nr * (double)nf / (double)od;
+    if (nr == 0 || od == 0)
+        return 0;
+    freq_out = (uint32)(((uint64)freq_in * nf) / nr / od);
     return freq_out;
 }
 
