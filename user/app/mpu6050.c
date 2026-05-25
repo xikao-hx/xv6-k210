@@ -1,6 +1,6 @@
 #include "types.h"
 #include "i2cdev.h"
-#include "user/user.h"
+#include "user.h"
 
 /* MPU6050 register addresses */
 #define MPU6050_ADDR      0x68

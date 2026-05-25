@@ -1,6 +1,6 @@
 #include "types.h"
 #include "spidev.h"
-#include "user/user.h"
+#include "user.h"
 
 /* W25Q64 commands */
 #define CMD_JEDEC_ID      0x9F

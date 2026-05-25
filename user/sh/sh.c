@@ -2,7 +2,7 @@
 
 #include "types.h"
 #include "stat.h"
-#include "user/user.h"
+#include "user.h"
 #include "fcntl.h"
 
 // Parsed command representation

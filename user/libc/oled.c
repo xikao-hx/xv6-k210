@@ -4,7 +4,7 @@
 #include "i2cdev.h"
 #include "oled.h"
 #include "oled_font.h"
-#include "user/user.h"
+#include "user.h"
 #include <stdarg.h>
 
 int vsnprintf(char *buf, int n, const char *fmt, va_list ap);

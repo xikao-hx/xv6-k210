@@ -17,7 +17,7 @@
 #include "uartdev.h"
 #include "sdcarddev.h"
 #include "oled.h"
-#include "user/user.h"
+#include "user.h"
 #include "fcntl.h"
 
 #define MAX_RETRY    5

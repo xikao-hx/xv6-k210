@@ -98,6 +98,7 @@ CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
 CFLAGS += -I.
 # CFLAGS += -D DEBUG
 CFLAGS += -I$K/include
+CFLAGS += -I$U/include
 ifeq ($(platform), qemu)
 CFLAGS += -D QEMU
 endif
@@ -150,19 +151,42 @@ tags: $(OBJS) $(UBUILD)/_init
 	etags *.S *.c
 
 # -------- user compiler --------
+# Compile user sources into subdirectories matching kernel/ layout
+$(UBUILD)/sh/%.o: $U/sh/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(UBUILD)/app/%.o: $U/app/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(UBUILD)/libc/%.o: $U/libc/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(UBUILD)/%.o: $U/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # user lib
-ULIB = $(UBUILD)/ulib.o $(UBUILD)/usys.o $(UBUILD)/printf.o $(UBUILD)/umalloc.o $(UBUILD)/oled.o
+ULIB = $(UBUILD)/libc/ulib.o $(UBUILD)/usys.o $(UBUILD)/libc/printf.o $(UBUILD)/libc/umalloc.o $(UBUILD)/libc/oled.o
 
-# user programe compile rule
-$(UBUILD)/_%: $(UBUILD)/%.o $(ULIB)
-	@mkdir -p $(UBUILD)
+define LINK_USER
+	@mkdir -p $(dir $@)
 	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o $@ $^
-	$(OBJDUMP) -S $@ > $(UBUILD)/$*.asm
-	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(UBUILD)/$*.sym
+	$(OBJDUMP) -S $@ > $(dir $@)$*.asm
+	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(dir $@)$*.sym
+endef
+
+# user programe link rules — _* outputs to same subdir as its main .o
+$(UBUILD)/sh/_%: $(UBUILD)/sh/%.o $(ULIB)
+	$(LINK_USER)
+
+$(UBUILD)/app/_%: $(UBUILD)/app/%.o $(ULIB)
+	$(LINK_USER)
+
+$(UBUILD)/_%: $(UBUILD)/%.o $(ULIB)
+	$(LINK_USER)
 
 # system call
 $(UBUILD)/usys.S : $U/usys.pl
@@ -172,30 +196,25 @@ $(UBUILD)/usys.S : $U/usys.pl
 $(UBUILD)/usys.o : $(UBUILD)/usys.S
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# Prevent deletion of intermediate files, e.g. cat.o, after first build, so
-# that disk image changes after first build are persistent until clean.  More
-# details:
-# http://www.gnu.org/software/make/manual/html_node/Chained-Rules.html
-.PRECIOUS: $(UBUILD)/%.o $(KBUILD)/%.o
+# Prevent deletion of intermediate files
+.PRECIOUS: $(UBUILD)/sh/%.o $(UBUILD)/app/%.o $(UBUILD)/libc/%.o $(UBUILD)/%.o $(KBUILD)/%.o
 
 # user programe list
 UPROGS=\
-	$(UBUILD)/_cat\
-	$(UBUILD)/_echo\
-	$(UBUILD)/_grep\
-	$(UBUILD)/_init\
-	$(UBUILD)/_kill\
-	$(UBUILD)/_ln\
-	$(UBUILD)/_ls\
-	$(UBUILD)/_mkdir\
-	$(UBUILD)/_rm\
-	$(UBUILD)/_sh\
-	$(UBUILD)/_grind\
-	$(UBUILD)/_wc\
-	$(UBUILD)/_zombie\
-	$(UBUILD)/_w25q64_test\
-	$(UBUILD)/_mpu6050_test\
-	$(UBUILD)/_burn
+	$(UBUILD)/sh/_cat\
+	$(UBUILD)/sh/_echo\
+	$(UBUILD)/sh/_grep\
+	$(UBUILD)/sh/_kill\
+	$(UBUILD)/sh/_ln\
+	$(UBUILD)/sh/_ls\
+	$(UBUILD)/sh/_mkdir\
+	$(UBUILD)/sh/_rm\
+	$(UBUILD)/sh/_sh\
+	$(UBUILD)/sh/_find\
+	$(UBUILD)/app/_burn\
+	$(UBUILD)/app/_mpu6050\
+	$(UBUILD)/app/_w25q64\
+	$(UBUILD)/_init
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
@@ -241,7 +260,7 @@ QEMUOPTS += -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 # k210
 image = $T/kernel.bin
 k210 = $T/k210.bin
-k210-serialport := /dev/ttyUSB0
+k210-serialport := /dev/ttyUSB1
 
 boot:
 	@sudo chmod 777 $(k210-serialport)

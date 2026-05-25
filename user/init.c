@@ -3,7 +3,7 @@
 #include "types.h"
 #include "stat.h"
 #include "file.h"
-#include "user/user.h"
+#include "user.h"
 #include "fcntl.h"
 
 char *argv[] = { "sh", 0 };

@@ -1,6 +1,6 @@
 #include "types.h"
 #include "stat.h"
-#include "user/user.h"
+#include "user.h"
 
 char*
 fmtname(char *name)
