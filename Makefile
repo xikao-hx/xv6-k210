@@ -285,7 +285,7 @@ fs: $(UPROGS)
 	@echo "populating fs.img with user programs..."
 	@dd if=/dev/zero of=$T/fs.img bs=1M count=$(FS_SIZE_MB) 2>/dev/null
 	@mkfs.vfat -F 32 $T/fs.img 2>/dev/null
-	@python3 scripts/mkfs.py "$(UBUILD)"
+	@python3 tools/mkfs.py "$(UBUILD)"
 	@echo "done"
 
 .PHONY: xv6_image handin tarball tarball-pref clean grade handin-check

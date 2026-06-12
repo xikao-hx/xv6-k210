@@ -3,9 +3,6 @@
 
 #include "types.h"
 
-// ====================== 通用寄存器操作（无模式依赖，保留） ======================
-
-// 读取线程指针 tp（存储当前 hartid，S 模式下可安全使用）
 static inline uint64
 r_tp()
 {
@@ -14,14 +11,12 @@ r_tp()
   return x;
 }
 
-// 写入线程指针 tp
 static inline void
 w_tp(uint64 x)
 {
   asm volatile("mv tp, %0" : : "r" (x));
 }
 
-// 读取栈指针 sp
 static inline uint64
 r_sp()
 {
@@ -30,7 +25,6 @@ r_sp()
   return x;
 }
 
-// 读取帧指针 fp（s0）
 static inline uint64
 r_fp()
 {
@@ -39,7 +33,6 @@ r_fp()
   return x;
 }
 
-// 读取返回地址 ra
 static inline uint64
 r_ra()
 {
@@ -48,7 +41,6 @@ r_ra()
   return x;
 }
 
-// 读取时间计数器 time（S 模式可访问，依赖 OpenSBI 代理）
 static inline uint64
 r_time()
 {
@@ -57,7 +49,7 @@ r_time()
   return x;
 }
 
-// ====================== S 模式 CSR 寄存器操作（核心保留，适配 S 模式） ======================
+// ====================== S 模式 CSR 寄存器操作 ======================
 
 // 1. S 模式状态寄存器 sstatus
 #define SSTATUS_SPP (1L << 8)  // 先前模式：1=S模式，0=U模式
@@ -181,8 +173,7 @@ r_sscratch()
   return x;
 }
 
-// 9. S 模式地址翻译与保护寄存器 satp（页表基址，开启分页）
-#define SATP_SV39 (8L << 60) // Sv39 分页模式（RISC-V 64 标准）
+#define SATP_SV39 (8L << 60) 
 #define MAKE_SATP(pagetable) (SATP_SV39 | (((uint64)pagetable) >> 12)) // 构造 satp 值
 
 static inline void
@@ -199,23 +190,18 @@ r_satp()
   return x;
 }
 
-// ====================== 中断控制函数（基于 S 模式，保留并修正） ======================
-
-// 使能 S 模式全局中断
 static inline void
 intr_on()
 {
   w_sstatus(r_sstatus() | SSTATUS_SIE);
 }
 
-// 关闭 S 模式全局中断
 static inline void
 intr_off()
 {
   w_sstatus(r_sstatus() & ~SSTATUS_SIE);
 }
 
-// 查询中断是否使能
 static inline int
 intr_get()
 {
@@ -223,43 +209,35 @@ intr_get()
   return (x & SSTATUS_SIE) != 0;
 }
 
-// ====================== 内存管理相关宏（无模式依赖，保留） ======================
+#define PGSIZE 4096       
+#define PGSHIFT 12         
 
-#define PGSIZE 4096        // 页大小（4KB）
-#define PGSHIFT 12         // 页内偏移位数
+#define PGROUNDUP(sz)  (((sz)+PGSIZE-1) & ~(PGSIZE-1)) 
+#define PGROUNDDOWN(a) (((a)) & ~(PGSIZE-1))           
 
-#define PGROUNDUP(sz)  (((sz)+PGSIZE-1) & ~(PGSIZE-1)) // 向上对齐到页
-#define PGROUNDDOWN(a) (((a)) & ~(PGSIZE-1))           // 向下对齐到页
+#define PTE_V (1L << 0) 
+#define PTE_R (1L << 1) 
+#define PTE_W (1L << 2) 
+#define PTE_X (1L << 3)
+#define PTE_U (1L << 4) 
+#define PTE_COW (1L << 8)
 
-// 页表项（PTE）标志位
-#define PTE_V (1L << 0) // 有效位
-#define PTE_R (1L << 1) // 可读
-#define PTE_W (1L << 2) // 可写
-#define PTE_X (1L << 3) // 可执行
-#define PTE_U (1L << 4) // 用户态可访问
-#define PTE_COW (1L << 8) // 写时复制
-
-// 物理地址 ↔ PTE 转换
 #define PA2PTE(pa) ((((uint64)pa) >> 12) << 10)
 #define PTE2PA(pte) (((pte) >> 10) << 12)
-#define PTE_FLAGS(pte) ((pte) & 0x3FF) // 提取 PTE 标志位
+#define PTE_FLAGS(pte) ((pte) & 0x3FF)
 
-// Sv39 虚拟地址的三级页表索引提取
-#define PXMASK          0x1FF // 9 位索引
+#define PXMASK          0x1FF
 #define PXSHIFT(level)  (PGSHIFT+(9*(level)))
 #define PX(level, va) ((((uint64) (va)) >> PXSHIFT(level)) & PXMASK)
 
-// Sv39 最大虚拟地址（避免符号扩展问题）
 #define MAXVA (1L << (9 + 9 + 9 + 12 - 1))
 
-typedef uint64 pte_t;         // 页表项类型
-typedef uint64 *pagetable_t;  // 页表类型（512 个 PTE）
+typedef uint64 pte_t;         
+typedef uint64 *pagetable_t; 
 
-// ====================== TLB 刷新指令（S 模式可用，保留） ======================
 static inline void
 sfence_vma()
 {
-  // 刷新所有 TLB 表项
   asm volatile("sfence.vma zero, zero");
 #ifdef QEMU
   // QEMU handles TLB coherency automatically
