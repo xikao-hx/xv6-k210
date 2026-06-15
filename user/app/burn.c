@@ -39,7 +39,6 @@
 #define ACK_DONE     0x03
 #define ACK_BAUD     0x04
 
-#define OLED_PROGRESS_STEP 128
 #define BURN_PROGRESS_TITLE "WRITING FS V2"
 
 static void
@@ -118,7 +117,6 @@ show_progress(uint32 sec, uint32 nsectors)
 // CRC32, reflected polynomial 0xEDB88320, compatible with zlib.crc32().
 
 static uint32 crc32_tab[256];
-static int    crc32_inited = 0;
 
 static void
 crc32_init(void)
@@ -133,13 +131,11 @@ crc32_init(void)
     }
     crc32_tab[i] = crc;
   }
-  crc32_inited = 1;
 }
 
 static uint32
 crc32(const uint8 *data, int len, uint32 crc)
 {
-  if (!crc32_inited) crc32_init();
   crc = ~crc;
   for (int i = 0; i < len; i++)
     crc = crc32_tab[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
@@ -165,14 +161,15 @@ read_bytes(int fd, uint8 *buf, int n)
 static void
 send_msg(int fd, uint32 seq, uint8 type, const uint8 *payload, uint16 plen)
 {
-  uint8 hdr[11];
-  hdr[0] = 0x55; hdr[1] = 0xAA; hdr[2] = 0x55; hdr[3] = 0xAA;
-  hdr[4] = seq & 0xFF; hdr[5] = (seq >> 8) & 0xFF;
-  hdr[6] = (seq >> 16) & 0xFF; hdr[7] = (seq >> 24) & 0xFF;
-  hdr[8] = type;
-  hdr[9] = plen & 0xFF; hdr[10] = (plen >> 8) & 0xFF;
+  uint8 magic[4] = {0x55, 0xAA, 0x55, 0xAA};
+  uint8 hdr[7];
+  hdr[0] = seq & 0xFF; hdr[1] = (seq >> 8) & 0xFF;
+  hdr[2] = (seq >> 16) & 0xFF; hdr[3] = (seq >> 24) & 0xFF;
+  hdr[4] = type;
+  hdr[5] = plen & 0xFF; hdr[6] = (plen >> 8) & 0xFF;
 
-  uint32 csum = crc32(hdr, 11, 0);
+  uint32 csum = crc32(magic, sizeof(magic), 0);
+  csum = crc32(hdr, sizeof(hdr), csum);
   if (payload && plen)
     csum = crc32(payload, plen, csum);
 
@@ -180,7 +177,8 @@ send_msg(int fd, uint32 seq, uint8 type, const uint8 *payload, uint16 plen)
   crc_buf[0] = csum & 0xFF; crc_buf[1] = (csum >> 8) & 0xFF;
   crc_buf[2] = (csum >> 16) & 0xFF; crc_buf[3] = (csum >> 24) & 0xFF;
 
-  write(fd, hdr, 11);
+  write(fd, magic, sizeof(magic));
+  write(fd, hdr, sizeof(hdr));
   if (payload && plen)
     write(fd, payload, plen);
   write(fd, crc_buf, 4);
@@ -226,8 +224,9 @@ resync:
   if (type != PKT_INFO && type != PKT_DATA && type != PKT_DONE &&
       type != PKT_BAUD &&
       type != PKT_ACK && type != PKT_NAK) {
-    // Re-seed the sliding window with bytes that followed the false magic,
-    // so a real magic that overlaps this region is not skipped.
+    // The seven bytes after a false magic may overlap the next real magic.
+    // Keep the trailing bytes in the same ring-window order as the scanner
+    // expects, then continue sliding instead of discarding the whole header.
     sync[0] = hdr[5];
     sync[1] = hdr[4];
     sync[2] = hdr[3];
@@ -299,6 +298,17 @@ get_uart_actual_baud(int fd, uint32 *div)
 }
 
 static void
+get_uart_raw_stats(int fd, struct uart_raw_stats *stats)
+{
+  if (ioctl(fd, UART_IOCTL_GET_RAW_STATS, (uint64)stats) < 0) {
+    stats->dropped = 0;
+    stats->buffered = 0;
+    stats->capacity = 0;
+    stats->mode = 0;
+  }
+}
+
+static void
 send_nak(int fd, uint32 seq, uint8 err)
 {
   send_msg(fd, seq, PKT_NAK, &err, 1);
@@ -314,7 +324,28 @@ int
 main(void)
 {
   int uart_fd, sdcard_fd;
+  int type;
+  int success = 0;
+  int cache_rc = -1;
   uint32 transfer_baud = CONSOLE_BAUD;
+  uint32 crc_errors = 0;
+  uint32 io_errors = 0;
+  uint32 pkt_errors = 0;
+  uint32 sd_errors = 0;
+  uint32 dup_packets = 0;
+  uint32 sd_ticks_total = 0;
+  uint32 sd_ticks_max = 0;
+  uint32 transfer_start = 0;
+  uint32 transfer_ticks = 0;
+  uint32 total_size = 0;
+  uint32 nsectors = 0;
+  uint32 progress_step = 1;
+  uint32 seq;
+  uint8  payload[512];
+  uint16 plen;
+  struct uart_raw_stats raw_stats = {0};
+
+  crc32_init();
 
   printf("burn: init\n");
 
@@ -348,12 +379,7 @@ main(void)
 
   // INFO defines the exact number of image bytes the host will send.  The
   // host may trim unused FAT32 space, so this can be much smaller than fs.img.
-  uint32 total_size, nsectors;
-  uint32 seq;
-  uint8  payload[512];
-  uint16 plen;
-
-  int type = recv_msg(uart_fd, &seq, payload, &plen);
+  type = recv_msg(uart_fd, &seq, payload, &plen);
   if (type != PKT_INFO || plen < 4) {
     show_error("NO INFO", 0);
     goto fail;
@@ -368,6 +394,9 @@ main(void)
       transfer_baud = CONSOLE_BAUD;
   }
   nsectors  = (total_size + 511) / 512;
+  progress_step = nsectors / 20;
+  if (progress_step == 0)
+    progress_step = 1;
   show_image_info(nsectors);
 
   uint32 card_sectors = 0;
@@ -419,18 +448,16 @@ main(void)
 
   // Each DATA packet writes exactly one sector.  ACK only after the SD write
   // succeeds so the host can safely retry on timeout or NAK.
+  transfer_start = uptime();
   for (uint32 sec = 0; sec < nsectors; ) {
     int retries = 0;
-    int ok = 0;
+    int sector_ok = 0;
 
     while (retries <= MAX_RETRY) {
-      uint32 rseq;
-      uint8  payload[512];
-      uint16 plen;
-
-      int type = recv_msg(uart_fd, &rseq, payload, &plen);
+      type = recv_msg(uart_fd, &seq, payload, &plen);
 
       if (type == -2) {
+        crc_errors++;
         show_retry("CRC", sec, retries);
         send_nak(uart_fd, sec, ERR_CRC);
         retries++;
@@ -438,85 +465,101 @@ main(void)
       }
 
       if (type < 0) {
+        io_errors++;
         show_retry("IO", sec, retries);
         send_nak(uart_fd, sec, ERR_CRC);
         retries++;
         continue;
       }
 
-      if (type == PKT_DATA && plen == 512 && rseq < sec) {
+      if (type == PKT_DATA && plen == 512 && seq < sec) {
         // The host did not see our previous ACK and retransmitted an
         // already-written sector.  ACK it again, but do not write it twice.
-        send_ack_payload(uart_fd, rseq, ACK_DUP, sec);
+        dup_packets++;
+        send_ack_payload(uart_fd, seq, ACK_DUP, sec);
         continue;
       }
 
-      if (type != PKT_DATA || rseq != sec || plen != 512) {
+      if (type != PKT_DATA || seq != sec || plen != 512) {
+        uint8 t8 = (uint8)type;
+        pkt_errors++;
         show_retry("PKT", sec, retries);
-        { uint8 t8 = (uint8)type; oled_write_hexrow(3, "T:", &t8, 1); }
-        send_nak(uart_fd, rseq, ERR_CRC);
+        oled_write_hexrow(3, "T:", &t8, 1);
+        send_nak(uart_fd, seq, ERR_CRC);
         retries++;
         continue;
       }
 
       uint32 write_start = uptime();
       if (write(sdcard_fd, payload, 512) != 512) {
+        sd_errors++;
         show_retry("SD", sec, retries);
         send_nak(uart_fd, sec, ERR_WRITE);
         retries++;
         continue;
       }
       uint32 write_ticks = uptime() - write_start;
+      sd_ticks_total += write_ticks;
+      if (write_ticks > sd_ticks_max)
+        sd_ticks_max = write_ticks;
 
       send_ack_payload(uart_fd, sec, ACK_OK, write_ticks);
-      ok = 1;
+      sector_ok = 1;
       break;
     }
 
-    if (!ok) {
+    if (!sector_ok) {
       show_error("RETRY LIMIT", sec);
       goto fail;
     }
 
     sec++;
     // OLED/I2C is slow; refresh progress sparsely so UART RX stays responsive.
-    if (sec == nsectors || (sec % OLED_PROGRESS_STEP) == 0)
+    if (sec == nsectors || (sec % progress_step) == 0)
       show_progress(sec, nsectors);
   }
 
   // DONE lets the host distinguish "all sectors ACKed" from a clean protocol
   // close.  Restore the console before printing the final text summary.
   show_phase("WAIT DONE");
-  {
-    uint32 seq;
-    uint8  payload[512];
-    uint16 plen;
-    int type = recv_msg(uart_fd, &seq, payload, &plen);
-    if (type == PKT_DONE)
-      send_ack_payload(uart_fd, seq, ACK_DONE, 0);
-    else {
-      show_error("NO DONE", nsectors);
-      goto fail;
-    }
+  type = recv_msg(uart_fd, &seq, payload, &plen);
+  if (type == PKT_DONE)
+    send_ack_payload(uart_fd, seq, ACK_DONE, 0);
+  else {
+    show_error("NO DONE", nsectors);
+    goto fail;
   }
+  transfer_ticks = uptime() - transfer_start;
+  cache_rc = ioctl(sdcard_fd, SDCARD_IOCTL_INVALIDATE_CACHE, 0);
+  success = 1;
+  goto finish;
 
+fail:
+  success = 0;
+
+finish:
   if (transfer_baud != CONSOLE_BAUD)
     ioctl(uart_fd, UART_IOCTL_SET_BAUD, CONSOLE_BAUD);
-  int cache_rc = ioctl(sdcard_fd, SDCARD_IOCTL_INVALIDATE_CACHE, 0);
+  get_uart_raw_stats(uart_fd, &raw_stats);
   ioctl(uart_fd, UART_IOCTL_RAW_END, 0);
+
+  if (!success) {
+    show_phase("BURN FAILED!");
+    printf("burn: failed dup=%u crc=%u io=%u pkt=%u sd=%u raw_drop=%u raw_buf=%u/%u\n",
+           dup_packets, crc_errors, io_errors, pkt_errors, sd_errors,
+           raw_stats.dropped, raw_stats.buffered, raw_stats.capacity);
+    exit(1);
+  }
+
   show_phase("BURN SUCCESS!");
   oled_write_row(1, "");
   oled_write_row(2, "");
   oled_write_hexrow(3, "DONE", 0, 0);
   printf("burn: done sectors=%u bytes=%u cache=%d\n",
          nsectors, total_size, cache_rc);
+  printf("burn: stats ticks=%u sd_total=%u sd_max=%u dup=%u crc=%u io=%u pkt=%u sd=%u raw_drop=%u raw_buf=%u/%u\n",
+         transfer_ticks, sd_ticks_total, sd_ticks_max, dup_packets,
+         crc_errors, io_errors, pkt_errors, sd_errors,
+         raw_stats.dropped, raw_stats.buffered, raw_stats.capacity);
   exit(0);
-
-fail:
-  if (transfer_baud != CONSOLE_BAUD)
-    ioctl(uart_fd, UART_IOCTL_SET_BAUD, CONSOLE_BAUD);
-  ioctl(uart_fd, UART_IOCTL_RAW_END, 0);
-  show_phase("BURN FAILED!");
-  printf("burn: failed\n");
-  exit(1);
 }

@@ -18,6 +18,10 @@
 
 static int spi_fd;
 
+static int w64_known_manufacturer(uint8 mid) {
+  return mid == 0xEF || mid == 0x1C || mid == 0xC8;
+}
+
 static int w64_init(void) {
   uint32 clk_rate = 1000000;  /* 1 MHz */
   spi_fd = dev(0, SPI_DEV_MAJOR, W25Q64_MINOR);  // dev(omode, major, minor)
@@ -151,8 +155,11 @@ int main(void) {
     exit(1);
   }
   printf("JEDEC ID:  MID=0x%x, DID=0x%x\n", mid, did);
-  if(mid != 0xEF && mid != 0x1C && mid != 0xC8) {
+  if(!w64_known_manufacturer(mid)) {
     printf("WARNING: unexpected manufacturer ID (expected 0xEF/Winbond, 0x1C/eON, 0xC8/GigaDevice)\n");
+    printf("Check wiring for SPI1: IO15=MOSI, IO16=MISO, IO17=SCLK, IO18=CS0, plus 3V3 and GND.\n");
+    printf("Abort before erase/program because the flash is not responding.\n");
+    exit(1);
   }
 
   /* 2. Erase sector 0 */

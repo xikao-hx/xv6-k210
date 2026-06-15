@@ -377,6 +377,20 @@ uart_raw_flush(void)
   release(&uart_raw_lock);
 }
 
+void
+uart_raw_get_stats(uint32 *info)
+{
+  acquire(&uart_raw_lock);
+  info[0] = uart_raw_dropped;
+  if (uart_raw_w >= uart_raw_r)
+    info[1] = uart_raw_w - uart_raw_r;
+  else
+    info[1] = UART_RAW_RX_BUF_SIZE - uart_raw_r + uart_raw_w;
+  info[2] = UART_RAW_RX_BUF_SIZE - 1;
+  info[3] = uart_raw_mode;
+  release(&uart_raw_lock);
+}
+
 int
 uart_raw_read(char *dst, int n)
 {

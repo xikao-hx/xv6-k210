@@ -3,7 +3,7 @@
 //
 // read:  sleep until bytes are available in the interrupt-fed raw RX ring
 // write: synchronous putc (uartputc_sync) for each byte
-// ioctl: RAW_START / RAW_END / SET_BAUD / GET_BAUD_INFO
+// ioctl: RAW_START / RAW_END / SET_BAUD / GET_BAUD_INFO / GET_RAW_STATS
 //
 // The caller must bracket a raw-transfer sequence with:
 //   ioctl(fd, UART_IOCTL_RAW_START, 0);
@@ -95,6 +95,14 @@ uartdev_ioctl(int minor, uint64 cmd, uint64 arg)
   if (cmd == UART_IOCTL_GET_BAUD_INFO) {
     uint32 info[4];
     uart_get_baud_info(info);
+    if (copyout(myproc()->pagetable, arg, (char *)info, sizeof(info)) < 0)
+      return -1;
+    return 0;
+  }
+
+  if (cmd == UART_IOCTL_GET_RAW_STATS) {
+    uint32 info[4];
+    uart_raw_get_stats(info);
     if (copyout(myproc()->pagetable, arg, (char *)info, sizeof(info)) < 0)
       return -1;
     return 0;
