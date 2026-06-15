@@ -15,8 +15,12 @@ vfs = fs.open_fs("fat://target/fs.img")
 if not vfs.exists("/bin"):
     vfs.makedir("/bin")
 
-for prog in glob.glob(os.path.join(user_dir, "**/_*"), recursive=True):
+progs = {}
+for prog in sorted(glob.glob(os.path.join(user_dir, "**/_*"), recursive=True)):
     name = os.path.basename(prog)[1:]  # strip leading _
+    progs[name] = prog
+
+for name, prog in sorted(progs.items()):
     with open(prog, "rb") as src:
         data = src.read()
     vfs.open("/" + name, "wb").write(data)

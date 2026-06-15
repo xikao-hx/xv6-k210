@@ -160,6 +160,10 @@ $(UBUILD)/app/%.o: $U/app/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(UBUILD)/test/%.o: $U/test/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(UBUILD)/libc/%.o: $U/libc/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -185,6 +189,9 @@ $(UBUILD)/sh/_%: $(UBUILD)/sh/%.o $(ULIB)
 $(UBUILD)/app/_%: $(UBUILD)/app/%.o $(ULIB)
 	$(LINK_USER)
 
+$(UBUILD)/test/_%: $(UBUILD)/test/%.o $(ULIB)
+	$(LINK_USER)
+
 $(UBUILD)/_%: $(UBUILD)/%.o $(ULIB)
 	$(LINK_USER)
 
@@ -197,7 +204,7 @@ $(UBUILD)/usys.o : $(UBUILD)/usys.S
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Prevent deletion of intermediate files
-.PRECIOUS: $(UBUILD)/sh/%.o $(UBUILD)/app/%.o $(UBUILD)/libc/%.o $(UBUILD)/%.o $(KBUILD)/%.o
+.PRECIOUS: $(UBUILD)/sh/%.o $(UBUILD)/app/%.o $(UBUILD)/test/%.o $(UBUILD)/libc/%.o $(UBUILD)/%.o $(KBUILD)/%.o
 
 # user programe list
 UPROGS=\
@@ -214,6 +221,12 @@ UPROGS=\
 	$(UBUILD)/app/_burn\
 	$(UBUILD)/app/_mpu6050\
 	$(UBUILD)/app/_w25q64\
+	$(UBUILD)/test/_uarttest\
+	$(UBUILD)/test/_sdtest\
+	$(UBUILD)/test/_spitest\
+	$(UBUILD)/test/_i2ctest\
+	$(UBUILD)/test/_dmactest\
+	$(UBUILD)/test/_devtest\
 	$(UBUILD)/_init
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
@@ -260,7 +273,7 @@ QEMUOPTS += -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 # k210
 image = $T/kernel.bin
 k210 = $T/k210.bin
-k210-serialport := /dev/ttyUSB1
+k210-serialport := /dev/ttyUSB0
 
 boot:
 	@sudo chmod 777 $(k210-serialport)
