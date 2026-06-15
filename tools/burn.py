@@ -493,6 +493,15 @@ def main():
             sys.exit(1)
 
     # Phase 2: data transfer at the negotiated baud.
+    data_start = time.monotonic()
+    retries_total = 0
+    timeout_errors = 0
+    crc_errors = 0
+    nak_count = 0
+    stale_count = 0
+    ack_dup_count = 0
+    sd_ticks_total = 0
+    sd_ticks_max = 0
     for sec in range(nsectors):
         offset = sec * 512
         chunk = img_data[offset:offset + 512]
@@ -500,6 +509,8 @@ def main():
             chunk = chunk + b'\x00' * (512 - len(chunk))
 
         for attempt in range(MAX_RETRY + 1):
+            if attempt > 0:
+                retries_total += 1
             trace = args.verbose or attempt > 0
             if trace:
                 print(f"\n  sec={sec} attempt={attempt + 1}: send DATA len={len(chunk)}")
@@ -509,7 +520,16 @@ def main():
                 seq, type_, payload = recv_msg(
                     ser, timeout=10,
                     context=f"sec={sec} attempt={attempt + 1}")
-            except (TimeoutError, ValueError) as e:
+            except TimeoutError as e:
+                timeout_errors += 1
+                print(f"\n  sec={sec} attempt={attempt + 1} failed: {e}")
+                if attempt < MAX_RETRY:
+                    continue
+                print("  Max retries reached, aborting")
+                ser.close()
+                sys.exit(1)
+            except ValueError as e:
+                crc_errors += 1
                 print(f"\n  sec={sec} attempt={attempt + 1} failed: {e}")
                 if attempt < MAX_RETRY:
                     continue
@@ -525,6 +545,7 @@ def main():
                     print(f"  sec={sec} attempt={attempt + 1}: recv {pkt_name(type_)} seq={seq} plen={len(payload)}")
 
             if seq != sec:
+                stale_count += 1
                 print(f"\n  Stale response (seq={seq}, want={sec}, type=0x{type_:02X}), retry {attempt + 1}/{MAX_RETRY}")
                 if attempt >= MAX_RETRY:
                     ser.close()
@@ -532,8 +553,15 @@ def main():
                 continue
 
             if type_ == PKT_ACK:
+                reason, ticks = ack_info(payload)
+                if reason == "DUP":
+                    ack_dup_count += 1
+                else:
+                    sd_ticks_total += ticks
+                    sd_ticks_max = max(sd_ticks_max, ticks)
                 break  # sector written successfully
             elif type_ == PKT_NAK:
+                nak_count += 1
                 err_code = payload[0] if payload else 0
                 err_name = {ERR_CRC: "CRC", ERR_WRITE: "WRITE"}.get(err_code, f"0x{err_code:02X}")
                 print(f"\n  NAK (seq={seq}, error={err_name}), retry {attempt + 1}/{MAX_RETRY}")
@@ -553,6 +581,8 @@ def main():
         sys.stdout.flush()
 
     print()
+    data_elapsed = time.monotonic() - data_start
+    kib_per_sec = (img_size / 1024.0) / data_elapsed if data_elapsed > 0 else 0.0
 
     # Signal completion
     send_msg(ser, nsectors, PKT_DONE)
@@ -565,6 +595,14 @@ def main():
             print(f"Unexpected response to DONE: type 0x{type_:02X}")
     except (TimeoutError, ValueError) as e:
         print(f"DONE response error: {e}")
+
+    print(
+        "Transfer stats: "
+        f"elapsed={data_elapsed:.2f}s, throughput={kib_per_sec:.1f} KiB/s, "
+        f"retries={retries_total}, timeouts={timeout_errors}, "
+        f"crc_errors={crc_errors}, naks={nak_count}, stale={stale_count}, "
+        f"ack_dup={ack_dup_count}, sd_ticks_total={sd_ticks_total}, "
+        f"sd_ticks_max={sd_ticks_max}")
 
     if args.baud != args.console_baud:
         ser.baudrate = args.console_baud
