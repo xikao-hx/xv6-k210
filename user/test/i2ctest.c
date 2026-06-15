@@ -31,9 +31,9 @@ main(void)
   printf("I2C dev test\n");
   printf("============\n");
 
-  fd = dev(0, I2C_DEV_MAJOR, 0);
+  fd = dev(0, DEV_I2C, I2C_MINOR(0));
   if (fd < 0) {
-    printf("FAIL: dev(I2C_DEV_MAJOR)\n");
+    printf("FAIL: dev(DEV_I2C)\n");
     exit(1);
   }
 

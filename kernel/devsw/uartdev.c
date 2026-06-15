@@ -114,7 +114,7 @@ uartdev_ioctl(int minor, uint64 cmd, uint64 arg)
 void
 uartdev_init(void)
 {
-  devsw[UART_DEV].read   = uartdev_read;
-  devsw[UART_DEV].write  = uartdev_write;
-  devsw[UART_DEV].ioctl  = uartdev_ioctl;
+  devsw[DEV_UART].read   = uartdev_read;
+  devsw[DEV_UART].write  = uartdev_write;
+  devsw[DEV_UART].ioctl  = uartdev_ioctl;
 }

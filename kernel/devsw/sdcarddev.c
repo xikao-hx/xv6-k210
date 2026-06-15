@@ -108,7 +108,7 @@ void
 sdcarddev_init(void)
 {
   sdcard_sector = 0;
-  devsw[SDCARD_DEV].read  = sdcarddev_read;
-  devsw[SDCARD_DEV].write = sdcarddev_write;
-  devsw[SDCARD_DEV].ioctl = sdcarddev_ioctl;
+  devsw[DEV_SDCARD].read  = sdcarddev_read;
+  devsw[DEV_SDCARD].write = sdcarddev_write;
+  devsw[DEV_SDCARD].ioctl = sdcarddev_ioctl;
 }

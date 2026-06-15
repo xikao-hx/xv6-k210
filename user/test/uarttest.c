@@ -1,5 +1,5 @@
 #include "types.h"
-#include "file.h"
+#include "dev.h"
 #include "uartdev.h"
 #include "user.h"
 #include "fcntl.h"
@@ -15,9 +15,9 @@ main(void)
   printf("UART dev test\n");
   printf("=============\n");
 
-  fd = dev(O_RDWR, UART_DEV, 0);
+  fd = dev(O_RDWR, DEV_UART, 0);
   if (fd < 0) {
-    printf("FAIL: dev(UART_DEV)\n");
+    printf("FAIL: dev(DEV_UART)\n");
     exit(1);
   }
 

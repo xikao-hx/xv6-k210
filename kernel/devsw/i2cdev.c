@@ -134,9 +134,9 @@ i2cdev_ioctl(int minor, uint64 cmd, uint64 arg)
 void
 i2cdev_init(void)
 {
-  devsw[I2C_DEV].read = i2cdev_read;
-  devsw[I2C_DEV].write = i2cdev_write;
-  devsw[I2C_DEV].ioctl = i2cdev_ioctl;
+  devsw[DEV_I2C].read = i2cdev_read;
+  devsw[DEV_I2C].write = i2cdev_write;
+  devsw[DEV_I2C].ioctl = i2cdev_ioctl;
 }
 
 #ifdef TEST

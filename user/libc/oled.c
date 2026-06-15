@@ -56,7 +56,7 @@ oled_set_cursor(uint8 page, uint8 col)
 int
 oled_init(void)
 {
-  oled_fd = dev(0, I2C_DEV_MAJOR, 0);   // I2C0
+  oled_fd = dev(0, DEV_I2C, I2C_MINOR(0));
   if (oled_fd < 0)
     return -1;
 

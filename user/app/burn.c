@@ -351,13 +351,13 @@ main(void)
 
   // Open all devices before raw UART mode.  After RAW_START, stdout is no
   // longer a safe debug channel because the host owns the UART stream.
-  uart_fd = dev(O_RDWR, UART_DEV, 0);
+  uart_fd = dev(O_RDWR, DEV_UART, 0);
   if (uart_fd < 0) {
     log_open_failed("uart");
     exit(1);
   }
 
-  sdcard_fd = dev(O_RDWR, SDCARD_DEV, 0);
+  sdcard_fd = dev(O_RDWR, DEV_SDCARD, 0);
   if (sdcard_fd < 0) {
     log_open_failed("sdcard");
     exit(1);

@@ -3,7 +3,7 @@
 #include "user.h"
 
 #define CMD_READ_DATA 0x03
-#define W25Q64_MINOR 4
+#define W25Q64_MINOR SPI_MINOR(1, 0)
 #define TEST_LEN 256
 
 static uint32
@@ -29,9 +29,9 @@ main(void)
   printf("DMA-backed SPI test\n");
   printf("===================\n");
 
-  fd = dev(0, SPI_DEV_MAJOR, W25Q64_MINOR);
+  fd = dev(0, DEV_SPI, W25Q64_MINOR);
   if (fd < 0) {
-    printf("FAIL: dev(SPI_DEV_MAJOR)\n");
+    printf("FAIL: dev(DEV_SPI)\n");
     exit(1);
   }
 

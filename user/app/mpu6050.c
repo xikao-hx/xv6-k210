@@ -35,7 +35,7 @@ static int mpu_init(void)
   cfg.clk_rate = 50000;
   cfg.slave_addr = MPU6050_ADDR;
 
-  i2c_fd = dev(0, I2C_DEV_MAJOR, 0);  // I2C0
+  i2c_fd = dev(0, DEV_I2C, I2C_MINOR(0));
   if(i2c_fd < 0) {
     printf("mpu6050: dev() failed\n");
     return -1;

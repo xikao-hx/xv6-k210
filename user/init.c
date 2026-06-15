@@ -13,7 +13,7 @@ main(void)
 {
   int pid, wpid;
   printf("init: starting\n");
-  dev(O_RDWR, CONSOLE, 0);
+  dev(O_RDWR, DEV_CONSOLE, 0);
   dup(0);  // stdout
   dup(0);  // stderr
 

@@ -2,10 +2,9 @@
 #define _SPIDEV_H
 
 #include "types.h"
+#include "dev.h"
 
-#define SPI_DEV_MAJOR  3
-
-// minor: (spi_bus << 2) | chip_select
+// minor: SPI_MINOR(spi_bus, chip_select)
 
 // ioctl commands
 #define SPI_IOCTL_INIT      1   // arg = uint32 clock rate

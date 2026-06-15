@@ -12,10 +12,6 @@
 #include "defs.h"
 #include "string.h"
 
-// minor: (spi_bus << 2) | chip_select
-#define SPI_BUS(minor)   (((minor) >> 2) & 3)
-#define SPI_CS(minor)    ((minor) & 3)
-
 static void
 spi_reset_tmod(spi_device_num_t spi_num)
 {
@@ -41,8 +37,8 @@ static int
 spidev_ioctl(int minor, uint64 cmd, uint64 arg)
 {
   struct proc *p = myproc();
-  spi_device_num_t spi_bus = SPI_BUS(minor);
-  spi_chip_select_t chip_sel = SPI_CS(minor);
+  spi_device_num_t spi_bus = SPI_MINOR_BUS(minor);
+  spi_chip_select_t chip_sel = SPI_MINOR_CS(minor);
 
   switch(cmd) {
   case SPI_IOCTL_INIT: {
@@ -136,9 +132,9 @@ spidev_ioctl(int minor, uint64 cmd, uint64 arg)
 void
 spidev_init(void)
 {
-  devsw[SPI_DEV].read = spidev_read;
-  devsw[SPI_DEV].write = spidev_write;
-  devsw[SPI_DEV].ioctl = spidev_ioctl;
+  devsw[DEV_SPI].read = spidev_read;
+  devsw[DEV_SPI].write = spidev_write;
+  devsw[DEV_SPI].ioctl = spidev_ioctl;
 }
 
 #ifdef TEST

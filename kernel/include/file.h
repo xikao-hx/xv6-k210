@@ -1,3 +1,6 @@
+// Device ABI constants are shared by kernel and user programs.
+#include "dev.h"
+
 struct file {
   enum { FD_NONE, FD_PIPE, FD_ENTRY, FD_DEVICE } type;
   int ref; // reference count
@@ -20,10 +23,3 @@ struct devsw {
 extern struct devsw devsw[];
 
 int             dirnext(struct file *f, uint64 addr);
-
-#define CONSOLE 1
-#define STATS   2
-#define SPI_DEV 3
-#define I2C_DEV 4
-#define SDCARD_DEV 5
-#define UART_DEV 6

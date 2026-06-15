@@ -2,15 +2,14 @@
 #define _I2CDEV_H
 
 #include "types.h"
-
-#define I2C_DEV_MAJOR  4
+#include "dev.h"
 
 // ioctl commands
 #define I2C_IOCTL_INIT      1  // arg = &i2cdev_init
 #define I2C_IOCTL_TRANSFER  4  // arg = &i2c_transfer
 
-// I2C bus number encoding in minor number
-#define I2C_BUS(minor)  ((minor) & 3)
+// I2C bus number encoding in minor number.
+#define I2C_BUS(minor)  I2C_MINOR_BUS(minor)
 #define I2C_MAX_MSGS  2
 
 struct i2cdev_init {

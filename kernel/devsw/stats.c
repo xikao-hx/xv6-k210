@@ -63,6 +63,6 @@ statsinit(void)
 {
   initlock(&stats.lock, "stats");
 
-  devsw[STATS].read = statsread;
-  devsw[STATS].write = statswrite;
+  devsw[DEV_STATS].read = statsread;
+  devsw[DEV_STATS].write = statswrite;
 }

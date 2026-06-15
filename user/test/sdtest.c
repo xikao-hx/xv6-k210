@@ -1,5 +1,5 @@
 #include "types.h"
-#include "file.h"
+#include "dev.h"
 #include "sdcarddev.h"
 #include "user.h"
 #include "fcntl.h"
@@ -36,9 +36,9 @@ main(void)
   printf("SD card dev test\n");
   printf("================\n");
 
-  fd = dev(O_RDWR, SDCARD_DEV, 0);
+  fd = dev(O_RDWR, DEV_SDCARD, 0);
   if (fd < 0) {
-    printf("FAIL: dev(SDCARD_DEV)\n");
+    printf("FAIL: dev(DEV_SDCARD)\n");
     exit(1);
   }
 

@@ -1,5 +1,5 @@
 #include "types.h"
-#include "file.h"
+#include "dev.h"
 #include "sdcarddev.h"
 #include "uartdev.h"
 #include "user.h"
@@ -30,14 +30,14 @@ main(void)
   printf("devsw interface test\n");
   printf("====================\n");
 
-  fails += check_open("console", CONSOLE, 0);
-  fails += check_open("stats", STATS, 0);
-  fails += check_open("uart", UART_DEV, 0);
-  fails += check_open("sdcard", SDCARD_DEV, 0);
-  fails += check_open("spi1.cs0", SPI_DEV, 4);
-  fails += check_open("i2c0", I2C_DEV, 0);
+  fails += check_open("console", DEV_CONSOLE, 0);
+  fails += check_open("stats", DEV_STATS, 0);
+  fails += check_open("uart", DEV_UART, 0);
+  fails += check_open("sdcard", DEV_SDCARD, 0);
+  fails += check_open("spi1.cs0", DEV_SPI, SPI_MINOR(1, 0));
+  fails += check_open("i2c0", DEV_I2C, I2C_MINOR(0));
 
-  fd = dev(O_RDWR, UART_DEV, 0);
+  fd = dev(O_RDWR, DEV_UART, 0);
   if (fd < 0 || ioctl(fd, UART_IOCTL_GET_BAUD_INFO, (uint64)&baud) < 0) {
     printf("FAIL: uart ioctl\n");
     fails++;
@@ -47,7 +47,7 @@ main(void)
   if (fd >= 0)
     close(fd);
 
-  fd = dev(O_RDWR, SDCARD_DEV, 0);
+  fd = dev(O_RDWR, DEV_SDCARD, 0);
   if (fd < 0 || ioctl(fd, SDCARD_IOCTL_NSECTORS, (uint64)&nsectors) < 0) {
     printf("FAIL: sdcard ioctl\n");
     fails++;

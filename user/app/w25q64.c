@@ -13,8 +13,8 @@
 #define W25Q64_PAGE_SIZE   256
 #define W25Q64_SECTOR_SIZE 4096
 
-/* SPI1, CS0 → minor = (1 << 2) | 0 = 4 */
-#define W25Q64_MINOR 4
+/* SPI1, CS0 */
+#define W25Q64_MINOR SPI_MINOR(1, 0)
 
 static int spi_fd;
 
@@ -24,7 +24,7 @@ static int w64_known_manufacturer(uint8 mid) {
 
 static int w64_init(void) {
   uint32 clk_rate = 1000000;  /* 1 MHz */
-  spi_fd = dev(0, SPI_DEV_MAJOR, W25Q64_MINOR);  // dev(omode, major, minor)
+  spi_fd = dev(0, DEV_SPI, W25Q64_MINOR);  // dev(omode, major, minor)
   if(spi_fd < 0) {
     printf("w25q64: dev() failed\n");
     return -1;
