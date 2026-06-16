@@ -1,15 +1,10 @@
-#include "types.h"
-#include "param.h"
-#include "spinlock.h"
-#include "sleeplock.h"
-#include "riscv.h"
-#include "defs.h"
-#include "fs.h"
 #include "buf.h"
 
-#ifndef QEMU
-#include "sdcard.h"
+#ifdef QEMU
+#include "virtio.h"
+#else
 #include "dmac.h"
+#include "sdcard.h"
 #endif
 
 void disk_init(void)

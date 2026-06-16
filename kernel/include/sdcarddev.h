@@ -6,4 +6,6 @@
 #define SDCARD_IOCTL_NSECTORS  0x03  // return total sector count (uint32)
 #define SDCARD_IOCTL_INVALIDATE_CACHE 0x04  // drop FAT/buffer cache after raw writes
 
+void sdcarddev_init(void);
+
 #endif

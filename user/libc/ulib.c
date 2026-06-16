@@ -1,6 +1,7 @@
 #include "types.h"
 #include "stat.h"
 #include "fcntl.h"
+#include "dev.h"
 #include "user.h"
 
 char*
@@ -133,4 +134,25 @@ void *
 memcpy(void *dst, const void *src, uint n)
 {
   return memmove(dst, src, n);
+}
+
+int
+statistics(void *buf, int sz)
+{
+  int fd, n, total;
+
+  fd = dev(O_RDONLY, DEV_STATS, 0);
+  if(fd < 0)
+    return -1;
+
+  total = 0;
+  while(total < sz) {
+    n = read(fd, (char *)buf + total, sz - total);
+    if(n <= 0)
+      break;
+    total += n;
+  }
+
+  close(fd);
+  return total;
 }

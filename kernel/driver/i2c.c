@@ -12,16 +12,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "types.h"
-#include "riscv.h"
-#include "param.h"
 #include "memlayout.h"
-#include "fpioa.h"
 #include "i2c.h"
-#include "sysctl.h"
 #include "kalloc.h"
-#include "string.h"
-#include "defs.h"
+#include "sysctl.h"
 
 volatile i2c_t *const i2c[3] =
     {

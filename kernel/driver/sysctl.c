@@ -13,7 +13,6 @@
  * limitations under the License.
  */
 
-#include "types.h"
 #include "sysctl.h"
 #include "memlayout.h"
 

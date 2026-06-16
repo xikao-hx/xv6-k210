@@ -5,16 +5,13 @@
 //   - QEMU virt machine (16550A UART at 0x10000000)
 //   - K210 hardware    (UART HS at 0x38000000)
 //
-// Provides the standard xv6 uart*() API declared in defs.h.
+// Provides the standard xv6 uart*() API declared in uarths.h.
 //
 
-#include "types.h"
-#include "param.h"
 #include "memlayout.h"
-#include "riscv.h"
-#include "spinlock.h"
+#include "console.h"
 #include "proc.h"
-#include "defs.h"
+#include "uarths.h"
 
 #ifdef QEMU
 
@@ -43,7 +40,6 @@
 #else /* K210 */
 
 #include "sysctl.h"
-#include "uarths.h"
 
 volatile uarths_t *const uarths = (volatile uarths_t *)UART0_V;
 

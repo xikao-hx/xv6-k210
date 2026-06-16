@@ -1,6 +1,11 @@
 #ifndef __PROC_H
 #define __PROC_H
 
+#include "types.h"
+#include "param.h"
+#include "riscv.h"
+#include "spinlock.h"
+
 // Saved registers for kernel context switches.
 struct context {
   uint64 ra;
@@ -123,6 +128,31 @@ struct proc {
   struct vma_area vmas[NVMA];
 };
 
+int             cpuid(void);
+void            exit(int);
+int             fork(void);
+int             exec(char*, char**);
+int             growproc(int);
+pagetable_t     proc_pagetable(struct proc *);
+void            proc_freepagetable(pagetable_t, uint64);
+int             kill(int);
+struct cpu*     mycpu(void);
+struct cpu*     getmycpu(void);
 struct proc*    myproc(void);
+void            procinit(void);
+void            scheduler(void) __attribute__((noreturn));
+void            sched(void);
+void            setproc(struct proc*);
+void            sleep(void*, struct spinlock*);
+void            userinit(void);
+int             wait(uint64);
+void            wakeup(void*);
+void            yield(void);
+int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
+int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
+void            procdump(void);
+int             proc_num(void);
+void            proc_freekpagetable(pagetable_t pagetable, uint64 kstack, uint64 sz);
+void            swtch(struct context*, struct context*);
 
 #endif

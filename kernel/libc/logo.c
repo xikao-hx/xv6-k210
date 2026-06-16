@@ -1,7 +1,6 @@
 // Print Logo
-#include "types.h"
-#include "riscv.h"
-#include "defs.h"
+
+#include "printf.h"
 
 #ifdef QEMU
 void print_logo() {
@@ -28,4 +27,3 @@ void print_logo() {
 }
 #endif
   
-

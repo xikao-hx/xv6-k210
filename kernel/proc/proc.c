@@ -1,12 +1,13 @@
-#include "types.h"
-#include "param.h"
-#include "memlayout.h"
-#include "riscv.h"
-#include "spinlock.h"
-#include "proc.h"
-#include "defs.h"
-#include "fcntl.h"
+#include "file.h"
 #include "fat32.h"
+#include "kalloc.h"
+#include "memlayout.h"
+#include "printf.h"
+#include "fcntl.h"
+#include "proc.h"
+#include "string.h"
+#include "trap.h"
+#include "vm.h"
 
 struct cpu cpus[NCPU];
 

@@ -1,16 +1,9 @@
-#include "param.h"
-#include "types.h"
-#include "riscv.h"
-#include "spinlock.h"
-#include "sleeplock.h"
-#include "buf.h"
-#include "proc.h"
-#include "stat.h"
-#include "fat32.h"
+
 #include "string.h"
 #include "printf.h"
-
-#include "defs.h"
+#include "proc.h"
+#include "buf.h"
+#include "fat32.h"
 
 /* fields that start with "_" are something we don't use */
 

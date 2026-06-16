@@ -20,4 +20,6 @@ struct uart_raw_stats {
   uint32 capacity;
   uint32 mode;
 };
+
+void uartdev_init(void);
 #endif

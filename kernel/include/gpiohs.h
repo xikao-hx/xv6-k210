@@ -15,6 +15,8 @@
 #ifndef _DRIVER_GPIOHS_H
 #define _DRIVER_GPIOHS_H
 
+#include "types.h"
+
 typedef enum _gpio_drive_mode
 {
     GPIO_DM_INPUT,

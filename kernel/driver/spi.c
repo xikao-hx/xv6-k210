@@ -1,14 +1,12 @@
 // SPI Protocol Implementation
 
-#include "types.h"
-#include "riscv.h"
 #include "memlayout.h"
-#include "utils.h"
 #include "dmac.h"
-#include "spi.h"
-#include "sysctl.h"
 #include "kalloc.h"
+#include "spi.h"
 #include "string.h"
+#include "sysctl.h"
+#include "utils.h"
 
 volatile spi_t *const spi[4] =
     {

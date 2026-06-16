@@ -1,15 +1,9 @@
-#include "types.h"
-#include "param.h"
-#include "memlayout.h"
-#include "riscv.h"
-#include "spinlock.h"
-#include "proc.h"
 #include "file.h"
 #include "i2c.h"
 #include "i2cdev.h"
-#include "defs.h"
-#include "string.h"
-#include "oled_font.h"
+#include "kalloc.h"
+#include "proc.h"
+#include "vm.h"
 
 /* Last configured clock rate per I2C bus (saved from I2C_IOCTL_INIT) */
 static uint32 saved_clk_rate[I2C_DEVICE_MAX];
@@ -404,4 +398,3 @@ void test_sw_i2c(void) {
 }
 
 #endif
-

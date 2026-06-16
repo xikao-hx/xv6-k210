@@ -1,16 +1,11 @@
-#include "types.h"
-#include "param.h"
-#include "memlayout.h"
-#include "riscv.h"
-#include "spinlock.h"
-#include "proc.h"
-#include "file.h"
 #include "dmac.h"
+#include "file.h"
+#include "kalloc.h"
+#include "proc.h"
 #include "spi.h"
-#include "utils.h"
 #include "spidev.h"
-#include "defs.h"
-#include "string.h"
+#include "utils.h"
+#include "vm.h"
 
 static void
 spi_reset_tmod(spi_device_num_t spi_num)

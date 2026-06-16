@@ -5,6 +5,7 @@
 #define BSIZE 512
 #endif
 
+#include "types.h"
 #include "sleeplock.h"
 
 struct buf {
@@ -24,7 +25,8 @@ void            binit(void);
 struct buf*     bread(uint, uint);
 void            brelse(struct buf*);
 void            bwrite(struct buf*);
+void            bpin(struct buf*);
+void            bunpin(struct buf*);
+void            binvalidate(uint);
 
 #endif
-
-

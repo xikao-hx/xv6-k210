@@ -1,16 +1,22 @@
-#include "types.h"
-#include "param.h"
-#include "memlayout.h"
-#include "riscv.h"
-#include "defs.h"
-#include "sbi.h"
+#include "buf.h"
+#include "console.h"
 #include "disk.h"
-#include "sysctl.h"
+#include "file.h"
+#include "kalloc.h"
+#include "plic.h"
+#include "printf.h"
+#include "proc.h"
+#include "sbi.h"
+#include "trap.h"
+#include "vm.h"
 #ifndef QEMU
-#include "fpioa.h"
 #include "dmac.h"
-#endif
+#include "fpioa.h"
 #include "i2cdev.h"
+#include "sdcarddev.h"
+#include "spidev.h"
+#include "uartdev.h"
+#endif
 
 static inline void inithartid(unsigned long hartid) {
   asm volatile("mv tp, %0" : : "r" (hartid & 0x1));

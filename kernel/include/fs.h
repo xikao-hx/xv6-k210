@@ -1,5 +1,16 @@
-// On-disk file system format (original xv6, kept for BSIZE and struct definitions)
-// BSIZE is now defined in buf.h (512)
+// On-disk file system format (original xv6, kept for user tests and tools).
+#ifndef __FS_H
+#define __FS_H
+
+#include "types.h"
+
+#ifndef BSIZE
+#define BSIZE 512
+#endif
+
+#ifndef DIRSIZ
+#define DIRSIZ 14
+#endif
 
 #define ROOTINO  1   // root i-number
 
@@ -49,4 +60,4 @@ struct dinode {
 // Block of free map containing bit for block b
 #define BBLOCK(b, sb) ((b)/BPB + sb.bmapstart)
 
-
+#endif

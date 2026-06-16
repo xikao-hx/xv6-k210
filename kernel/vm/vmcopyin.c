@@ -1,9 +1,6 @@
-#include "param.h"
-#include "types.h"
-#include "riscv.h"
-#include "defs.h"
-#include "spinlock.h"
+#include "printf.h"
 #include "proc.h"
+#include "string.h"
 //
 // This file contains copyin_new() and copyinstr_new(), the
 // replacements for copyin and coyinstr in vm.c.

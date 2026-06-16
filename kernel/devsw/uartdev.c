@@ -13,15 +13,12 @@
 // RAW_END restores normal console input handling.
 //
 
-#include "types.h"
-#include "param.h"
-#include "memlayout.h"
-#include "riscv.h"
-#include "spinlock.h"
-#include "proc.h"
 #include "file.h"
-#include "defs.h"
+#include "kalloc.h"
+#include "proc.h"
+#include "uarths.h"
 #include "uartdev.h"
+#include "vm.h"
 
 static int
 uartdev_read(int user_dst, uint64 dst, int n)

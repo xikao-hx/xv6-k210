@@ -13,18 +13,8 @@
  * limitations under the License.
  */
 
-#include "types.h"
-#include "param.h"
-#include "spinlock.h"
-#include "sleeplock.h"
-#include "riscv.h"
-#include "defs.h"
 #include "dmac.h"
-#include "fpioa.h"
-#include "plic.h"
 #include "sysctl.h"
-#include "utils.h"
-#include "printf.h"
 #include "memlayout.h"
 #include "proc.h"
 

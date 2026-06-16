@@ -1,13 +1,6 @@
-#include <stdarg.h>
 
-#include "types.h"
-#include "param.h"
-#include "spinlock.h"
-#include "sleeplock.h"
-#include "fs.h"
+#include "proc.h"
 #include "file.h"
-#include "riscv.h"
-#include "defs.h"
 
 #define BUFSZ 4096
 static struct {

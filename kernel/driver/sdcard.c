@@ -1,17 +1,9 @@
-#include "printf.h"
-#include "types.h"
-#include "param.h"
-#include "spinlock.h"
-#include "sleeplock.h"
-#include "riscv.h"
-#include "defs.h"
-#include "fs.h"
 #include "gpiohs.h"
 #include "buf.h"
 
 #include "dmac.h"
+#include "printf.h"
 #include "spi.h"
-#include "sdcard.h"
 
 void SD_CS_HIGH(void) {
     gpiohs_set_pin(7, GPIO_PV_HIGH);

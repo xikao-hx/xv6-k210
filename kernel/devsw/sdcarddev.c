@@ -11,17 +11,14 @@
 //        SDCARD_IOCTL_INVALIDATE_CACHE — drop FS caches after raw writes
 //
 
-#include "types.h"
-#include "param.h"
-#include "memlayout.h"
-#include "riscv.h"
-#include "spinlock.h"
-#include "proc.h"
+#include "buf.h"
+#include "fat32.h"
 #include "file.h"
-#include "defs.h"
+#include "kalloc.h"
+#include "proc.h"
 #include "sdcard.h"
 #include "sdcarddev.h"
-#include "fat32.h"
+#include "vm.h"
 
 static uint32 sdcard_sector;  // current sector position
 

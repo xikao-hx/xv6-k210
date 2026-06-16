@@ -1,12 +1,7 @@
 // Mutual exclusion spin locks.
 
-#include "types.h"
-#include "param.h"
-#include "memlayout.h"
-#include "spinlock.h"
-#include "riscv.h"
+#include "printf.h"
 #include "proc.h"
-#include "defs.h"
 
 #ifdef LAB_LOCK
 #define NLOCK 500

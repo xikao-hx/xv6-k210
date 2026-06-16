@@ -1,10 +1,9 @@
 // GPIOHS Protocol Implementation
 
-#include "types.h"
 #include "gpiohs.h"
 #include "fpioa.h"
-#include "utils.h"
 #include "memlayout.h"
+#include "utils.h"
 
 #define GPIOHS_MAX_PINNO 32
 

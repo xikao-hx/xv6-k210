@@ -2,17 +2,12 @@
 // exec_k210.c - K210 (FAT32) version of exec
 //
 
-#include "types.h"
-#include "param.h"
-#include "memlayout.h"
-#include "riscv.h"
-#include "spinlock.h"
-#include "proc.h"
 #include "elf.h"
 #include "fat32.h"
-#include "string.h"
 #include "printf.h"
-#include "defs.h"
+#include "proc.h"
+#include "string.h"
+#include "vm.h"
 
 static int
 loadseg(pagetable_t pagetable, uint64 va, struct dirent *ep, uint offset, uint sz)

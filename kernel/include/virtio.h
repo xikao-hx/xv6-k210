@@ -92,3 +92,7 @@ struct virtio_blk_req {
   uint32 reserved;
   uint64 sector;
 };
+
+void            virtio_disk_init(void);
+void            virtio_disk_rw(struct buf *, int);
+void            virtio_disk_intr(void);

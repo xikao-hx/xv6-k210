@@ -19,4 +19,6 @@ struct spidev_transfer {
                      // if cmd_len==0 when both are set, defaults to all-tx-no-rx
 };
 
+void spidev_init(void);
+
 #endif /* _SPIDEV_H */

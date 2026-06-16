@@ -182,6 +182,22 @@ typedef enum _uarths_stopbit
     UARTHS_STOP_2
 } uarths_stopbit_t;
 
+void            uartinit(void);
+void            uartintr(void);
+void            uartputc(int);
+void            uartputc_sync(int);
+int             uartgetc(void);
+void            uartrx_disable(void);
+void            uartrx_enable(void);
+void            uart_set_baud(int);
+void            uart_wait_tx_idle(void);
+void            uart_get_baud_info(uint32*);
+void            uart_raw_start(void);
+void            uart_raw_end(void);
+void            uart_raw_flush(void);
+int             uart_raw_read(char*, int);
+void            uart_raw_get_stats(uint32*);
+
 #ifdef __cplusplus
 }
 #endif

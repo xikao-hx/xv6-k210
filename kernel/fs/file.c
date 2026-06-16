@@ -3,18 +3,11 @@
 // K210 (FAT32) version.
 //
 
-#include "types.h"
-#include "riscv.h"
-#include "param.h"
-#include "spinlock.h"
-#include "sleeplock.h"
-#include "file.h"
-#include "stat.h"
-#include "proc.h"
-#include "fat32.h"
-#include "string.h"
 #include "printf.h"
-#include "defs.h"
+#include "proc.h"
+#include "file.h"
+#include "fat32.h"
+#include "vm.h"
 
 struct devsw devsw[NDEV];
 struct {

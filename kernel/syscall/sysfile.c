@@ -2,20 +2,15 @@
 // File-system system calls (K210/FAT32 version).
 //
 
-#include "types.h"
-#include "riscv.h"
-#include "param.h"
-#include "memlayout.h"
-#include "stat.h"
-#include "spinlock.h"
-#include "proc.h"
-#include "sleeplock.h"
-#include "file.h"
 #include "fcntl.h"
+#include "file.h"
 #include "fat32.h"
-#include "string.h"
+#include "kalloc.h"
 #include "printf.h"
-#include "defs.h"
+#include "proc.h"
+#include "string.h"
+#include "syscall.h"
+#include "vm.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.

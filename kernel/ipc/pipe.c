@@ -1,12 +1,7 @@
-#include "types.h"
-#include "riscv.h"
-#include "defs.h"
-#include "param.h"
-#include "spinlock.h"
-#include "proc.h"
-#include "fs.h"
-#include "sleeplock.h"
 #include "file.h"
+#include "kalloc.h"
+#include "proc.h"
+#include "vm.h"
 
 #define PIPESIZE 512
 
