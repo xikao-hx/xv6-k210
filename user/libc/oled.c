@@ -20,13 +20,13 @@ oled_write_cmd(uint8 cmd)
 {
   uint8 buf[2] = {OLED_CTRL_CMD, cmd};
   struct i2c_msg msg;
-  struct i2c_transfer xfer;
+  struct i2c_rdwr_ioctl_data xfer;
   msg.addr = OLED_ADDR;
   msg.flags = 0;
   msg.len = 2;
-  msg.buf = (uint64)buf;
+  msg.buf = buf;
   xfer.nmsgs = 1;
-  xfer.msgs[0] = msg;
+  xfer.msgs = &msg;
   ioctl(oled_fd, I2C_IOCTL_TRANSFER, (uint64)&xfer);
 }
 
@@ -35,13 +35,13 @@ oled_write_data(uint8 dat)
 {
   uint8 buf[2] = {OLED_CTRL_DAT, dat};
   struct i2c_msg msg;
-  struct i2c_transfer xfer;
+  struct i2c_rdwr_ioctl_data xfer;
   msg.addr = OLED_ADDR;
   msg.flags = 0;
   msg.len = 2;
-  msg.buf = (uint64)buf;
+  msg.buf = buf;
   xfer.nmsgs = 1;
-  xfer.msgs[0] = msg;
+  xfer.msgs = &msg;
   ioctl(oled_fd, I2C_IOCTL_TRANSFER, (uint64)&xfer);
 }
 

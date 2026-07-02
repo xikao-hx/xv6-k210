@@ -37,20 +37,27 @@ i2cdev_ioctl(int minor, uint64 cmd, uint64 arg)
   }
 
   case I2C_IOCTL_TRANSFER: {
-    struct i2c_transfer xfer;
-    if(copyin(p->pagetable, (char *)&xfer, arg, sizeof(xfer)) < 0)
+    struct i2c_rdwr_ioctl_data rdwr_arg;
+    if(copyin(p->pagetable, (char *)&rdwr_arg, arg, sizeof(rdwr_arg)) < 0)
       return -1;
-    if(xfer.nmsgs == 0 || xfer.nmsgs > I2C_MAX_MSGS)
+    if(rdwr_arg.nmsgs == 0 || rdwr_arg.nmsgs > I2C_MAX_MSGS)
       return -1;
+    
+    /* copy msgs */
+    struct i2c_msg rdwr_pa[I2C_MAX_MSGS];
+    for (int i = 0; i < rdwr_arg.nmsgs; i ++) {
+      if (copyin(p->pagetable, (char *)&rdwr_pa[i], (uint64)(rdwr_arg.msgs + i), sizeof(struct i2c_msg)) < 0) 
+        return -1;
+    }
 
     /* Re-init with the target address (preserve clock rate from INIT) */
     uint32 clk = saved_clk_rate[i2c_bus];
     if(clk == 0) clk = 50000;
-    i2c_init(i2c_bus, xfer.msgs[0].addr, 7, clk);
+    i2c_init(i2c_bus, rdwr_pa[0].addr, 7, clk);
 
-    if(xfer.nmsgs == 1) {
+    if(rdwr_arg.nmsgs == 1) {
       /* Single message: pure read or pure write */
-      struct i2c_msg *msg = &xfer.msgs[0];
+      struct i2c_msg *msg = &rdwr_pa[0];
       if(msg->flags & I2C_M_RD) {
         /* Pure read */
         if(msg->len == 0) return 0;
@@ -60,7 +67,7 @@ i2cdev_ioctl(int minor, uint64 cmd, uint64 arg)
         if(buf == 0) return -1;
         int ret = i2c_recv_data(i2c_bus, 0, 0, buf, len);
         if(ret == 0 && msg->buf != 0) {
-          if(copyout(p->pagetable, msg->buf, (char *)buf, len) < 0)
+          if(copyout(p->pagetable, (uint64)msg->buf, (char *)buf, len) < 0)
             ret = -1;
         }
         kfree(buf);
@@ -73,7 +80,7 @@ i2cdev_ioctl(int minor, uint64 cmd, uint64 arg)
         if(len > 4096) len = 4096;
         uint8 *buf = kalloc();
         if(buf == 0) return -1;
-        if(copyin(p->pagetable, (char *)buf, msg->buf, len) < 0) {
+        if(copyin(p->pagetable, (char *)buf, (uint64)msg->buf, len) < 0) {
           kfree(buf);
           return -1;
         }
@@ -84,8 +91,8 @@ i2cdev_ioctl(int minor, uint64 cmd, uint64 arg)
       }
     } else {
       /* Combined transaction: msg[0] = write, msg[1] = read with RESTART */
-      struct i2c_msg *w = &xfer.msgs[0];
-      struct i2c_msg *r = &xfer.msgs[1];
+      struct i2c_msg *w = &rdwr_pa[0];
+      struct i2c_msg *r = &rdwr_pa[1];
       if(w->flags & I2C_M_RD) return -1;  /* first must be write */
       if(!(r->flags & I2C_M_RD)) return -1; /* second must be read */
       uint32 wlen = w->len;

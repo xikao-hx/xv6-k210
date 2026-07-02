@@ -51,31 +51,30 @@ static int mpu_write_reg(uint8 reg, uint8 val)
 {
   uint8 buf[2] = {reg, val};
   struct i2c_msg msg;
-  struct i2c_transfer xfer;
+  struct i2c_rdwr_ioctl_data xfer;
   msg.addr = MPU6050_ADDR;
   msg.flags = 0;
   msg.len = 2;
-  msg.buf = (uint64)buf;
+  msg.buf = buf;
   xfer.nmsgs = 1;
-  xfer.msgs[0] = msg;
+  xfer.msgs = &msg;
   return ioctl(i2c_fd, I2C_IOCTL_TRANSFER, (uint64)&xfer);
 }
 
 static int mpu_read_reg(uint8 reg, uint8 *val)
 {
   struct i2c_msg msgs[2];
-  struct i2c_transfer xfer;
+  struct i2c_rdwr_ioctl_data xfer;
   msgs[0].addr = MPU6050_ADDR;
   msgs[0].flags = 0;
   msgs[0].len = 1;
-  msgs[0].buf = (uint64)&reg;
+  msgs[0].buf = &reg;
   msgs[1].addr = MPU6050_ADDR;
   msgs[1].flags = I2C_M_RD;
   msgs[1].len = 1;
-  msgs[1].buf = (uint64)val;
+  msgs[1].buf = val;
   xfer.nmsgs = 2;
-  xfer.msgs[0] = msgs[0];
-  xfer.msgs[1] = msgs[1];
+  xfer.msgs = msgs;
   return ioctl(i2c_fd, I2C_IOCTL_TRANSFER, (uint64)&xfer);
 }
 
@@ -83,18 +82,17 @@ static int mpu_read_s16(uint8 reg_hi, short *val)
 {
   uint8 buf[2];
   struct i2c_msg msgs[2];
-  struct i2c_transfer xfer;
+  struct i2c_rdwr_ioctl_data xfer;
   msgs[0].addr = MPU6050_ADDR;
   msgs[0].flags = 0;
   msgs[0].len = 1;
-  msgs[0].buf = (uint64)&reg_hi;
+  msgs[0].buf = &reg_hi;
   msgs[1].addr = MPU6050_ADDR;
   msgs[1].flags = I2C_M_RD;
   msgs[1].len = 2;
-  msgs[1].buf = (uint64)buf;
+  msgs[1].buf = buf;
   xfer.nmsgs = 2;
-  xfer.msgs[0] = msgs[0];
-  xfer.msgs[1] = msgs[1];
+  xfer.msgs = msgs;
   int ret = ioctl(i2c_fd, I2C_IOCTL_TRANSFER, (uint64)&xfer);
   if(ret == 0)
     *val = (short)((buf[0] << 8) | buf[1]);

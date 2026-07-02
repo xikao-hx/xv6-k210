@@ -227,7 +227,6 @@ static uint64 (*syscalls[])(void) = {
 [SYS_ioctl]     sys_ioctl,
 };
 
-// 尝试获取字符串参数，如果成功返回1，否则返回0
 int
 getstrarg(int n, char *buf, int max)
 {
@@ -245,7 +244,7 @@ syscall(void)
 {
   int num;
   struct proc *p = myproc();
-  // 获取系统调用参数
+
   uint64 args[6];
   args[0] = p->trapframe->a0;
   args[1] = p->trapframe->a1;
@@ -269,32 +268,28 @@ syscall(void)
 
 void syscall_trace(struct proc *p, int num, uint64 *args)
 {
-  char buf[MAXPATH];    // 用于存储字符串参数
+  char buf[MAXPATH];   
 
   printf("%d: syscall %s", p->pid, syscalls_name[num]);
   printf("(");
-  // 根据系统调用类型特殊处理参数
+
   switch(num) {
     case SYS_exec: {
-      // exec(path, argv[])
-      // 第一个参数：路径字符串
       if(getstrarg(0, buf, sizeof(buf))) {
         printf("\"%s\", ", buf);
       } else {
         printf("%p, ", args[0]);
       }
       
-      // 第二个参数：参数数组（指针数组）
       printf("[");
       uint64 argv_addr;
       if(argaddr(1, &argv_addr) >= 0) {
         uint64 arg_ptr;
         int arg_count = 0;
-        // 最多显示5个参数
         for(int i = 0; i < 5 && arg_count < 10; i++) {
-          if(copyin(p->pagetable, (char*)&arg_ptr, argv_addr + i*sizeof(uint64), sizeof(uint64)) >= 0) {   // 找到指针数组中某个指针存储的地址
-            if(arg_ptr == 0) break;  // NULL终止
-            if(fetchstr(arg_ptr, buf, sizeof(buf)) >= 0) {   // 然后用这个地址，找到对应的字符串
+          if(copyin(p->pagetable, (char*)&arg_ptr, argv_addr + i*sizeof(uint64), sizeof(uint64)) >= 0) { 
+            if(arg_ptr == 0) break; 
+            if(fetchstr(arg_ptr, buf, sizeof(buf)) >= 0) { 
               if(arg_count > 0) printf(", ");
               printf("\"%s\"", buf);
               arg_count++;
@@ -330,7 +325,6 @@ void syscall_trace(struct proc *p, int num, uint64 *args)
     case SYS_unlink:
     case SYS_mkdir:
     case SYS_chdir: {
-      // 这些系统调用只有一个字符串参数
       if(getstrarg(0, buf, sizeof(buf))) {
         printf("\"%s\"", buf);
       } else {
@@ -357,13 +351,11 @@ void syscall_trace(struct proc *p, int num, uint64 *args)
     case SYS_write:
     case SYS_read: {
       // read/write(fd, buf, n)
-      // 对于缓冲区，通常只显示地址而不打印内容
       printf("%d, %p, %d", (int)args[0], args[1], (int)args[2]);
       break;
     }
 
     default: {
-      // 默认情况：按参数个数打印数字参数
       int arg_count = syscalls_argc[num];
       for(int i = 0; i < arg_count; i++) {
         printf("%d", (int)args[i]);

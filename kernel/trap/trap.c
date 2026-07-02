@@ -90,8 +90,7 @@ usertrap(void)
       if (mmap_handler(va, r_scause()) != 0) {
         p->killed = 1;
       }
-    } else
-    {
+    } else {
       if (va < p->sz) {
         if (uvmcowpage(pagetable, va) == 0) {
           if (uvmcowmalloc(pagetable, PGROUNDDOWN(va)) == 0) {

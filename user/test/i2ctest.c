@@ -11,13 +11,16 @@ static int
 i2c_probe_write(uint8 addr)
 {
   uint8 cmd[2] = {0x00, 0xAE};
-  struct i2c_transfer xfer;
+  struct i2c_msg msg;
+  struct i2c_rdwr_ioctl_data xfer;
+
+  msg.addr = addr;
+  msg.flags = 0;
+  msg.len = sizeof(cmd);
+  msg.buf = cmd;
 
   xfer.nmsgs = 1;
-  xfer.msgs[0].addr = addr;
-  xfer.msgs[0].flags = 0;
-  xfer.msgs[0].len = sizeof(cmd);
-  xfer.msgs[0].buf = (uint64)cmd;
+  xfer.msgs = &msg;
   return ioctl(fd, I2C_IOCTL_TRANSFER, (uint64)&xfer);
 }
 

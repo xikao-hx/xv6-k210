@@ -22,12 +22,12 @@ struct i2c_msg {
     uint16 flags;
 #define I2C_M_RD    0x0001  // read data, from slave to master
     uint16 len;     // msg length
-    uint64 buf;     // user-space pointer to msg data
+    uint8 *buf;     // user-space pointer to msg data
 };
 
-struct i2c_transfer {
+struct i2c_rdwr_ioctl_data {
     uint32 nmsgs;
-    struct i2c_msg msgs[I2C_MAX_MSGS];
+    struct i2c_msg *msgs;
 };
 
 void i2cdev_init(void);
