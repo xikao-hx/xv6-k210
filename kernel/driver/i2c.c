@@ -303,6 +303,7 @@ int i2c_recv_data_dma(i2c_device_number_t i2c_num, dmac_channel_number_t chan_tx
 
     dmac_set_single_mode(chan_rx, (void *)(&i2c_adapter->data_cmd), write_cmd, DMAC_ADDR_NOCHANGE,
                          DMAC_ADDR_INCREMENT, DMAC_MSIZE_1, DMAC_TRANS_WIDTH_32, receive_buf_len);
+    /* chan tx I2C_DATA_CMD_CMD --> rx */
     dmac_set_single_mode(chan_tx, write_cmd, (void *)(&i2c_adapter->data_cmd), DMAC_ADDR_INCREMENT,
                          DMAC_ADDR_NOCHANGE, DMAC_MSIZE_4, DMAC_TRANS_WIDTH_32, receive_buf_len);
 

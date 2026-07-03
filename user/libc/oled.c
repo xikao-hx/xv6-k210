@@ -92,6 +92,7 @@ oled_init(void)
   oled_write_cmd(0xAF);       // display on
 
   oled_clear();
+
   return 0;
 }
 
