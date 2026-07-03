@@ -27,7 +27,7 @@ uartdev_read(int user_dst, uint64 dst, int n)
   if (n > 4096)
     n = 4096;
 
-  char *buf = kalloc();
+  char *buf = kalloc_page();
   if (buf == 0)
     return -1;
 
@@ -36,7 +36,7 @@ uartdev_read(int user_dst, uint64 dst, int n)
   if (ret > 0 && either_copyout(user_dst, dst, buf, ret) < 0)
     ret = -1;
 
-  kfree(buf);
+  kfree_page(buf);
   return ret;
 }
 
@@ -46,19 +46,19 @@ uartdev_write(int user_src, uint64 src, int n)
   if (n > 4096)
     n = 4096;
 
-  char *buf = kalloc();
+  char *buf = kalloc_page();
   if (buf == 0)
     return -1;
 
   if (either_copyin(buf, user_src, src, n) < 0) {
-    kfree(buf);
+    kfree_page(buf);
     return -1;
   }
 
   for (int i = 0; i < n; i++)
     uartputc_sync(buf[i]);
 
-  kfree(buf);
+  kfree_page(buf);
   return n;
 }
 

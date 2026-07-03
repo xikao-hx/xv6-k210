@@ -29,7 +29,7 @@ sdcarddev_read(int user_dst, uint64 dst, int n)
   if (n != 512)
     return -1;
 
-  char *buf = kalloc();
+  char *buf = kalloc_page();
   if (buf == 0)
     return -1;
 
@@ -40,7 +40,7 @@ sdcarddev_read(int user_dst, uint64 dst, int n)
   if (either_copyout(user_dst, dst, buf, 512) < 0)
     ret = -1;
 
-  kfree(buf);
+  kfree_page(buf);
   return ret;
 }
 
@@ -51,19 +51,19 @@ sdcarddev_write(int user_src, uint64 src, int n)
   if (n != 512)
     return -1;
 
-  char *buf = kalloc();
+  char *buf = kalloc_page();
   if (buf == 0)
     return -1;
 
   if (either_copyin(buf, user_src, src, 512) < 0) {
-    kfree(buf);
+    kfree_page(buf);
     return -1;
   }
 
   sdcard_write_sector((uint8 *)buf, sdcard_sector);
   sdcard_sector++;
 
-  kfree(buf);
+  kfree_page(buf);
   return 512;
 }
 

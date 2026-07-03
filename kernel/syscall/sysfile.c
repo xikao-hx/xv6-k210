@@ -218,7 +218,7 @@ sys_exec(void)
       return -1;
     if(uarg == 0)
       break;
-    argv[i] = kalloc();
+    argv[i] = kalloc_page();
     if(argv[i] == 0)
       panic("sys_exec kalloc");
     if(fetchstr(uarg, argv[i], PGSIZE) < 0)
@@ -228,7 +228,7 @@ sys_exec(void)
   int ret = exec(path, argv);
 
   for(i=0; i<MAXARG && argv[i]; i++)
-    kfree(argv[i]);
+    kfree_page(argv[i]);
   return ret;
 }
 
@@ -551,7 +551,7 @@ mmap_handler(uint64 va, uint64 scause)
   if (scause == 13 && vfile->readable == 0) return -1;
   if (scause == 15 && vfile->writable == 0) return -1;
 
-  void * pa = kalloc();
+  void * pa = kalloc_page();
   if (pa == 0) {
     printf("mmap_handler: kalloc err\n");
     return -1;
@@ -563,7 +563,7 @@ mmap_handler(uint64 va, uint64 scause)
   int readbytes = eread(vfile->ep, 0, (uint64)pa, offset, PGSIZE);
   if (readbytes == 0) {
     eunlock(vfile->ep);
-    kfree(pa);
+    kfree_page(pa);
     return -1;
   }
   eunlock(vfile->ep);
@@ -574,7 +574,7 @@ mmap_handler(uint64 va, uint64 scause)
   if (vma->prot & PROT_EXEC) pte_flags |= PTE_X;
 
   if (mappages(pagetable, PGROUNDDOWN(va), (uint64)pa, PGSIZE, pte_flags) != 0) {
-    kfree(pa);
+    kfree_page(pa);
     return -1;
   }
 

@@ -36,6 +36,7 @@ kinit()
     initlock(&kmem[i].lock, name);
   }
   initlock(&cow_map.lock, "cow_map");
+  kminit();
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -46,7 +47,7 @@ freerange(void *pa_start, void *pa_end)
   p = (char*)PGROUNDUP((uint64)pa_start);
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE) {
     cow_map.cow_quota[(uint64)p / PGSIZE] = 1;
-    kfree(p);
+    kfree_page(p);
   }
 }
 
@@ -60,23 +61,29 @@ void kaddquota(void *pa) {
 }
 
 int kgetquota(void *pa) {
+  int quota;
+
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
-  return cow_map.cow_quota[(uint64)pa / PGSIZE];
+  acquire(&cow_map.lock);
+  quota = cow_map.cow_quota[(uint64)pa / PGSIZE];
+  release(&cow_map.lock);
+
+  return quota;
 }
 
 // Free the page of physical memory pointed at by v,
 // which normally should have been returned by a
-// call to kalloc().  (The exception is when
+// call to kalloc_page().  (The exception is when
 // initializing the allocator; see kinit above.)
 void
-kfree(void *pa)
+kfree_page(void *pa)
 {
   struct run *r;
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
-    panic("kfree");
+    panic("kfree_page");
 
   push_off();
   int id = cpuid();
@@ -103,7 +110,7 @@ kfree(void *pa)
   pop_off();
 
   if (cnt < 0) {
-    cow_map.cow_quota[(uint64)pa / PGSIZE] = 0;
+    panic("kfree_page: negative quota");
   }
 }
 
@@ -111,7 +118,7 @@ kfree(void *pa)
 // Returns a pointer that the kernel can use.
 // Returns 0 if the memory cannot be allocated.
 void *
-kalloc(void)
+kalloc_page(void)
 {
   struct run *r;
 
@@ -157,11 +164,13 @@ freemem(void)
   int num = 0;
 
   for (int id = 0; id < NCPU; id ++) {
+    acquire(&kmem[id].lock);
     r = kmem[id].freelist;
     while (r) {
       num ++;
       r = r->next;
     }
+    release(&kmem[id].lock);
   }
 
   return num * PGSIZE;

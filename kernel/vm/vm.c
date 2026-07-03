@@ -20,7 +20,7 @@ extern char trampoline[]; // trampoline.S
 void
 kvminit()
 {
-  kernel_pagetable = (pagetable_t) kalloc();
+  kernel_pagetable = (pagetable_t) kalloc_page();
   memset(kernel_pagetable, 0, PGSIZE);
 
   // uart registers
@@ -68,7 +68,7 @@ kvminit()
 pagetable_t
 ukvminit(void) 
 {
-  pagetable_t pagetable = (pagetable_t) kalloc();
+  pagetable_t pagetable = (pagetable_t) kalloc_page();
   memset(pagetable, 0, PGSIZE);
 
 #ifdef QEMU
@@ -141,7 +141,7 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
     if(*pte & PTE_V) {
       pagetable = (pagetable_t)PTE2PA(*pte);
     } else {
-      if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
+      if(!alloc || (pagetable = (pde_t*)kalloc_page()) == 0)
         return 0;
       memset(pagetable, 0, PGSIZE);
       *pte = PA2PTE(pagetable) | PTE_V;
@@ -261,7 +261,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("uvmunmap: not a leaf");
     if(do_free){
       uint64 pa = PTE2PA(*pte);
-      kfree((void*)pa);
+      kfree_page((void*)pa);
     }
     *pte = 0;
   }
@@ -299,7 +299,7 @@ pagetable_t
 uvmcreate()
 {
   pagetable_t pagetable;
-  pagetable = (pagetable_t) kalloc();
+  pagetable = (pagetable_t) kalloc_page();
   if(pagetable == 0)
     return 0;
   memset(pagetable, 0, PGSIZE);
@@ -316,7 +316,7 @@ uvminit(pagetable_t pagetable, uchar *src, uint sz)
 
   if(sz >= PGSIZE)
     panic("inituvm: more than a page");
-  mem = kalloc();
+  mem = kalloc_page();
   memset(mem, 0, PGSIZE);
   mappages(pagetable, 0, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U);
   memmove(mem, src, sz);
@@ -335,14 +335,14 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 
   oldsz = PGROUNDUP(oldsz);
   for(a = oldsz; a < newsz; a += PGSIZE){
-    mem = kalloc();
+    mem = kalloc_page();
     if(mem == 0){
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
     memset(mem, 0, PGSIZE);
     if(mappages(pagetable, a, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
-      kfree(mem);
+      kfree_page(mem);
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
@@ -366,7 +366,7 @@ uvmlazymalloc(pagetable_t pagetable, uint64 va)
     return 0;   // 已经映射，直接返回成功
   }
 
-  mem = kalloc();
+  mem = kalloc_page();
   if(mem == 0){
     // printf("uvmlazymalloc: kalloc fail\n");
     return -1;
@@ -374,7 +374,7 @@ uvmlazymalloc(pagetable_t pagetable, uint64 va)
   memset(mem, 0, PGSIZE);
   if(mappages(pagetable, va, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
     // printf("uvmlazymalloc: mappages fail\n");
-    kfree(mem);
+    kfree_page(mem);
     return -1;
   }
 
@@ -382,7 +382,7 @@ uvmlazymalloc(pagetable_t pagetable, uint64 va)
   // if(mappages(p->kpagetable, va, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R) != 0){
   //   uvmunmap(pagetable, va, PGSIZE / PGSIZE, 1);
   //   printf("uvmalloc: mappages fail\n");
-  //   kfree(mem);
+  //   kfree_page(mem);
   //   return -1;
   // }
 
@@ -418,7 +418,7 @@ uvmcowmalloc(pagetable_t pagetable, uint64 va)
 
     return (void *)pa;
   } else {
-    char *mem = (char *)kalloc();
+    char *mem = (char *)kalloc_page();
     if (mem == 0) {
       return 0;
     }
@@ -426,14 +426,14 @@ uvmcowmalloc(pagetable_t pagetable, uint64 va)
     memmove(mem, (char *)pa, PGSIZE);
     *pte &= ~PTE_V;
     if (mappages(pagetable, va, PGSIZE, (uint64)mem, (PTE_FLAGS(*pte) | PTE_W) & ~PTE_COW) != 0) {
-      kfree((void *)mem);
+      kfree_page((void *)mem);
       *pte |= PTE_V;
       return 0;
     }
 
     upg2ukpg(p->pagetable, p->kpagetable, va, va + PGSIZE);
 
-    kfree((void *)pa);
+    kfree_page((void *)pa);
     sfence_vma();
 
     return (void *)mem;
@@ -515,7 +515,7 @@ freewalk(pagetable_t pagetable)
       panic("freewalk: leaf");
     }
   }
-  kfree((void*)pagetable);
+  kfree_page((void*)pagetable);
 }
 
 // then free page-table pages.
@@ -556,7 +556,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       *pte = PA2PTE(pa) | flags;
     }
 
-    // if((mem = kalloc()) == 0)
+    // if((mem = kalloc_page()) == 0)
     //   goto err;
     // memmove(mem, (char*)pa, PGSIZE);
 

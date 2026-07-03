@@ -56,21 +56,21 @@ spidev_ioctl(int minor, uint64 cmd, uint64 arg)
     // allocate page for tx data (if any)
     uint8 *tx_buf = 0;
     if(xfer.tx_buf != 0) {
-      tx_buf = kalloc();
+      tx_buf = kalloc_page();
       if(tx_buf == 0)
         return -1;
       if(xfer.len > 4096)
         xfer.len = 4096;
       if(copyin(p->pagetable, (char *)tx_buf, xfer.tx_buf, xfer.len) < 0) {
-        kfree(tx_buf);
+        kfree_page(tx_buf);
         return -1;
       }
     }
 
     // allocate page for combined command+data (DMA needs contiguous)
-    uint8 *dma_buf = kalloc();
+    uint8 *dma_buf = kalloc_page();
     if(dma_buf == 0) {
-      if(tx_buf) kfree(tx_buf);
+      if(tx_buf) kfree_page(tx_buf);
       return -1;
     }
 
@@ -108,14 +108,14 @@ spidev_ioctl(int minor, uint64 cmd, uint64 arg)
     // copy received data back to user
     if(rx_copy_len > 0) {
       if(copyout(p->pagetable, xfer.rx_buf, (char *)dma_buf, rx_copy_len) < 0) {
-        kfree(dma_buf);
-        if(tx_buf) kfree(tx_buf);
+        kfree_page(dma_buf);
+        if(tx_buf) kfree_page(tx_buf);
         return -1;
       }
     }
 
-    kfree(dma_buf);
-    if(tx_buf) kfree(tx_buf);
+    kfree_page(dma_buf);
+    if(tx_buf) kfree_page(tx_buf);
     return 0;
   }
 

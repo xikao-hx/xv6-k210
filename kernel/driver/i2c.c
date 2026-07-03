@@ -163,7 +163,7 @@ int i2c_send_data_dma(i2c_device_number_t i2c_num, dmac_channel_number_t chan_tx
     volatile i2c_t *i2c_adapter = i2c[i2c_num];
     int i;
 
-    uint32_t *buf = kalloc();
+    uint32_t *buf = kalloc_page();
     if(buf == 0)
         return -1;
 
@@ -198,7 +198,7 @@ int i2c_send_data_dma(i2c_device_number_t i2c_num, dmac_channel_number_t chan_tx
           i2c_adapter->status, i2c_adapter->txflr, i2c_adapter->rxflr,
           i2c_adapter->tx_abrt_source);
 
-    kfree((void *)buf);
+    kfree_page((void *)buf);
 
     if (is_lastmsg && i2c_wait_done(i2c_num, i2c_adapter) < 0)
         return -1;
@@ -275,7 +275,7 @@ int i2c_recv_data_dma(i2c_device_number_t i2c_num, dmac_channel_number_t chan_tx
 
     volatile i2c_t *i2c_adapter = i2c[i2c_num];
     size_t i;
-    uint32_t *write_cmd = kalloc();
+    uint32_t *write_cmd = kalloc_page();
     if(write_cmd == 0)
         return -1;
 
@@ -319,7 +319,7 @@ int i2c_recv_data_dma(i2c_device_number_t i2c_num, dmac_channel_number_t chan_tx
           i2c_adapter->tx_abrt_source);
 
     if (is_lastmsg && i2c_wait_done(i2c_num, i2c_adapter) < 0) {
-        kfree((void *)write_cmd);
+        kfree_page((void *)write_cmd);
         return -1;
     }
 
@@ -329,7 +329,7 @@ int i2c_recv_data_dma(i2c_device_number_t i2c_num, dmac_channel_number_t chan_tx
         receive_buf[i] = (uint8_t)write_cmd[i];
     }
     
-    kfree((void *)write_cmd);
+    kfree_page((void *)write_cmd);
 
     if(i2c_adapter->tx_abrt_source != 0) {
         LOG_E("i2c dma read abort: bus=%d abrt=%x status=%x txflr=%d rxflr=%d\n",

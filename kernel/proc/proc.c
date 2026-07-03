@@ -101,7 +101,7 @@ found:
   p->pid = allocpid();
 
   // Allocate a trapframe page.
-  if((p->trapframe = (struct trapframe *)kalloc()) == 0){
+  if((p->trapframe = (struct trapframe *)kalloc_page()) == 0){
     release(&p->lock);
     return 0;
   }
@@ -125,7 +125,7 @@ found:
   // Allocate a page for the process's kernel stack.
   // Map it high in memory, followed by an invalid
   // guard page.
-  char *pa = kalloc();
+  char *pa = kalloc_page();
   if(pa == 0)
     panic("kalloc");
   uint64 va = KSTACK((int) 0);
@@ -150,7 +150,7 @@ static void
 freeproc(struct proc *p)
 {
   if(p->trapframe)
-    kfree((void*)p->trapframe);
+    kfree_page((void*)p->trapframe);
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);

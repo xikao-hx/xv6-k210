@@ -3,8 +3,13 @@
 
 #include "types.h"
 
-void*           kalloc(void);
+#define KMALLOC_MAX_SIZE 2048
+
+void*           kalloc_page(void);
+void            kfree_page(void *);
+void*           kmalloc(uint64);
 void            kfree(void *);
+void            kminit(void);
 void            kinit(void);
 uint64          freemem(void);
 void            kaddquota(void *pa);

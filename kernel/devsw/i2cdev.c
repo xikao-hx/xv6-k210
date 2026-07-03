@@ -45,6 +45,7 @@ i2cdev_ioctl(int minor, uint64 cmd, uint64 arg)
       struct i2c_msg rdwr_pa[I2C_MAX_MSGS];
       uint8_t **data_ptrs;
       int i = 0;
+      int allocated = 0;
 
       /* copy transfer */
       if(copyin(p->pagetable, (char *)&rdwr_arg, arg, sizeof(rdwr_arg)) < 0)
@@ -56,10 +57,12 @@ i2cdev_ioctl(int minor, uint64 cmd, uint64 arg)
       for (i = 0; i < rdwr_arg.nmsgs; i ++) {
         if (copyin(p->pagetable, (char *)&rdwr_pa[i], (uint64)(rdwr_arg.msgs + i), sizeof(struct i2c_msg)) < 0) 
           return -1;
+        if (rdwr_pa[i].len == 0 || rdwr_pa[i].len > KMALLOC_MAX_SIZE)
+          return -1;
       }
 
       /* copy i2c_msg.buf */
-      data_ptrs = kalloc();
+      data_ptrs = kmalloc(sizeof(uint8_t *) * rdwr_arg.nmsgs);
       if (data_ptrs == 0) 
         return -1;
       
@@ -71,7 +74,12 @@ i2cdev_ioctl(int minor, uint64 cmd, uint64 arg)
 
       for (i = 0; i < rdwr_arg.nmsgs; i ++) {
         data_ptrs[i] = rdwr_pa[i].buf;
-        rdwr_pa[i].buf = kalloc();
+        rdwr_pa[i].buf = kmalloc(rdwr_pa[i].len);
+        if(rdwr_pa[i].buf == 0) {
+          ret = -1;
+          break;
+        }
+        allocated ++;
         if(copyin(p->pagetable, (char *)rdwr_pa[i].buf, (uint64)data_ptrs[i], rdwr_pa[i].len) < 0) {
           ret = -1;
           break;
@@ -80,7 +88,7 @@ i2cdev_ioctl(int minor, uint64 cmd, uint64 arg)
 
       /* free */
       if (ret < 0) {
-        for (i = 0; i < rdwr_arg.nmsgs; i ++) {
+        for (i = 0; i < allocated; i ++) {
           kfree(rdwr_pa[i].buf);
         }
         kfree(data_ptrs);
