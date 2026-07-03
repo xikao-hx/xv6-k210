@@ -79,7 +79,11 @@ make run platform=qemu
 make clean
 
 # 编译并连接到 k210 开发板串口，然后完成固件下载到Flash
+lsblk          # 查看设备节点
 make run platform=k210   
+
+# 强制重新编译，并执行日志等级
+make build platform=k210 LOG_LEVEL=LOG_LEVEL_DEBUG -B
 ```
 
 ### 烧写文件系统到 SD 中
@@ -118,7 +122,7 @@ python3 tools/burn.py --baud 460800 --board-baud 500000 /dev/ttyUSB0 target/fs.i
 * ✅完善 xv6 内核
   * ✅支持 COW、Lazy allocation、Mmap
   * ✅增加进程的内核页表，并将用户空间的映射添加到内核页表，使得内核能够直接解引用用户指针
-  * ✅内存分配器的共享空闲链表拆分成每个 CPU 的内存池
+  * ✅内存分配器的共享空闲链表拆分成每个 CPU 的内存池，支持 kmalloc/kfree 小块分配内存
   * ✅对磁盘块号进行哈希分桶并拆分锁
   * ✅修改 inode 添加大文件支持，并添加符号链接功能
 * ✅支持通过 I2C 和 SPI 协议读写设备

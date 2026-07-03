@@ -49,6 +49,7 @@ OBJS = \
   $K/syscall/syscall.o \
   $K/syscall/sysfile.o \
   $K/syscall/sysproc.o \
+  $K/vm/kmalloc.o \
   $K/vm/kalloc.o \
   $K/vm/vm.o \
   $K/vm/vmcopyin.o \
