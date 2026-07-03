@@ -333,9 +333,17 @@ int dmac_is_done(dmac_channel_number_t channel_num)
         return 0;
 }
 
-void dmac_wait_done(dmac_channel_number_t channel_num)
+int dmac_wait_done(dmac_channel_number_t channel_num, uint64 timeout)
 {
-    dmac_wait_idle(channel_num);
+    while(!dmac_is_idle(channel_num)) {
+        if(timeout-- == 0) {
+            dmac_channel_disable(channel_num);
+            dmac_channel_interrupt_clear(channel_num);
+            return -1;
+        }
+    }
+
+    return 0;
 }
 
 int dmac_is_idle(dmac_channel_number_t channel_num)

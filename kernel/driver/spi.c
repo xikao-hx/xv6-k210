@@ -8,6 +8,8 @@
 #include "sysctl.h"
 #include "utils.h"
 
+#define DMAC_WAIT_TIMEOUT 10000UL
+
 volatile spi_t *const spi[4] =
     {
         (volatile spi_t *)SPI0_V,
@@ -379,8 +381,8 @@ void spi_receive_data_normal_dma(dmac_channel_number_t dma_send_channel_num,
     
     /* wait dma trasfer finish */
     if(cmd_len)
-        dmac_wait_done(dma_send_channel_num);
-    dmac_wait_done(dma_receive_channel_num);
+        dmac_wait_done(dma_send_channel_num, DMAC_WAIT_TIMEOUT);
+    dmac_wait_done(dma_receive_channel_num, DMAC_WAIT_TIMEOUT);
 
     /* transfer clear work */
     spi_handle->ser = 0x00;      // cancel select chip
@@ -422,7 +424,7 @@ void spi_send_data_normal_dma(dmac_channel_number_t channel_num, spi_device_num_
     dmac_set_single_mode(channel_num, buf, (void *)(&spi_handle->dr[0]), DMAC_ADDR_INCREMENT, DMAC_ADDR_NOCHANGE,
                          DMAC_MSIZE_4, DMAC_TRANS_WIDTH_32, tx_len);
     spi_handle->ser = 1U << chip_select;
-    dmac_wait_done(channel_num);
+    dmac_wait_done(channel_num, DMAC_WAIT_TIMEOUT);
     if(spi_transfer_width != SPI_TRANS_INT)
         kfree((void *)buf);
 

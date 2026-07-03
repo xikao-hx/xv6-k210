@@ -2,8 +2,10 @@
 #include "i2c.h"
 #include "i2cdev.h"
 #include "kalloc.h"
+#include "printf.h"
 #include "proc.h"
 #include "vm.h"
+#include "printf.h"
 
 /* Last configured clock rate per I2C bus (saved from I2C_IOCTL_INIT) */
 static uint32 saved_clk_rate[I2C_DEVICE_MAX];
@@ -23,113 +25,91 @@ i2cdev_write(int user_src, uint64 src, int n)
 static int
 i2cdev_ioctl(int minor, uint64 cmd, uint64 arg)
 {
+  int ret = 0;
   struct proc *p = myproc();
   i2c_device_number_t i2c_bus = I2C_BUS(minor);
 
   switch(cmd) {
-  case I2C_IOCTL_INIT: {
-    struct i2cdev_init cfg;
-    if(copyin(p->pagetable, (char *)&cfg, arg, sizeof(cfg)) < 0)
-      return -1;
-    saved_clk_rate[i2c_bus] = cfg.clk_rate;
-    i2c_init(i2c_bus, cfg.slave_addr, 7, cfg.clk_rate);
-    return 0;
-  }
-
-  case I2C_IOCTL_TRANSFER: {
-    struct i2c_rdwr_ioctl_data rdwr_arg;
-    if(copyin(p->pagetable, (char *)&rdwr_arg, arg, sizeof(rdwr_arg)) < 0)
-      return -1;
-    if(rdwr_arg.nmsgs == 0 || rdwr_arg.nmsgs > I2C_MAX_MSGS)
-      return -1;
-    
-    /* copy msgs */
-    struct i2c_msg rdwr_pa[I2C_MAX_MSGS];
-    for (int i = 0; i < rdwr_arg.nmsgs; i ++) {
-      if (copyin(p->pagetable, (char *)&rdwr_pa[i], (uint64)(rdwr_arg.msgs + i), sizeof(struct i2c_msg)) < 0) 
+    case I2C_IOCTL_INIT: {
+      struct i2cdev_init cfg;
+      if(copyin(p->pagetable, (char *)&cfg, arg, sizeof(cfg)) < 0)
         return -1;
+
+      saved_clk_rate[i2c_bus] = cfg.clk_rate;
+      i2c_init(i2c_bus, cfg.slave_addr, 7, cfg.clk_rate);
+      return 0;
     }
 
-    /* Re-init with the target address (preserve clock rate from INIT) */
-    uint32 clk = saved_clk_rate[i2c_bus];
-    if(clk == 0) clk = 50000;
-    i2c_init(i2c_bus, rdwr_pa[0].addr, 7, clk);
+    case I2C_IOCTL_TRANSFER: {
+      struct i2c_rdwr_ioctl_data rdwr_arg;
+      struct i2c_msg rdwr_pa[I2C_MAX_MSGS];
+      uint8_t **data_ptrs;
+      int i = 0;
 
-    if(rdwr_arg.nmsgs == 1) {
-      /* Single message: pure read or pure write */
-      struct i2c_msg *msg = &rdwr_pa[0];
-      if(msg->flags & I2C_M_RD) {
-        /* Pure read */
-        if(msg->len == 0) return 0;
-        uint32 len = msg->len;
-        if(len > 4096) len = 4096;
-        uint8 *buf = kalloc();
-        if(buf == 0) return -1;
-        int ret = i2c_recv_data(i2c_bus, 0, 0, buf, len);
-        if(ret == 0 && msg->buf != 0) {
-          if(copyout(p->pagetable, (uint64)msg->buf, (char *)buf, len) < 0)
+      /* copy transfer */
+      if(copyin(p->pagetable, (char *)&rdwr_arg, arg, sizeof(rdwr_arg)) < 0)
+        return -1;
+      if(rdwr_arg.nmsgs == 0 || rdwr_arg.nmsgs > I2C_MAX_MSGS)
+        return -1;
+      
+      /* copy msgs */
+      for (i = 0; i < rdwr_arg.nmsgs; i ++) {
+        if (copyin(p->pagetable, (char *)&rdwr_pa[i], (uint64)(rdwr_arg.msgs + i), sizeof(struct i2c_msg)) < 0) 
+          return -1;
+      }
+
+      /* copy i2c_msg.buf */
+      data_ptrs = kalloc();
+      if (data_ptrs == 0) 
+        return -1;
+      
+      uint32 clk = saved_clk_rate[i2c_bus];
+      if(clk == 0) 
+        clk = 50000;
+
+      i2c_init(i2c_bus, rdwr_pa[0].addr, 7, clk);
+
+      for (i = 0; i < rdwr_arg.nmsgs; i ++) {
+        data_ptrs[i] = rdwr_pa[i].buf;
+        rdwr_pa[i].buf = kalloc();
+        if(copyin(p->pagetable, (char *)rdwr_pa[i].buf, (uint64)data_ptrs[i], rdwr_pa[i].len) < 0) {
+          ret = -1;
+          break;
+        }
+      }
+
+      /* free */
+      if (ret < 0) {
+        for (i = 0; i < rdwr_arg.nmsgs; i ++) {
+          kfree(rdwr_pa[i].buf);
+        }
+        kfree(data_ptrs);
+        return ret;
+      }
+    
+      /* i2c transfer */
+      ret = i2c_transfer(i2c_bus, DMAC_CHANNEL2, DMAC_CHANNEL3, rdwr_pa, rdwr_arg.nmsgs);
+      if(ret < 0 && rdwr_pa[0].addr == 0x3c)
+        printf("i2cdev: transfer failed ret=%d addr=%x nmsgs=%d\n",
+               ret, rdwr_pa[0].addr, rdwr_arg.nmsgs);
+
+      /* read: copy i2c_msg.buf and free */
+      for (i = 0; i < rdwr_arg.nmsgs; i ++) {
+        if (rdwr_pa[i].flags & I2C_M_RD) {
+          if(copyout(p->pagetable, (uint64)data_ptrs[i], (char *)rdwr_pa[i].buf, rdwr_pa[i].len) < 0)
             ret = -1;
         }
-        kfree(buf);
-        if(ret != 0) ret = -1;
-        return ret;
-      } else {
-        /* Pure write */
-        if(msg->len == 0) return 0;
-        uint32 len = msg->len;
-        if(len > 4096) len = 4096;
-        uint8 *buf = kalloc();
-        if(buf == 0) return -1;
-        if(copyin(p->pagetable, (char *)buf, (uint64)msg->buf, len) < 0) {
-          kfree(buf);
-          return -1;
-        }
-        int ret = i2c_send_data(i2c_bus, buf, len);
-        kfree(buf);
-        if(ret != 0) ret = -1;
-        return ret;
+        kfree(rdwr_pa[i].buf);
       }
-    } else {
-      /* Combined transaction: msg[0] = write, msg[1] = read with RESTART */
-      struct i2c_msg *w = &rdwr_pa[0];
-      struct i2c_msg *r = &rdwr_pa[1];
-      if(w->flags & I2C_M_RD) return -1;  /* first must be write */
-      if(!(r->flags & I2C_M_RD)) return -1; /* second must be read */
-      uint32 wlen = w->len;
-      if(wlen > 4096) wlen = 4096;
-      uint32 rlen = r->len;
-      if(rlen > 4096) rlen = 4096;
-
-      uint8 *wbuf = kalloc();
-      if(wbuf == 0) return -1;
-      if(wlen > 0) {
-        if(copyin(p->pagetable, (char *)wbuf, w->buf, wlen) < 0) {
-          kfree(wbuf);
-          return -1;
-        }
-      }
-
-      uint8 *rbuf = kalloc();
-      if(rbuf == 0) {
-        kfree(wbuf);
-        return -1;
-      }
-
-      int ret = i2c_recv_data(i2c_bus, wbuf, wlen, rbuf, rlen);
-      if(ret == 0 && rlen > 0 && r->buf != 0) {
-        if(copyout(p->pagetable, r->buf, (char *)rbuf, rlen) < 0)
-          ret = -1;
-      }
-      kfree(wbuf);
-      kfree(rbuf);
-      if(ret != 0) ret = -1;
-      return ret;
+      kfree(data_ptrs);
+      break;
     }
+    default:
+      printf("unknown param\n");
+      break;
   }
 
-  default:
-    return -1;
-  }
+  return ret;
 }
 
 void

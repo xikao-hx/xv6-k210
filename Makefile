@@ -6,6 +6,7 @@
 # -include conf/lab.mk
 
 platform ?= qemu
+LOG_LEVEL ?= LOG_LEVEL_INFO
 
 K=kernel
 U=user
@@ -97,6 +98,7 @@ CFLAGS += -mcmodel=medany
 CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
 CFLAGS += -I.
 # CFLAGS += -D DEBUG
+CFLAGS += -DLOG_LEVEL=$(LOG_LEVEL)
 CFLAGS += -I$K/include
 CFLAGS += -I$U/include
 ifeq ($(platform), qemu)

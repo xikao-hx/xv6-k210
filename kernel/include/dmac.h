@@ -1440,7 +1440,7 @@ int dmac_is_done(dmac_channel_number_t channel_num);
  * @param[in]   channel_num  Dmac channel
  *
  */
-void dmac_wait_done(dmac_channel_number_t channel_num);
+int dmac_wait_done(dmac_channel_number_t channel_num, uint64 timeout);
 
 /**
  * @brief       Determine the dma is idle or not

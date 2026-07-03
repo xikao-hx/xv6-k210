@@ -3,6 +3,7 @@
 
 #include "types.h"
 #include "dev.h"
+#include "i2c.h"
 
 // ioctl commands
 #define I2C_IOCTL_INIT      1  // arg = &i2cdev_init
@@ -15,14 +16,6 @@
 struct i2cdev_init {
     uint32 clk_rate;    // I2C clock rate (e.g. 50000)
     uint32 slave_addr;  // 7-bit slave address (e.g. 0x68)
-};
-
-struct i2c_msg {
-    uint16 addr;    // slave address (7-bit)
-    uint16 flags;
-#define I2C_M_RD    0x0001  // read data, from slave to master
-    uint16 len;     // msg length
-    uint8 *buf;     // user-space pointer to msg data
 };
 
 struct i2c_rdwr_ioctl_data {

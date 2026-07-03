@@ -19,10 +19,6 @@
 #include <stdint.h>
 #include "dmac.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #define I2C_MAX_NUM 3
 
 /* clang-format off */
@@ -136,7 +132,9 @@ typedef struct _i2c
 #define I2C_SAR_ADDRESS(x)                  ((x) << 0)
 
 /* I2C Rx/Tx Data Buffer and Command Register*/
-#define I2C_DATA_CMD_CMD                        0x00000100U
+#define I2C_DATA_CMD_CMD                        0x00000100U  // bit 8
+#define I2C_DATA_CMD_STOP                       0x00000200U  // bit 9
+#define I2C_DATA_CMD_RESTART                    0x00000400U  // bit 10
 #define I2C_DATA_CMD_DATA_MASK                  0x000000FFU
 #define I2C_DATA_CMD_DATA(x)                    ((x) << 0)
 
@@ -353,115 +351,6 @@ typedef enum _i2c_transfer_mode
     I2C_RECEIVE,
 } i2c_transfer_mode_t;
 
-// typedef struct _i2c_data_t
-// {
-//     dmac_channel_number_t tx_channel;
-//     dmac_channel_number_t rx_channel;
-//     uint32_t *tx_buf;
-//     size_t tx_len;
-//     uint32_t *rx_buf;
-//     size_t rx_len;
-//     i2c_transfer_mode_t transfer_mode;
-// } i2c_data_t;
-
-/**
- * @brief       Set i2c params
- *
- * @param[in]   i2c_num             i2c number
- * @param[in]   slave_address       i2c slave device address
- * @param[in]   address_width       address width 7bit or 10bit
- * @param[in]   i2c_clk             i2c clk rate
- */
-void i2c_init(i2c_device_number_t i2c_num, uint32_t slave_address, uint32_t address_width,
-              uint32_t i2c_clk);
-
-/**
- * @brief       I2c send data
- *
- * @param[in]   i2c_num         i2c number
- * @param[in]   send_buf        send data
- * @param[in]   send_buf_len    send data length
- *
- * @return      result
- *     - 0      Success
- *     - Other  Fail
- */
-int i2c_send_data(i2c_device_number_t i2c_num, const uint8_t *send_buf, size_t send_buf_len);
-
-/**
- * @brief       Init i2c as slave mode.
- *
- * @param[in]   i2c_num             i2c number
- * @param[in]   slave_address       i2c slave device address
- * @param[in]   address_width       address width 7bit or 10bit
- * @param[in]   handler             Handle of i2c slave interrupt function.
- */
-// void i2c_init_as_slave(i2c_device_number_t i2c_num, uint32_t slave_address, uint32_t address_width,
-//                        const i2c_slave_handler_t *handler);
-
-/**
- * @brief       I2c send data by dma
- *
- * @param[in]   dma_channel_num     dma channel
- * @param[in]   i2c_num             i2c number
- * @param[in]   send_buf            send data
- * @param[in]   send_buf_len        send data length
- *
- * @return      result
- *     - 0      Success
- *     - Other  Fail
- */
-void i2c_send_data_dma(dmac_channel_number_t dma_channel_num, i2c_device_number_t i2c_num, const uint8_t *send_buf,
-                       size_t send_buf_len);
-
-/**
- * @brief       I2c receive data
- *
- * @param[in]   i2c_num             i2c number
- * @param[in]   send_buf            send data address
- * @param[in]   send_buf_len        length of send buf
- * @param[in]   receive_buf         receive buf address
- * @param[in]   receive_buf_len     length of receive buf
- *
- * @return      result
- *     - 0      Success
- *     - Other  Fail
-*/
-int i2c_recv_data(i2c_device_number_t i2c_num, const uint8_t *send_buf, size_t send_buf_len, uint8_t *receive_buf,
-                  size_t receive_buf_len);
-
-/**
- * @brief       I2c receive data by dma
- *
- * @param[in]   dma_send_channel_num        send dma channel
- * @param[in]   dma_receive_channel_num     receive dma channel
- * @param[in]   i2c_num                     i2c number
- * @param[in]   send_buf                    send data address
- * @param[in]   send_buf_len                length of send buf
- * @param[in]   receive_buf                 receive buf address
- * @param[in]   receive_buf_len             length of receive buf
- *
- * @return      result
- *     - 0      Success
- *     - Other  Fail
-*/
-void i2c_recv_data_dma(dmac_channel_number_t dma_send_channel_num, dmac_channel_number_t dma_receive_channel_num,
-                       i2c_device_number_t i2c_num, const uint8_t *send_buf, size_t send_buf_len,
-                       uint8_t *receive_buf, size_t receive_buf_len);
-/**
- * @brief       I2c handle transfer data operations
- *
- * @param[in]   i2c_num             i2c number
- * @param[in]   data                i2c data information
- * @param[in]   cb                  i2c dma callback
- *
-*/
-// void i2c_handle_data_dma(i2c_device_number_t i2c_num, i2c_data_t data, plic_interrupt_t *cb);
-
-#ifdef __cplusplus
-}
-#endif
-
 #ifdef SW
 
 /* software i2c */
@@ -471,5 +360,18 @@ void sw_i2c_stop(void);
 void sw_i2c_send_byte(uint8_t byte);
 
 #endif
+
+struct i2c_msg {
+    uint16 addr;    // slave address (7-bit)
+    uint16 flags;
+#define I2C_M_RD    0x0001  // read data, from slave to master
+    uint16 len;     // msg length
+    uint8 *buf;     // user-space pointer to msg data
+};
+
+void i2c_init(i2c_device_number_t i2c_num, uint32_t slave_address, uint32_t address_width,
+              uint32_t i2c_clk);
+int i2c_transfer(i2c_device_number_t i2c_num, dmac_channel_number_t chan_tx, dmac_channel_number_t chan_rx, 
+                    struct i2c_msg *msgs, int num);
 
 #endif /* _DRIVER_I2C_H */
