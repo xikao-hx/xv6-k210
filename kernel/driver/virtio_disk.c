@@ -162,7 +162,7 @@ free_desc(int i)
   disk.desc[i].flags = 0;
   disk.desc[i].next = 0;
   disk.free[i] = 1;
-  wakeup(&disk.free[0]);
+  wakeup_reason(&disk.free[0], WAKEUP_IO);
 }
 
 // free a chain of descriptors.
@@ -302,7 +302,7 @@ virtio_disk_intr()
 
     struct buf *b = disk.info[id].b;
     b->disk = 0;   // disk is done with buf
-    wakeup(b);
+    wakeup_reason(b, WAKEUP_IO);
 
     disk.used_idx += 1;
   }

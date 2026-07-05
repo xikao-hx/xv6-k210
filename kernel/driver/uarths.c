@@ -185,7 +185,7 @@ uartstart()
     }
     int c = uart_tx_buf[uart_tx_r];
     uart_tx_r = (uart_tx_r + 1) % UART_TX_BUF_SIZE;
-    wakeup(&uart_tx_r);
+    wakeup_reason(&uart_tx_r, WAKEUP_DEVICE);
     WriteReg(THR, c);
 #else
     if (uarths->txdata.full) {
@@ -193,7 +193,7 @@ uartstart()
     }
     int c = uart_tx_buf[uart_tx_r];
     uart_tx_r = (uart_tx_r + 1) % UART_TX_BUF_SIZE;
-    wakeup(&uart_tx_r);
+    wakeup_reason(&uart_tx_r, WAKEUP_DEVICE);
     uarths->txdata.data = (uint8)c;
 #endif
   }
@@ -306,7 +306,7 @@ uart_raw_input(int c)
   } else {
     uart_raw_buf[uart_raw_w] = (char)c;
     uart_raw_w = next;
-    wakeup(&uart_raw_r);
+    wakeup_reason(&uart_raw_r, WAKEUP_DEVICE);
   }
 
   release(&uart_raw_lock);
@@ -338,7 +338,7 @@ uart_raw_drain_fifo(void)
     }
   }
   if (did_wakeup)
-    wakeup(&uart_raw_r);
+    wakeup_reason(&uart_raw_r, WAKEUP_DEVICE);
   release(&uart_raw_lock);
 
   return did_raw;
@@ -360,7 +360,7 @@ uart_raw_end(void)
 {
   acquire(&uart_raw_lock);
   uart_raw_mode = 0;
-  wakeup(&uart_raw_r);
+  wakeup_reason(&uart_raw_r, WAKEUP_DEVICE);
   release(&uart_raw_lock);
 }
 

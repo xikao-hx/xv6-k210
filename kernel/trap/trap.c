@@ -203,7 +203,7 @@ clockintr()
 {
   acquire(&tickslock);
   ticks++;
-  wakeup(&ticks);
+  wakeup_reason(&ticks, WAKEUP_TIMER);
   release(&tickslock);
   // set next timer interrupt via SBI
   sbi_set_timer(r_time() + INTERVAL);

@@ -90,6 +90,16 @@ struct trapframe {
 
 enum procstate { UNUSED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+#define WAKEUP_NORMAL 0
+#define WAKEUP_TIMER  1
+#define WAKEUP_IO     2
+#define WAKEUP_DEVICE 3
+
+#define MLFQ_LEVELS         4
+#define MLFQ_TOP_LEVEL      0
+#define MLFQ_BOTTOM_LEVEL   (MLFQ_LEVELS - 1)
+#define MLFQ_BOOST_INTERVAL 200
+
 #define NVMA 16
 struct vma_area {
   int used;
@@ -126,6 +136,15 @@ struct proc {
   char name[16];               // Process name (debugging)
   int trace_mask;
   struct vma_area vmas[NVMA];
+  int queue_level;
+  int sched_ticks;
+  uint total_run_ticks;
+  uint wait_ticks;
+  uint preempt_count;
+  uint boost_count;
+  uint io_wakeup_count;
+  uint device_wakeup_count;
+  int last_wakeup_reason;
 };
 
 int             cpuid(void);
@@ -147,6 +166,7 @@ void            sleep(void*, struct spinlock*);
 void            userinit(void);
 int             wait(uint64);
 void            wakeup(void*);
+void            wakeup_reason(void*, int);
 void            yield(void);
 int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);

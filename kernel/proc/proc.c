@@ -22,6 +22,16 @@ extern void forkret(void);
 static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
 
+#ifdef SCHED_MLFQ
+// Logical MLFQ queues are represented by queue_level in proc[].
+// Each level keeps its own scan cursor to provide RR fairness within that level.
+static int mlfq_rr_next[MLFQ_LEVELS];
+static uint mlfq_last_boost_tick;
+static int mlfq_time_slices[MLFQ_LEVELS] = { 1, 2, 4, 8 };
+#else
+static int rr_next;
+#endif
+
 extern char trampoline[]; // trampoline.S
 
 // initialize the proc table at boot time.
@@ -30,9 +40,21 @@ procinit(void)
 {
   struct proc *p;
   
+  memset(cpus, 0, sizeof(cpus));
+  memset(proc, 0, sizeof(proc));
+#ifdef SCHED_MLFQ
+  memset(mlfq_rr_next, 0, sizeof(mlfq_rr_next));
+  mlfq_last_boost_tick = 0;
+#else
+  rr_next = 0;
+#endif
+
   initlock(&pid_lock, "nextpid");
   for(p = proc; p < &proc[NPROC]; p++) {
-      initlock(&p->lock, "proc");
+    p->state = UNUSED;
+    p->queue_level = MLFQ_TOP_LEVEL;
+    p->last_wakeup_reason = WAKEUP_NORMAL;
+    initlock(&p->lock, "proc");
   }
   kvminithart();
 }
@@ -139,6 +161,16 @@ found:
   p->context.sp = p->kstack + PGSIZE;
 
   memset(&p->vmas, 0, sizeof(p->vmas));
+  // New processes start interactive: highest priority and empty counters.
+  p->queue_level = MLFQ_TOP_LEVEL;
+  p->sched_ticks = 0;
+  p->total_run_ticks = 0;
+  p->wait_ticks = 0;
+  p->preempt_count = 0;
+  p->boost_count = 0;
+  p->io_wakeup_count = 0;
+  p->device_wakeup_count = 0;
+  p->last_wakeup_reason = WAKEUP_NORMAL;
 
   return p;
 }
@@ -167,6 +199,15 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+  p->queue_level = MLFQ_TOP_LEVEL;
+  p->sched_ticks = 0;
+  p->total_run_ticks = 0;
+  p->wait_ticks = 0;
+  p->preempt_count = 0;
+  p->boost_count = 0;
+  p->io_wakeup_count = 0;
+  p->device_wakeup_count = 0;
+  p->last_wakeup_reason = WAKEUP_NORMAL;
   p->state = UNUSED;
 }
 
@@ -182,6 +223,156 @@ proc_num(void)
     } 
   }
   return num;
+}
+
+// Account how long runnable processes have waited without being selected.
+static void
+account_runnable_wait(void)
+{
+  struct proc *p;
+
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state == RUNNABLE)
+      p->wait_ticks++;
+    release(&p->lock);
+  }
+}
+
+#ifdef SCHED_MLFQ
+// Periodically move all live processes back to the top MLFQ level.
+static void
+mlfq_boost_if_needed(void)
+{
+  struct proc *p;
+
+  if(ticks - mlfq_last_boost_tick < MLFQ_BOOST_INTERVAL)
+    return;
+
+  mlfq_last_boost_tick = ticks;
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state != UNUSED) {
+      p->queue_level = MLFQ_TOP_LEVEL;
+      p->sched_ticks = 0;
+      p->wait_ticks = 0;
+      p->boost_count++;
+    }
+    release(&p->lock);
+  }
+}
+
+// Promote IO/device-woken processes so interactive work responds quickly.
+static void
+mlfq_promote_on_wakeup(struct proc *p, int reason)
+{
+  if(reason == WAKEUP_IO || reason == WAKEUP_DEVICE) {
+    if(p->queue_level > MLFQ_TOP_LEVEL)
+      p->queue_level--;
+    p->sched_ticks = 0;
+    if(reason == WAKEUP_IO)
+      p->io_wakeup_count++;
+    else
+      p->device_wakeup_count++;
+  }
+}
+#endif
+
+// Update scheduling statistics and MLFQ level after a timer yield.
+static void
+sched_on_yield(struct proc *p)
+{
+  p->total_run_ticks++;
+  p->preempt_count++;
+
+#ifdef SCHED_MLFQ
+  p->sched_ticks++;
+  // Processes that use a whole slice are treated as more CPU-bound and demoted.
+  if(p->sched_ticks >= mlfq_time_slices[p->queue_level]) {
+    if(p->queue_level < MLFQ_BOTTOM_LEVEL)
+      p->queue_level++;
+    p->sched_ticks = 0;
+  }
+#endif
+}
+
+#ifdef SCHED_MLFQ
+// Pick the next runnable process using priority levels and per-level RR.
+static struct proc*
+pick_next_proc_mlfq(void)
+{
+  struct proc *p;
+  int level;
+  int i;
+
+  mlfq_boost_if_needed();
+
+  // Scan higher priority levels first; each level uses its own RR cursor.
+  for(level = MLFQ_TOP_LEVEL; level <= MLFQ_BOTTOM_LEVEL; level++) {
+    for(i = 0; i < NPROC; i++) {
+      // The cursor is a scan start in proc[], not necessarily a process in this level.
+      int idx = (mlfq_rr_next[level] + i) % NPROC;
+      p = &proc[idx];
+      acquire(&p->lock);
+      if(p->state == RUNNABLE && p->queue_level == level) {
+        mlfq_rr_next[level] = (idx + 1) % NPROC;
+        p->wait_ticks = 0;
+        // Return with p->lock held; run_proc() preserves xv6 scheduler locking.
+        return p;
+      }
+      release(&p->lock);
+    }
+  }
+  return 0;
+}
+#else
+// Pick the next runnable process using a global round-robin cursor.
+static struct proc*
+pick_next_proc_rr(void)
+{
+  struct proc *p;
+  int i;
+
+  for(i = 0; i < NPROC; i++) {
+    int idx = (rr_next + i) % NPROC;
+    p = &proc[idx];
+    acquire(&p->lock);
+    if(p->state == RUNNABLE) {
+      rr_next = (idx + 1) % NPROC;
+      p->wait_ticks = 0;
+      // Return with p->lock held to match the scheduler/run_proc contract.
+      return p;
+    }
+    release(&p->lock);
+  }
+  return 0;
+}
+#endif
+
+// Dispatch to the scheduler implementation selected at build time.
+static struct proc*
+pick_next_proc(void)
+{
+#ifdef SCHED_MLFQ
+  return pick_next_proc_mlfq();
+#else
+  return pick_next_proc_rr();
+#endif
+}
+
+// Run a selected process through the common xv6 context-switch path.
+static void
+run_proc(struct cpu *c, struct proc *p)
+{
+  // Common context-switch path; the selection policy is kept in pick_next_proc().
+  p->state = RUNNING;
+  c->proc = p;
+
+  ukvminithart(p->kpagetable);
+  swtch(&c->context, &p->context);
+  kvminithart();
+
+  c->proc = 0;
 }
 
 // Create a user page table for a given process,
@@ -533,30 +724,14 @@ scheduler(void)
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
-    
-    int found = 0;
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
 
-        ukvminithart(p->kpagetable);
-        swtch(&c->context, &p->context);
-        kvminithart();
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-
-        found = 1;
-      }
+    account_runnable_wait();
+    p = pick_next_proc();
+    if(p) {
+      // Switch to chosen process. It releases p->lock before user space.
+      run_proc(c, p);
       release(&p->lock);
-    }
-    if(found == 0) {
+    } else {
       intr_on();
       asm volatile("wfi");
     }
@@ -596,6 +771,7 @@ yield(void)
 {
   struct proc *p = myproc();
   acquire(&p->lock);
+  sched_on_yield(p);
   p->state = RUNNABLE;
   sched();
   release(&p->lock);
@@ -644,6 +820,10 @@ sleep(void *chan, struct spinlock *lk)
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
+#ifdef SCHED_MLFQ
+  // Voluntary sleep should not be punished as CPU-bound behavior.
+  p->sched_ticks = 0;
+#endif
 
   sched();
 
@@ -662,12 +842,23 @@ sleep(void *chan, struct spinlock *lk)
 void
 wakeup(void *chan)
 {
+  wakeup_reason(chan, WAKEUP_NORMAL);
+}
+
+void
+wakeup_reason(void *chan, int reason)
+{
   struct proc *p;
 
+  // Extended wakeup path records why the process became runnable.
   for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
     if(p->state == SLEEPING && p->chan == chan) {
       p->state = RUNNABLE;
+      p->last_wakeup_reason = reason;
+#ifdef SCHED_MLFQ
+      mlfq_promote_on_wakeup(p, reason);
+#endif
     }
     release(&p->lock);
   }
@@ -739,6 +930,52 @@ either_copyin(void *dst, int user_src, uint64 src, uint64 len)
   }
 }
 
+static int
+decimal_width(int n)
+{
+  int w = 1;
+
+  if(n < 0) {
+    w++;
+    n = -n;
+  }
+  while(n >= 10) {
+    n /= 10;
+    w++;
+  }
+  return w;
+}
+
+static void
+print_spaces(int n)
+{
+  while(n-- > 0)
+    printf(" ");
+}
+
+static void
+print_int_col(int n, int width)
+{
+  print_spaces(width - decimal_width(n));
+  printf("%d", n);
+}
+
+static void
+print_str_col(char *s, int width)
+{
+  int len = strlen(s);
+
+  if(len > width)
+    len = width;
+  for(int i = 0; i < len; i++) {
+    char ch[2];
+    ch[0] = s[i];
+    ch[1] = 0;
+    printf("%s", ch);
+  }
+  print_spaces(width - len);
+}
+
 // Print a process listing to console.  For debugging.
 // Runs when user types ^P on console.
 // No lock to avoid wedging a stuck machine further.
@@ -754,16 +991,67 @@ procdump(void)
   };
   struct proc *p;
   char *state;
+  char name[17];
 
   printf("\n");
+#ifdef SCHED_MLFQ
+  printf(" PID  STATE  NAME          Q    RUN   WAIT  PREEMPT  BOOST    IO   DEV  WAKE\n");
+  printf("----  -----  ------------  -  -----  -----  -------  -----  ----  ----  ----\n");
+#else
+  printf(" PID  STATE  NAME           RUN   WAIT  PREEMPT  WAKE\n");
+  printf("----  -----  ------------  -----  -----  -------  ----\n");
+#endif
   for(p = proc; p < &proc[NPROC]; p++){
-    if(p->state == UNUSED)
+    int idx = p - proc;
+    int proc_state = p->state;
+
+    if(proc_state == UNUSED)
       continue;
-    if(p->state >= 0 && p->state < NELEM(states) && states[p->state])
-      state = states[p->state];
-    else
-      state = "???";
-    printf("%d %s %s", p->pid, state, p->name);
+    if(proc_state < UNUSED || proc_state >= NELEM(states) || states[proc_state] == 0) {
+      printf("slot %d badstate %d\n", idx, proc_state);
+      continue;
+    }
+
+    state = states[proc_state];
+    memmove(name, p->name, sizeof(p->name));
+    name[sizeof(p->name)] = 0;
+#ifdef SCHED_MLFQ
+    print_int_col(p->pid, 4);
+    printf("  ");
+    print_str_col(state, 5);
+    printf("  ");
+    print_str_col(name, 12);
+    printf("  ");
+    print_int_col(p->queue_level, 1);
+    printf("  ");
+    print_int_col(p->total_run_ticks, 5);
+    printf("  ");
+    print_int_col(p->wait_ticks, 5);
+    printf("  ");
+    print_int_col(p->preempt_count, 7);
+    printf("  ");
+    print_int_col(p->boost_count, 5);
+    printf("  ");
+    print_int_col(p->io_wakeup_count, 4);
+    printf("  ");
+    print_int_col(p->device_wakeup_count, 4);
+    printf("  ");
+    print_int_col(p->last_wakeup_reason, 4);
+#else
+    print_int_col(p->pid, 4);
+    printf("  ");
+    print_str_col(state, 5);
+    printf("  ");
+    print_str_col(name, 12);
+    printf("  ");
+    print_int_col(p->total_run_ticks, 5);
+    printf("  ");
+    print_int_col(p->wait_ticks, 5);
+    printf("  ");
+    print_int_col(p->preempt_count, 7);
+    printf("  ");
+    print_int_col(p->last_wakeup_reason, 4);
+#endif
     printf("\n");
   }
 }

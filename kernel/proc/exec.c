@@ -120,6 +120,12 @@ exec(char *path, char **argv)
   p->sz = sz;
   p->trapframe->epc = elf.entry;
   p->trapframe->sp = sp;
+  char *last = path;
+  for(char *s = path; *s; s++) {
+    if(*s == '/')
+      last = s + 1;
+  }
+  safestrcpy(p->name, last, sizeof(p->name));
 
   // Update kpagetable for the new user address space.
   // Unmap old user mappings, then copy new ones from the new pagetable.

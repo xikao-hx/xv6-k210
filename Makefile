@@ -7,13 +7,15 @@
 
 platform ?= qemu
 LOG_LEVEL ?= LOG_LEVEL_INFO
+SCHED ?= rr
 
 K=kernel
 U=user
 T=target
 FS_SIZE_MB ?= 64
 
-BUILD = build
+BUILD_ROOT = build
+BUILD = $(BUILD_ROOT)/$(platform)-$(SCHED)
 KBUILD = $(BUILD)/kernel
 UBUILD = $(BUILD)/user
 
@@ -100,6 +102,11 @@ CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
 CFLAGS += -I.
 # CFLAGS += -D DEBUG
 CFLAGS += -DLOG_LEVEL=$(LOG_LEVEL)
+ifeq ($(SCHED), mlfq)
+CFLAGS += -D SCHED_MLFQ
+else
+CFLAGS += -D SCHED_RR
+endif
 CFLAGS += -I$K/include
 CFLAGS += -I$U/include
 ifeq ($(platform), qemu)
@@ -138,7 +145,7 @@ $(KBUILD)/%.o: $K/%.S
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$T/kernel: $(OBJS) $(LINKER_SCRIPT) $(UBUILD)/initcode
+$T/kernel: FORCE $(OBJS) $(LINKER_SCRIPT) $(UBUILD)/initcode
 	$(LD) $(LDFLAGS) -T $(LINKER_SCRIPT) -o $T/kernel $(OBJS)
 	$(OBJDUMP) -S $T/kernel > $T/kernel.asm
 	$(OBJDUMP) -t $T/kernel | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $T/kernel.sym
@@ -224,6 +231,8 @@ UPROGS=\
 	$(UBUILD)/app/_burn\
 	$(UBUILD)/app/_mpu6050\
 	$(UBUILD)/app/_w25q64\
+	$(UBUILD)/test/_cpuburn\
+	$(UBUILD)/test/_iotest\
 	$(UBUILD)/test/_uarttest\
 	$(UBUILD)/test/_sdtest\
 	$(UBUILD)/test/_spitest\
@@ -255,7 +264,7 @@ rustsbi-clean:
 	@cd ./bootloader/rustsbi-qemu && cargo clean
 
 clean: # rustsbi-clean
-	rm -rf $(BUILD)
+	rm -rf $(BUILD_ROOT)
 	rm -f *.tex *.dvi *.idx *.aux *.log *.ind *.ilg \
 	fs.img .gdbinit
 	rm -f $T/kernel $T/kernel.asm $T/kernel.sym $T/kernel.bin $T/k210.bin $T/fs.img
@@ -304,7 +313,8 @@ fs: $(UPROGS)
 	@python3 tools/mkfs.py "$(UBUILD)"
 	@echo "done"
 
-.PHONY: xv6_image handin tarball tarball-pref clean grade handin-check
+.PHONY: FORCE xv6_image handin tarball tarball-pref clean grade handin-check
+FORCE:
 
 dev-sd := /dev/sdb
 sdcard: fs
@@ -313,5 +323,7 @@ sdcard: fs
 	@sudo eject $(dev-sd)
 
 # BUG: The baud rate of K210 must be increased.
+download: platform = k210
+download: SCHED = mlfq
 download: fs
 	@python3 tools/burn.py --baud 460800 --board-baud 500000 $(k210-serialport) target/fs.img

@@ -370,5 +370,5 @@ void dmac_wait_idle(dmac_channel_number_t channel_num)
 void dmac_intr(dmac_channel_number_t channel_num)
 {
     dmac_channel_interrupt_clear(channel_num);
-    wakeup(dmac_chan);
+    wakeup_reason(dmac_chan, WAKEUP_DEVICE);
 }
