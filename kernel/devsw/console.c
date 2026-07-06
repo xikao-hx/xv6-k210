@@ -10,6 +10,7 @@
 
 
 #include "proc.h"
+#include "console.h"
 #include "file.h"
 #include "uarths.h"
 
@@ -43,6 +44,7 @@ struct {
   uint r;  // Read index
   uint w;  // Write index
   uint e;  // Edit index
+  int esc; // ANSI escape sequence bytes should not be echoed
 } cons;
 
 //
@@ -65,6 +67,20 @@ consolewrite(int user_src, uint64 src, int n)
   release(&cons.lock);
 
   return i;
+}
+
+static int
+consoleioctl(int minor, uint64 cmd, uint64 arg)
+{
+  if(cmd != CONSOLE_IOCTL_FLUSH_INPUT)
+    return -1;
+
+  // Drop pending keystrokes typed while a foreground program was running.
+  acquire(&cons.lock);
+  cons.r = cons.w = cons.e;
+  cons.esc = 0;
+  release(&cons.lock);
+  return 0;
 }
 
 //
@@ -147,8 +163,21 @@ consoleintr(int c)
       c = (c == '\r') ? '\n' : c;
 #endif
 
+      // ANSI escape sequences, such as arrow keys, are parsed by the shell.
+      int echo = (c >= ' ' && c <= '~') || c == '\n';
+      if(c == 0x1b){
+        cons.esc = 1;
+        echo = 0;
+      } else if(cons.esc){
+        echo = 0;
+        if(cons.esc == 1 && (c == '[' || c == 'O'))
+          cons.esc = 2;
+        else
+          cons.esc = 0;
+      }
+
       // echo back to the user (printable chars and newline only).
-      if((c >= ' ' && c <= '~') || c == '\n')
+      if(echo)
         consputc(c);
 
       // store for consumption by consoleread().
@@ -156,7 +185,7 @@ consoleintr(int c)
 
       // wake up consoleread() on every character (non-canonical mode)
       cons.w = cons.e;
-      wakeup(&cons.r);
+      wakeup_reason(&cons.r, WAKEUP_DEVICE);
     }
     break;
   }
@@ -175,4 +204,5 @@ consoleinit(void)
   // to consoleread and consolewrite.
   devsw[DEV_CONSOLE].read = consoleread;
   devsw[DEV_CONSOLE].write = consolewrite;
+  devsw[DEV_CONSOLE].ioctl = consoleioctl;
 }

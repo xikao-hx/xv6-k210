@@ -4,6 +4,7 @@
 #include "stat.h"
 #include "user.h"
 #include "fcntl.h"
+#include "console.h"
 
 // Parsed command representation
 #define EXEC  1
@@ -132,6 +133,59 @@ runcmd(struct cmd *cmd)
 }
 
 static int complete_word(char *buf, int *pos);
+static char history[100];
+
+static void
+erase_line(char *buf, int *pos)
+{
+  while(*pos > 0) {
+    fprintf(2, "\b \b");
+    (*pos)--;
+  }
+  buf[0] = 0;
+}
+
+static void
+erase_visible_chars(int n)
+{
+  while(n-- > 0)
+    fprintf(2, "\b \b");
+}
+
+static void
+load_history(char *buf, int *pos, int nbuf)
+{
+  int len;
+
+  if(history[0] == 0)
+    return;
+
+  erase_line(buf, pos);
+  len = strlen(history);
+  if(len > nbuf - 2)
+    len = nbuf - 2;
+  memmove(buf, history, len);
+  buf[len] = 0;
+  *pos = len;
+  fprintf(2, "%s", buf);
+}
+
+static void
+save_history(char *buf)
+{
+  int len = strlen(buf);
+
+  if(len > 0 && buf[len - 1] == '\n')
+    len--;
+  while(len > 0 && buf[len - 1] == ' ')
+    len--;
+  if(len == 0)
+    return;
+  if(len >= sizeof(history))
+    len = sizeof(history) - 1;
+  memmove(history, buf, len);
+  history[len] = 0;
+}
 
 int
 getcmd(char *buf, int nbuf)
@@ -160,12 +214,37 @@ getcmd(char *buf, int nbuf)
       continue;               /* ignore in middle of line */
     }
 
-    if (c == 0x15) {          /* C('U'): kill line */
-      while (i > 0) {
-        fprintf(2, "\b \b");
-        i--;
+    if (c == 0x1b) {          /* ANSI escape sequence */
+      char seq[2];
+      if (read(0, &seq[0], 1) != 1)
+        continue;
+      if (read(0, &seq[1], 1) != 1)
+        continue;
+      if ((seq[0] == '[' || seq[0] == 'O') && seq[1] == 'A') {
+        erase_visible_chars(2);
+        load_history(buf, &i, nbuf);
       }
-      buf[0] = 0;
+      continue;
+    }
+
+    if (c == '[') {           /* Some serial tools drop ESC in ESC [ A. */
+      char next;
+      if (read(0, &next, 1) != 1)
+        continue;
+      if (next == 'A') {
+        erase_visible_chars(2);
+        load_history(buf, &i, nbuf);
+        continue;
+      }
+      if (i < nbuf - 2) {
+        buf[i++] = '[';
+        buf[i++] = next;
+      }
+      continue;
+    }
+
+    if (c == 0x15) {          /* C('U'): kill line */
+      erase_line(buf, &i);
       continue;
     }
 
@@ -280,6 +359,7 @@ main(void)
 
   // Read and run input commands.
   while(getcmd(buf, sizeof(buf)) >= 0){
+    save_history(buf);
     if(buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' '){
       // Chdir must be called by the parent, not the child.
       buf[strlen(buf)-1] = 0;  // chop \n
@@ -290,6 +370,7 @@ main(void)
     if(fork1() == 0)
       runcmd(parsecmd(buf));
     wait(0);
+    ioctl(0, CONSOLE_IOCTL_FLUSH_INPUT, 0);
   }
   exit(0);
 }
