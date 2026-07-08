@@ -5,9 +5,11 @@
 
 # -include conf/lab.mk
 
-platform ?= qemu
+platform ?= k210
+# LOG_LEVEL can be one of:
+#   LOG_LEVEL_NONE LOG_LEVEL_ERROR LOG_LEVEL_WARN LOG_LEVEL_INFO LOG_LEVEL_DEBUG
 LOG_LEVEL ?= LOG_LEVEL_INFO
-SCHED ?= rr
+SCHED ?= mlfq
 
 K=kernel
 U=user
@@ -15,9 +17,10 @@ T=target
 FS_SIZE_MB ?= 64
 
 BUILD_ROOT = build
-BUILD = $(BUILD_ROOT)/$(platform)-$(SCHED)
+BUILD = $(BUILD_ROOT)
 KBUILD = $(BUILD)/kernel
 UBUILD = $(BUILD)/user
+BUILD_CONFIG = $(BUILD)/.config
 
 # Entry point must be the first object in link order
 # (OpenSBI jumps to the beginning of the kernel image)
@@ -102,16 +105,10 @@ CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
 CFLAGS += -I.
 # CFLAGS += -D DEBUG
 CFLAGS += -DLOG_LEVEL=$(LOG_LEVEL)
-ifeq ($(SCHED), mlfq)
-CFLAGS += -D SCHED_MLFQ
-else
-CFLAGS += -D SCHED_RR
-endif
+CFLAGS += $(if $(filter mlfq,$(SCHED)),-D SCHED_MLFQ,-D SCHED_RR)
 CFLAGS += -I$K/include
 CFLAGS += -I$U/include
-ifeq ($(platform), qemu)
-CFLAGS += -D QEMU
-endif
+CFLAGS += $(if $(filter qemu,$(platform)),-D QEMU,)
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 
 # Disable PIE when possible (for Ubuntu 16.10 toolchain)
@@ -137,11 +134,17 @@ RUSTSBI = ./bootloader/sbi-qemu
 endif
 
 # -------- kernel compile --------
-$(KBUILD)/%.o: $K/%.c
+$(BUILD_CONFIG): FORCE
+	@mkdir -p $(BUILD)
+	@printf 'platform=%s\nSCHED=%s\nLOG_LEVEL=%s\n' "$(platform)" "$(SCHED)" "$(LOG_LEVEL)" > $@.tmp
+	@cmp -s $@.tmp $@ || mv $@.tmp $@
+	@rm -f $@.tmp
+
+$(KBUILD)/%.o: $K/%.c $(BUILD_CONFIG)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(KBUILD)/%.o: $K/%.S
+$(KBUILD)/%.o: $K/%.S $(BUILD_CONFIG)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -150,7 +153,7 @@ $T/kernel: FORCE $(OBJS) $(LINKER_SCRIPT) $(UBUILD)/initcode
 	$(OBJDUMP) -S $T/kernel > $T/kernel.asm
 	$(OBJDUMP) -t $T/kernel | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $T/kernel.sym
 
-$(UBUILD)/initcode: $U/initcode.S
+$(UBUILD)/initcode: $U/initcode.S $(BUILD_CONFIG)
 	@mkdir -p $(UBUILD)
 	$(CC) $(CFLAGS) -march=rv64g -nostdinc -I. -I$K/include -c $U/initcode.S -o $(UBUILD)/initcode.o
 	$(LD) $(LDFLAGS) -N -e start -Ttext 0 -o $(UBUILD)/initcode.out $(UBUILD)/initcode.o
@@ -162,23 +165,23 @@ tags: $(OBJS) $(UBUILD)/_init
 
 # -------- user compiler --------
 # Compile user sources into subdirectories matching kernel/ layout
-$(UBUILD)/sh/%.o: $U/sh/%.c
+$(UBUILD)/sh/%.o: $U/sh/%.c $(BUILD_CONFIG)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(UBUILD)/app/%.o: $U/app/%.c
+$(UBUILD)/app/%.o: $U/app/%.c $(BUILD_CONFIG)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(UBUILD)/test/%.o: $U/test/%.c
+$(UBUILD)/test/%.o: $U/test/%.c $(BUILD_CONFIG)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(UBUILD)/libc/%.o: $U/libc/%.c
+$(UBUILD)/libc/%.o: $U/libc/%.c $(BUILD_CONFIG)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(UBUILD)/%.o: $U/%.c
+$(UBUILD)/%.o: $U/%.c $(BUILD_CONFIG)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -285,7 +288,7 @@ QEMUOPTS += -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 # k210
 image = $T/kernel.bin
 k210 = $T/k210.bin
-k210-serialport := /dev/ttyUSB0
+k210-serialport := /dev/ttyUSB1
 
 boot:
 	@sudo chmod 777 $(k210-serialport)
@@ -323,7 +326,5 @@ sdcard: fs
 	@sudo eject $(dev-sd)
 
 # BUG: The baud rate of K210 must be increased.
-download: platform = k210
-download: SCHED = mlfq
 download: fs
 	@python3 tools/burn.py --baud 460800 --board-baud 500000 $(k210-serialport) target/fs.img
