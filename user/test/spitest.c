@@ -17,7 +17,7 @@ main(void)
   uint32 clk_rate = 1000000;
   uint8 cmd = CMD_JEDEC_ID;
   uint8 rx[3];
-  struct spidev_transfer xfer;
+  struct spi_ioc_transfer xfer[2];
   int fd;
   int fails = 0;
 
@@ -36,12 +36,13 @@ main(void)
     exit(1);
   }
 
-  xfer.tx_buf = (uint64)&cmd;
-  xfer.rx_buf = (uint64)rx;
-  xfer.len = 4;
-  xfer.cmd_len = 1;
-  if (ioctl(fd, SPI_IOCTL_TRANSFER, (uint64)&xfer) < 0) {
-    printf("FAIL: SPI_IOCTL_TRANSFER\n");
+  memset(xfer, 0, sizeof(xfer));
+  xfer[0].tx_buf = (uint64)&cmd;
+  xfer[0].len = 1;
+  xfer[1].rx_buf = (uint64)rx;
+  xfer[1].len = 3;
+  if (ioctl(fd, SPI_IOC_MESSAGE(2), (uint64)xfer) < 0) {
+    printf("FAIL: SPI_IOC_MESSAGE\n");
     fails++;
   } else {
     printf("JEDEC: %x %x %x\n", rx[0], rx[1], rx[2]);

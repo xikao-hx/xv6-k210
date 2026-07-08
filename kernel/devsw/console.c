@@ -149,6 +149,8 @@ consoleread(int user_dst, uint64 dst, int n)
 void
 consoleintr(int c)
 {
+  static int drop_lf_after_cr;
+
   acquire(&cons.lock);
 
   switch(c){
@@ -158,7 +160,15 @@ consoleintr(int c)
   default:
     if(c != 0 && cons.e-cons.r < INPUT_BUF){
 #ifndef QEMU
-      if(c == '\r') break;     // on k210, "enter" will input \n and \r
+      if(c == '\r') {
+        c = '\n';
+        drop_lf_after_cr = 1;
+      } else if(drop_lf_after_cr && c == '\n') {
+        drop_lf_after_cr = 0;
+        break;
+      } else {
+        drop_lf_after_cr = 0;
+      }
 #else
       c = (c == '\r') ? '\n' : c;
 #endif

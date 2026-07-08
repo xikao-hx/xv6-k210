@@ -6,13 +6,13 @@
 #include "spidev.h"
 #include "utils.h"
 #include "vm.h"
+#include "string.h"
 
-static void
-spi_reset_tmod(spi_device_num_t spi_num)
-{
-  uint8 tmod_off = (spi_num == 3) ? 10 : 8;
-  set_bit(&spi[spi_num]->ctrlr0, 3 << tmod_off, SPI_TMOD_TRANS << tmod_off);
-}
+#define bufsiz 4096
+
+// allocate page for tx and rx data
+uint8 tx_buffer[bufsiz];
+uint8 rx_buffer[bufsiz];
 
 static int
 spidev_read(int user_dst, uint64 dst, int n)
@@ -28,100 +28,133 @@ spidev_write(int user_src, uint64 src, int n)
   return -1;
 }
 
+static struct spi_ioc_transfer *
+spidev_get_ioc_message(uint64 cmd, struct spi_ioc_transfer *u_ioc, uint32 *n_ioc)
+{
+  struct proc *p = myproc();
+
+  struct spi_ioc_transfer *ioc;
+  uint tmp;
+
+  if(_IOC_TYPE(cmd) != SPI_IOC_MAGIC ||
+     _IOC_NR(cmd) != _IOC_NR(SPI_IOC_MESSAGE(0)) ||
+     _IOC_DIR(cmd) != _IOC_WRITE)
+    return 0;
+
+  tmp = _IOC_SIZE(cmd);
+  if((tmp % sizeof(struct spi_ioc_transfer)) != 0)
+    return 0;
+
+  *n_ioc = tmp / sizeof(struct spi_ioc_transfer);
+  if(*n_ioc == 0)
+    return 0;
+
+  ioc = kmalloc(tmp);
+  if (ioc == 0)
+    return 0;
+
+  if (copyin(p->pagetable, (char *)ioc, (uint64)u_ioc, tmp) < 0) {
+    kfree(ioc);
+    return 0;
+  }
+    
+  return ioc;
+}
+
+static int 
+spidev_message(spi_device_num_t spi_num, spi_chip_select_t chip_select, 
+                        struct spi_ioc_transfer *u_xfers, uint32 n_xfers) {
+
+  struct proc *p = myproc();
+  struct spi_transfer k_xfer;
+  struct spi_ioc_transfer *u_tmp;
+  uint32 n, total, off;
+  int status = 0;
+
+  total = 0;
+  off = 0;
+
+  for (n = n_xfers, u_tmp = u_xfers; n; n--, u_tmp++) {
+    total += u_tmp->len;
+    if (total > bufsiz) {
+      status = -1;
+      goto done;
+    }
+
+    if (u_tmp->tx_buf) {
+      if (copyin(p->pagetable, (char *)&tx_buffer[off], u_tmp->tx_buf, u_tmp->len) < 0) {
+        status = -1;
+        goto done;
+      }
+    } else {
+      memset(&tx_buffer[off], 0xff, u_tmp->len);
+    }
+
+    off += u_tmp->len;
+  }
+
+  if(total == 0)
+    goto done;
+
+  k_xfer.tx_buf = tx_buffer;
+  k_xfer.rx_buf = rx_buffer;
+  k_xfer.len = total;
+
+  /* One kernel transfer keeps CS asserted across all message segments. */
+  if(spi_transfer(spi_num, chip_select, &k_xfer, 1) < 0) {
+    status = -1;
+    goto done;
+  }
+
+  off = 0;
+  for (n = n_xfers, u_tmp = u_xfers; n; n--, u_tmp++) {
+    if (u_tmp->rx_buf) {
+      if (copyout(p->pagetable, u_tmp->rx_buf, (char *)&rx_buffer[off], u_tmp->len) < 0) {
+        status = -1;
+        goto done;
+      }
+    }
+    off += u_tmp->len;
+  }
+  status = total;
+
+done:
+  return status;
+}
+
 static int
 spidev_ioctl(int minor, uint64 cmd, uint64 arg)
 {
+  int ret = 0;
   struct proc *p = myproc();
   spi_device_num_t spi_bus = SPI_MINOR_BUS(minor);
   spi_chip_select_t chip_sel = SPI_MINOR_CS(minor);
+  uint n_ioc;
+  struct spi_ioc_transfer *ioc;
+  uint32 clk_rate;
 
   switch(cmd) {
-  case SPI_IOCTL_INIT: {
-    // arg is the clock rate (uint32 from user)
-    uint32 clk_rate;
-    if(copyin(p->pagetable, (char *)&clk_rate, arg, sizeof(clk_rate)) < 0)
-      return -1;
-    spi_init(spi_bus, SPI_WORK_MODE_0, SPI_FF_STANDARD, 8, 0);
-    return 0;
+    case SPI_IOCTL_INIT:
+
+      if(copyin(p->pagetable, (char *)&clk_rate, arg, sizeof(clk_rate)) < 0)
+        return -1;
+      (void)clk_rate;
+      spi_init(spi_bus, SPI_WORK_MODE_0, SPI_FF_STANDARD, 8, 0);
+      break;
+
+    default:
+      ioc = spidev_get_ioc_message(cmd, (struct spi_ioc_transfer *)arg, &n_ioc);
+      if (!ioc)
+        return -1;
+
+      if(!n_ioc)
+        break;
+
+      ret = spidev_message(spi_bus, chip_sel, ioc, n_ioc);
+      kfree(ioc);
   }
 
-  case SPI_IOCTL_TRANSFER: {
-    struct spidev_transfer xfer;
-    if(copyin(p->pagetable, (char *)&xfer, arg, sizeof(xfer)) < 0)
-      return -1;
-
-    if(xfer.len == 0)
-      return 0;
-
-    // allocate page for tx data (if any)
-    uint8 *tx_buf = 0;
-    if(xfer.tx_buf != 0) {
-      tx_buf = kalloc_page();
-      if(tx_buf == 0)
-        return -1;
-      if(xfer.len > 4096)
-        xfer.len = 4096;
-      if(copyin(p->pagetable, (char *)tx_buf, xfer.tx_buf, xfer.len) < 0) {
-        kfree_page(tx_buf);
-        return -1;
-      }
-    }
-
-    // allocate page for combined command+data (DMA needs contiguous)
-    uint8 *dma_buf = kalloc_page();
-    if(dma_buf == 0) {
-      if(tx_buf) kfree_page(tx_buf);
-      return -1;
-    }
-
-    // track actual rx length for copyout
-    uint32 rx_copy_len = 0;
-
-    if(xfer.tx_buf != 0) {
-      if(xfer.rx_buf != 0) {
-        // EEROM mode: send cmd_len bytes from tx_buf as command+address,
-        // then receive (len - cmd_len) bytes into dma_buf (CS stays asserted).
-        uint32 cmd_len = xfer.cmd_len ? xfer.cmd_len : xfer.len;
-        uint32 rx_len = (xfer.len > cmd_len) ? (xfer.len - cmd_len) : 0;
-        if(rx_len > 4096) rx_len = 4096;
-        if(cmd_len > xfer.len) cmd_len = xfer.len;
-
-        if(rx_len > 0) {
-          spi_receive_data_standard(spi_bus, chip_sel, tx_buf, cmd_len, dma_buf, rx_len);
-          rx_copy_len = rx_len;
-        } else {
-          // command-only transfer
-          spi_reset_tmod(spi_bus);
-          spi_send_data_standard(spi_bus, chip_sel, 0, 0, tx_buf, cmd_len);
-        }
-      } else {
-        // send only
-        spi_reset_tmod(spi_bus);
-        spi_send_data_standard(spi_bus, chip_sel, 0, 0, tx_buf, xfer.len);
-      }
-    } else if(xfer.rx_buf != 0) {
-      // receive only
-      spi_receive_data_standard(spi_bus, chip_sel, 0, 0, dma_buf, xfer.len);
-      rx_copy_len = xfer.len;
-    }
-
-    // copy received data back to user
-    if(rx_copy_len > 0) {
-      if(copyout(p->pagetable, xfer.rx_buf, (char *)dma_buf, rx_copy_len) < 0) {
-        kfree_page(dma_buf);
-        if(tx_buf) kfree_page(tx_buf);
-        return -1;
-      }
-    }
-
-    kfree_page(dma_buf);
-    if(tx_buf) kfree_page(tx_buf);
-    return 0;
-  }
-
-  default:
-    return -1;
-  }
+  return ret;
 }
 
 void

@@ -1,7 +1,5 @@
 #include "gpiohs.h"
 #include "buf.h"
-
-#include "dmac.h"
 #include "printf.h"
 #include "spi.h"
 
@@ -24,22 +22,12 @@ static void sd_lowlevel_init(uint8 spi_index) {
 
 static void sd_write_data(uint8 const *data_buff, uint32 length) {
     spi_init(SPI_DEVICE_0, SPI_WORK_MODE_0, SPI_FF_STANDARD, 8, 0);
-    spi_send_data_standard(SPI_DEVICE_0, SPI_CHIP_SELECT_3, NULL, 0, data_buff, length);
+	spi_write(SPI_DEVICE_0, SPI_CHIP_SELECT_3, data_buff, length);
 }
 
 static void sd_read_data(uint8 *data_buff, uint32 length) {
     spi_init(SPI_DEVICE_0, SPI_WORK_MODE_0, SPI_FF_STANDARD, 8, 0);
-    spi_receive_data_standard(SPI_DEVICE_0, SPI_CHIP_SELECT_3, NULL, 0, data_buff, length);
-}
-
-static void sd_write_data_dma(uint8 const *data_buff, uint32 length) {
-    spi_init(SPI_DEVICE_0, SPI_WORK_MODE_0, SPI_FF_STANDARD, 8, 0);
-	spi_send_data_standard_dma(DMAC_CHANNEL0, SPI_DEVICE_0, SPI_CHIP_SELECT_3, NULL, 0, data_buff, length);
-}
-
-static void sd_read_data_dma(uint8 *data_buff, uint32 length) {
-    spi_init(SPI_DEVICE_0, SPI_WORK_MODE_0, SPI_FF_STANDARD, 8, 0);
-	spi_receive_data_standard_dma(-1, DMAC_CHANNEL0, SPI_DEVICE_0, SPI_CHIP_SELECT_3, NULL, 0, data_buff, length);
+	spi_read(SPI_DEVICE_0, SPI_CHIP_SELECT_3, data_buff, length);
 }
 
 /*
@@ -422,8 +410,8 @@ void sdcard_read_sector(uint8 *buf, int sectorno) {
 	if (0 == timeout) {
 		panic("sdcard: timeout waiting for reading");
 	}
-	// printf("sd_read_data_dma\n");
-	sd_read_data_dma(buf, BSIZE);
+	// printf("sd_read_data\n");
+	sd_read_data(buf, BSIZE);
 	// printf("sd_read_data\n");
 	sd_read_data(dummy_crc, 2);
 	// printf("sd_end_cmd\n");
@@ -460,7 +448,7 @@ void sdcard_write_sector(uint8 *buf, int sectorno) {
 
 	// sending data to be written 
 	sd_write_data(&START_BLOCK_TOKEN, 1);
-	sd_write_data_dma(buf, BSIZE);
+	sd_write_data(buf, BSIZE);
 	sd_write_data(dummy_crc, 2);
 
 	// waiting for sdcard to finish programming 

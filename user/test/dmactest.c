@@ -20,9 +20,9 @@ int
 main(void)
 {
   uint32 clk_rate = 1000000;
-  uint8 tx[4 + TEST_LEN];
+  uint8 tx[4];
   uint8 rx[TEST_LEN];
-  struct spidev_transfer xfer;
+  struct spi_ioc_transfer xfer[2];
   int fd;
   int fails = 0;
 
@@ -45,11 +45,12 @@ main(void)
   tx[0] = CMD_READ_DATA;
   memset(rx, 0, sizeof(rx));
 
-  xfer.tx_buf = (uint64)tx;
-  xfer.rx_buf = (uint64)rx;
-  xfer.len = sizeof(tx);
-  xfer.cmd_len = 4;
-  if (ioctl(fd, SPI_IOCTL_TRANSFER, (uint64)&xfer) < 0) {
+  memset(xfer, 0, sizeof(xfer));
+  xfer[0].tx_buf = (uint64)tx;
+  xfer[0].len = 4;
+  xfer[1].rx_buf = (uint64)rx;
+  xfer[1].len = sizeof(rx);
+  if (ioctl(fd, SPI_IOC_MESSAGE(2), (uint64)xfer) < 0) {
     printf("FAIL: SPI DMA-backed read\n");
     fails++;
   } else {

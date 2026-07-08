@@ -39,12 +39,13 @@ static int w64_init(void) {
 static int w64_read_id(uint8 *mid, uint16 *did) {
   uint8 cmd = CMD_JEDEC_ID;
   uint8 rx[3];
-  struct spidev_transfer xfer;
-  xfer.tx_buf = (uint64)&cmd;
-  xfer.rx_buf = (uint64)rx;
-  xfer.len = 1 + 3;      /* cmd + 3 bytes response */
-  xfer.cmd_len = 1;      /* 1 command byte */
-  if(ioctl(spi_fd, SPI_IOCTL_TRANSFER, (uint64)&xfer) < 0)
+  struct spi_ioc_transfer xfer[2];
+  memset(xfer, 0, sizeof(xfer));
+  xfer[0].tx_buf = (uint64)&cmd;
+  xfer[0].len = 1;     
+  xfer[1].rx_buf = (uint64)rx;
+  xfer[1].len = 3;    
+  if(ioctl(spi_fd, SPI_IOC_MESSAGE(2), (uint64)xfer) < 0)
     return -1;
   *mid = rx[0];
   *did = ((uint16)rx[1] << 8) | rx[2];
@@ -54,12 +55,13 @@ static int w64_read_id(uint8 *mid, uint16 *did) {
 static int w64_read_status(void) {
   uint8 cmd = CMD_READ_STATUS1;
   uint8 rx = 0;
-  struct spidev_transfer xfer;
-  xfer.tx_buf = (uint64)&cmd;
-  xfer.rx_buf = (uint64)&rx;
-  xfer.len = 1 + 1;
-  xfer.cmd_len = 1;
-  if(ioctl(spi_fd, SPI_IOCTL_TRANSFER, (uint64)&xfer) < 0)
+  struct spi_ioc_transfer xfer[2];
+  memset(xfer, 0, sizeof(xfer));
+  xfer[0].tx_buf = (uint64)&cmd;
+  xfer[0].len = 1;
+  xfer[1].rx_buf = (uint64)&rx;
+  xfer[1].len = 1;
+  if(ioctl(spi_fd, SPI_IOC_MESSAGE(2), (uint64)xfer) < 0)
     return -1;
   return rx;
 }
@@ -75,12 +77,11 @@ static void w64_wait_busy(void) {
 
 static void w64_write_enable(void) {
   uint8 cmd = CMD_WRITE_ENABLE;
-  struct spidev_transfer xfer;
+  struct spi_ioc_transfer xfer;
+  memset(&xfer, 0, sizeof(xfer));
   xfer.tx_buf = (uint64)&cmd;
-  xfer.rx_buf = 0;
   xfer.len = 1;
-  xfer.cmd_len = 0;
-  if(ioctl(spi_fd, SPI_IOCTL_TRANSFER, (uint64)&xfer) < 0)
+  if(ioctl(spi_fd, SPI_IOC_MESSAGE(1), (uint64)&xfer) < 0)
     printf("w25q64: write enable failed\n");
 }
 
@@ -90,12 +91,13 @@ static int w64_read_data(uint32 addr, uint8 *buf, uint32 len) {
   cmd[1] = (addr >> 16) & 0xFF;
   cmd[2] = (addr >> 8) & 0xFF;
   cmd[3] = addr & 0xFF;
-  struct spidev_transfer xfer;
-  xfer.tx_buf = (uint64)cmd;
-  xfer.rx_buf = (uint64)buf;
-  xfer.len = 4 + len;
-  xfer.cmd_len = 4;
-  return ioctl(spi_fd, SPI_IOCTL_TRANSFER, (uint64)&xfer);
+  struct spi_ioc_transfer xfer[2];
+  memset(xfer, 0, sizeof(xfer));
+  xfer[0].tx_buf = (uint64)cmd;
+  xfer[0].len = 4;
+  xfer[1].rx_buf = (uint64)buf;
+  xfer[1].len = len;
+  return ioctl(spi_fd, SPI_IOC_MESSAGE(2), (uint64)xfer);
 }
 
 static int w64_sector_erase(uint32 addr) {
@@ -105,12 +107,11 @@ static int w64_sector_erase(uint32 addr) {
   cmd[1] = (addr >> 16) & 0xFF;
   cmd[2] = (addr >> 8) & 0xFF;
   cmd[3] = addr & 0xFF;
-  struct spidev_transfer xfer;
+  struct spi_ioc_transfer xfer;
+  memset(&xfer, 0, sizeof(xfer));
   xfer.tx_buf = (uint64)cmd;
-  xfer.rx_buf = 0;
   xfer.len = 4;
-  xfer.cmd_len = 0;
-  int ret = ioctl(spi_fd, SPI_IOCTL_TRANSFER, (uint64)&xfer);
+  int ret = ioctl(spi_fd, SPI_IOC_MESSAGE(1), (uint64)&xfer);
   w64_wait_busy();
   return ret;
 }
@@ -128,12 +129,11 @@ static int w64_page_program(uint32 addr, uint8 *data, uint32 len) {
   buf[3] = addr & 0xFF;
   for(uint32 i = 0; i < len; i++)
     buf[4 + i] = data[i];
-  struct spidev_transfer xfer;
+  struct spi_ioc_transfer xfer;
+  memset(&xfer, 0, sizeof(xfer));
   xfer.tx_buf = (uint64)buf;
-  xfer.rx_buf = 0;
   xfer.len = 4 + len;
-  xfer.cmd_len = 0;
-  int ret = ioctl(spi_fd, SPI_IOCTL_TRANSFER, (uint64)&xfer);
+  int ret = ioctl(spi_fd, SPI_IOC_MESSAGE(1), (uint64)&xfer);
   w64_wait_busy();
   return ret;
 }

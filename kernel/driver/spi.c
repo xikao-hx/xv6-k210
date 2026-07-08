@@ -1,21 +1,52 @@
 // SPI Protocol Implementation
-
-#include "memlayout.h"
+#include "riscv.h"
 #include "dmac.h"
 #include "kalloc.h"
 #include "spi.h"
 #include "string.h"
 #include "sysctl.h"
 #include "utils.h"
+#include "stdbool.h"
+#include "kalloc.h"
+#include "spi_config.h"
 
 #define DMAC_WAIT_TIMEOUT 10000UL
+#define SPI_POLL_WAIT_TIMEOUT 10000000UL
+#define SPI_FIFO_DEPTH 32
+#define SPI_DMA_WML 16
 
-volatile spi_t *const spi[4] =
-    {
-        (volatile spi_t *)SPI0_V,
-        (volatile spi_t *)SPI1_V,
-        (volatile spi_t *)SPI_SLAVE_V,
-        (volatile spi_t *)SPI2_V};
+#define DW_SPI_BUF_RX(type)						\
+static void spi_dw_buf_rx_##type(struct spi_dw_data *spi_dw)		\
+{									\
+	unsigned int val = spi[spi_dw->index]->dr[0];	\
+									\
+	if (spi_dw->rx_buf) {						\
+		*(type *)spi_dw->rx_buf = val;				\
+		spi_dw->rx_buf += sizeof(type);			\
+	}								\
+}
+
+#define DW_SPI_BUF_TX(type)						\
+static void spi_dw_buf_tx_##type(struct spi_dw_data *spi_dw)		\
+{									\
+	type val = 0;							\
+									\
+	if (spi_dw->tx_buf) {						\
+		val = *(type *)spi_dw->tx_buf;				\
+		spi_dw->tx_buf += sizeof(type);			\
+	}								\
+									\
+	spi_dw->count -= sizeof(type);					\
+									\
+	spi[spi_dw->index]->dr[0] = val;			\
+}
+
+DW_SPI_BUF_RX(uint8)
+DW_SPI_BUF_TX(uint8)
+DW_SPI_BUF_RX(uint16)
+DW_SPI_BUF_TX(uint16)
+DW_SPI_BUF_RX(uint32)
+DW_SPI_BUF_TX(uint32)
 
 static int spi_clk_init(uint8 spi_num)
 {
@@ -25,6 +56,26 @@ static int spi_clk_init(uint8 spi_num)
     sysctl_clock_enable(SYSCTL_CLOCK_SPI0 + spi_num);
     sysctl_clock_set_threshold(SYSCTL_THRESHOLD_SPI0 + spi_num, 0);
     return 0;
+}
+
+static void spi_set_tmod(uint8 spi_num, uint32 tmod)
+{
+    // configASSERT(spi_num < SPI_DEVICE_MAX);
+    volatile spi_t *spi_handle = spi[spi_num];
+    uint8 tmod_offset = 0;
+    switch(spi_num)
+    {
+        case 0:
+        case 1:
+        case 2:
+            tmod_offset = 8;
+            break;
+        case 3:
+        default:
+            tmod_offset = 10;
+            break;
+    }
+    set_bit(&spi_handle->ctrlr0, 3 << tmod_offset, tmod << tmod_offset);
 }
 
 void spi_init(spi_device_num_t spi_num, spi_work_mode_t work_mode, spi_frame_format_t frame_format,
@@ -71,7 +122,7 @@ void spi_init(spi_device_num_t spi_num, spi_work_mode_t work_mode, spi_frame_for
         default:
             break;
     }
-    volatile spi_t *spi_adapter = spi[spi_num];
+    volatile spi_t *const spi_adapter = spi[spi_num];
     if(spi_adapter->baudr == 0)
         spi_adapter->baudr = 0x14;
     spi_adapter->imr = 0x00;
@@ -83,31 +134,32 @@ void spi_init(spi_device_num_t spi_num, spi_work_mode_t work_mode, spi_frame_for
     spi_adapter->ctrlr0 = (work_mode << work_mode_offset) | (frame_format << frf_offset) | ((data_bit_length - 1) << dfs_offset);
     spi_adapter->spi_ctrlr0 = 0;
     spi_adapter->endian = endian;
+    
+    spi_set_tmod(spi_num, SPI_TMOD_TRANS_RECV);
+
+    spi_dw[spi_num]->dma_enable = true;
 }
 
-
-static void spi_set_tmod(uint8 spi_num, uint32 tmod)
+static spi_transfer_width_t spi_get_frame_size(spi_device_num_t spi_num, volatile spi_t *spi_handle)
 {
-    // configASSERT(spi_num < SPI_DEVICE_MAX);
-    volatile spi_t *spi_handle = spi[spi_num];
-    uint8 tmod_offset = 0;
+    uint8 dfs_offset = 0;
+    uint32 data_bit_length = 0;
     switch(spi_num)
     {
         case 0:
         case 1:
+            dfs_offset = 16;
+            break;
         case 2:
-            tmod_offset = 8;
+            // configASSERT(!"Spi Bus 2 Not Support!");
             break;
         case 3:
         default:
-            tmod_offset = 10;
+            dfs_offset = 0;
             break;
     }
-    set_bit(&spi_handle->ctrlr0, 3 << tmod_offset, tmod << tmod_offset);
-}
 
-static spi_transfer_width_t spi_get_frame_size(uint64 data_bit_length)
-{
+    data_bit_length = (spi_handle->ctrlr0 >> dfs_offset) & 0x1F;
     if(data_bit_length < 8)
         return SPI_TRANS_CHAR;
     else if(data_bit_length < 16)
@@ -115,473 +167,278 @@ static spi_transfer_width_t spi_get_frame_size(uint64 data_bit_length)
     return SPI_TRANS_INT;
 }
 
-void spi_send_data_normal(spi_device_num_t spi_num, spi_chip_select_t chip_select, const uint8 *tx_buff, uint64 tx_len)
-{
-    // configASSERT(spi_num < SPI_DEVICE_MAX && spi_num != 2);
+static int spi_dw_poll_transfer(spi_device_num_t spi_num, struct spi_transfer *transfer) {
+    
+    struct spi_dw_data *spi_data = spi_dw[spi_num];
+    volatile spi_t *spi_handle = spi[spi_data->index];
+    spi_transfer_width_t frame_width = spi_get_frame_size(spi_num, spi_handle);
+    uint64 tx_len = 0, rx_len = 0;
+    uint64 fifo_len, idle;
+    int progress;
 
-    uint64 index, fifo_len;
-    spi_set_tmod(spi_num, SPI_TMOD_TRANS);
-
-    volatile spi_t *spi_handle = spi[spi_num];
-
-    // uint8 dfs_offset;
-    uint8 dfs_offset = 0;
-    switch(spi_num)
-    {
-        case 0:
-        case 1:
-            dfs_offset = 16;
-            break;
-        case 2:
-            // configASSERT(!"Spi Bus 2 Not Support!");
-            break;
-        case 3:
-        default:
-            dfs_offset = 0;
-            break;
+    spi_data->tx_buf = transfer->tx_buf;
+    spi_data->rx_buf = transfer->rx_buf;
+    spi_data->count = transfer->len;
+    
+    if (!spi_data->tx_buf) {
+        spi_data->tx_buf = kmalloc(spi_data->count);
     }
-    uint32 data_bit_length = (spi_handle->ctrlr0 >> dfs_offset) & 0x1F;
-    spi_transfer_width_t frame_width = spi_get_frame_size(data_bit_length);
 
-    uint8 v_misalign_flag = 0;
-    uint32 v_send_data;
-    /* check the addr aligen */
-    if((uintptr_t)tx_buff % frame_width)
-        v_misalign_flag = 1;
+    if((spi_data->count % frame_width) != 0)
+        return -1;
 
+    tx_len = rx_len = spi_data->count / frame_width;
+
+    spi_handle->ctrlr1 = (uint32)(tx_len - 1);
     spi_handle->ssienr = 0x01;
-    spi_handle->ser = 1U << chip_select;
-    uint32 i = 0;
-    while(tx_len)
-    {
-        fifo_len = 32 - spi_handle->txflr;
-        fifo_len = fifo_len < tx_len ? fifo_len : tx_len;
-        switch(frame_width)
-        {
-            case SPI_TRANS_INT:
-                fifo_len = fifo_len / 4 * 4;
-                if(v_misalign_flag)
-                {
-                    for(index = 0; index < fifo_len; index += 4)
-                    {
-                        // memcpy(&v_send_data, tx_buff + i, 4);
-                        /* use temp variable to ensure the addr aligen  */
-                        memmove(&v_send_data, tx_buff + i, 4);
-                        spi_handle->dr[0] = v_send_data;
-                        i += 4;
-                    }
-                } else
-                {
-                    for(index = 0; index < fifo_len / 4; index++)
-                        spi_handle->dr[0] = ((uint32 *)tx_buff)[i++];
-                }
-                break;
-            case SPI_TRANS_SHORT:
-                fifo_len = fifo_len / 2 * 2;
-                if(v_misalign_flag)
-                {
-                    for(index = 0; index < fifo_len; index += 2)
-                    {
-                        // memcpy(&v_send_data, tx_buff + i, 2);
-                        memmove(&v_send_data, tx_buff + i, 2);
-                        spi_handle->dr[0] = v_send_data;
-                        i += 2;
-                    }
-                } else
-                {
-                    for(index = 0; index < fifo_len / 2; index++)
-                        spi_handle->dr[0] = ((uint16 *)tx_buff)[i++];
-                }
-                break;
-            default:
-                for(index = 0; index < fifo_len; index++)
-                    spi_handle->dr[0] = tx_buff[i++];
-                break;
-        }
-        tx_len -= fifo_len;
-    }
-    while((spi_handle->sr & 0x05) != 0x04)
-        ;
-    spi_handle->ser = 0x00;
-    spi_handle->ssienr = 0x00;
-}
+    spi_handle->ser = 1U << spi_data->chip_select;
 
-void spi_send_data_standard(spi_device_num_t spi_num, spi_chip_select_t chip_select, const uint8 *cmd_buff,
-                            uint64 cmd_len, const uint8 *tx_buff, uint64 tx_len)
-{
-    // configASSERT(spi_num < SPI_DEVICE_MAX && spi_num != 2);
-    // uint8 *v_buf = malloc(cmd_len + tx_len);
-    uint8 *v_buf = kalloc_page();
-    uint64 i;
-    for(i = 0; i < cmd_len; i++)
-        v_buf[i] = cmd_buff[i];
-    for(i = 0; i < tx_len; i++)
-        v_buf[cmd_len + i] = tx_buff[i];
+    /*
+     * SPI is full-duplex.  Drain RX while feeding TX so reads longer than the
+     * 32-frame FIFO cannot overflow and leave the receive loop stuck forever.
+     */
+    idle = 0;
+    while(rx_len) {
+        progress = 0;
 
-    spi_send_data_normal(spi_num, chip_select, v_buf, cmd_len + tx_len);
-    // free((void *)v_buf);
-    kfree_page((void *)v_buf);
-}
-
-void spi_receive_data_standard(spi_device_num_t spi_num, spi_chip_select_t chip_select, const uint8 *cmd_buff,
-                               uint64 cmd_len, uint8 *rx_buff, uint64 rx_len)
-{
-    // configASSERT(spi_num < SPI_DEVICE_MAX && spi_num != 2);
-    uint64 index, fifo_len;
-    if(cmd_len == 0)
-        spi_set_tmod(spi_num, SPI_TMOD_RECV);
-    else
-        spi_set_tmod(spi_num, SPI_TMOD_EEROM);
-    volatile spi_t *spi_handle = spi[spi_num];
-
-    // uint8 dfs_offset;
-    uint8 dfs_offset = 0;
-    switch(spi_num)
-    {
-        case 0:
-        case 1:
-            dfs_offset = 16;
-            break;
-        case 2:
-            // configASSERT(!"Spi Bus 2 Not Support!");
-            break;
-        case 3:
-        default:
-            dfs_offset = 0;
-            break;
-    }
-    uint32 data_bit_length = (spi_handle->ctrlr0 >> dfs_offset) & 0x1F;
-    spi_transfer_width_t frame_width = spi_get_frame_size(data_bit_length);
-
-    uint32 i = 0;
-    uint64 v_cmd_len = cmd_len / frame_width;
-    uint32 v_rx_len = rx_len / frame_width;
-
-    spi_handle->ctrlr1 = (uint32)(v_rx_len - 1);
-    spi_handle->ssienr = 0x01;
-
-    while(v_cmd_len)
-    {
-        /* max len is fifi size */
-        fifo_len = 32 - spi_handle->txflr;
-        fifo_len = fifo_len < v_cmd_len ? fifo_len : v_cmd_len;
-        switch(frame_width)
-        {
-            case SPI_TRANS_INT:
-                /* press fifo */
-                for(index = 0; index < fifo_len; index++)
-                    spi_handle->dr[0] = ((uint32 *)cmd_buff)[i++];
-                break;
-            case SPI_TRANS_SHORT:
-                for(index = 0; index < fifo_len; index++)
-                    spi_handle->dr[0] = ((uint16 *)cmd_buff)[i++];
-                break;
-            default:
-                for(index = 0; index < fifo_len; index++)
-                    spi_handle->dr[0] = cmd_buff[i++];
-                break;
-        }
-        spi_handle->ser = 1U << chip_select;
-        v_cmd_len -= fifo_len;
-    }
-
-    if(cmd_len == 0)
-    {
-        spi_handle->dr[0] = 0xffffffff;
-        spi_handle->ser = 1U << chip_select;
-    }
-
-    i = 0;
-    while(v_rx_len)
-    {
         fifo_len = spi_handle->rxflr;
-        fifo_len = fifo_len < v_rx_len ? fifo_len : v_rx_len;
-        switch(frame_width)
-        {
-            case SPI_TRANS_INT:
-                for(index = 0; index < fifo_len; index++)
-                    ((uint32 *)rx_buff)[i++] = spi_handle->dr[0];
-                break;
-            case SPI_TRANS_SHORT:
-                for(index = 0; index < fifo_len; index++)
-                    ((uint16 *)rx_buff)[i++] = (uint16)spi_handle->dr[0];
-                break;
-            default:
-                for(index = 0; index < fifo_len; index++)
-                    rx_buff[i++] = (uint8)spi_handle->dr[0];
-                break;
+        while(fifo_len && rx_len) {
+            switch(frame_width)
+            {
+                case SPI_TRANS_CHAR:
+                    spi_dw_buf_rx_uint8(spi_data);
+                    break;
+                case SPI_TRANS_SHORT:
+                    spi_dw_buf_rx_uint16(spi_data);
+                    break;
+                case SPI_TRANS_INT:
+                default:
+                    spi_dw_buf_rx_uint32(spi_data);
+                    break;
+            }
+            fifo_len--;
+            rx_len--;
+            progress = 1;
         }
 
-        v_rx_len -= fifo_len;
+        fifo_len = SPI_FIFO_DEPTH - spi_handle->txflr;
+        while(fifo_len && tx_len) {
+            switch(frame_width)
+            {
+                case SPI_TRANS_CHAR:
+                    spi_dw_buf_tx_uint8(spi_data);
+                    break;
+                case SPI_TRANS_SHORT:
+                    spi_dw_buf_tx_uint16(spi_data);
+                    break;
+                case SPI_TRANS_INT:
+                default:
+                    spi_dw_buf_tx_uint32(spi_data);
+                    break;
+            }
+            fifo_len--;
+            tx_len--;
+            progress = 1;
+        }
+
+        if(progress) {
+            idle = 0;
+        } else if(++idle > SPI_POLL_WAIT_TIMEOUT) {
+            spi_handle->ser = 0x00;
+            spi_handle->ssienr = 0x00;
+            return -1;
+        }
     }
 
     spi_handle->ser = 0x00;
     spi_handle->ssienr = 0x00;
+
+    return 0;
 }
 
-static spi_frame_format_t spi_get_frame_format(spi_device_num_t spi_num)
-{
-    uint8 frf_offset = 0;
-    switch(spi_num)
-    {
-        case 0:
-        case 1:
-            frf_offset = 21;
-            break;
-        case 2:
-            // configASSERT(!"Spi Bus 2 Not Support!");
-            break;
-        case 3:
-        default:
-            frf_offset = 22;
-            break;
-    }
-    volatile spi_t *spi_adapter = spi[spi_num];
-    return ((spi_adapter->ctrlr0 >> frf_offset) & 0x3);
-}
+static int spi_dw_dma_xfer(spi_device_num_t spi_num, const void *tx_buf, 
+                            void *rx_buf, uint64 len) {
+    
+    struct spi_dw_data *spi_data = spi_dw[spi_num];
+    volatile spi_t *spi_handle = spi[spi_data->index];
 
-void spi_receive_data_normal_dma(dmac_channel_number_t dma_send_channel_num,
-                                 dmac_channel_number_t dma_receive_channel_num,
-                                 spi_device_num_t spi_num, spi_chip_select_t chip_select, const void *cmd_buff,
-                                 uint64 cmd_len, void *rx_buff, uint64 rx_len)
-{
-    // configASSERT(spi_num < SPI_DEVICE_MAX && spi_num != 2);
-
-    /* set up transfer pattern */
-    if(cmd_len == 0)
-        spi_set_tmod(spi_num, SPI_TMOD_RECV);    // only receive
-    else
-        spi_set_tmod(spi_num, SPI_TMOD_EEROM);   // receive and send
-
-    volatile spi_t *spi_handle = spi[spi_num];
- 
-    /* configuration spi controller register */
-    spi_handle->ctrlr1 = (uint32)(rx_len - 1);   // set receive data len
+    spi_handle->ctrlr1 = (uint32)(len - 1);   // set receive data len
     spi_handle->dmacr = 0x3;                     // enable send and receive dma
     spi_handle->ssienr = 0x01;                   // enable spi controller
 
     /* configuration dma request source */
-    if(cmd_len)
-        sysctl_dma_select((sysctl_dma_channel_t)dma_send_channel_num, SYSCTL_DMA_SELECT_SSI0_TX_REQ + spi_num * 2);
-    sysctl_dma_select((sysctl_dma_channel_t)dma_receive_channel_num, SYSCTL_DMA_SELECT_SSI0_RX_REQ + spi_num * 2);
+    sysctl_dma_select((sysctl_dma_channel_t)spi_data->chan_tx, SYSCTL_DMA_SELECT_SSI0_TX_REQ + spi_num * 2);
+    sysctl_dma_select((sysctl_dma_channel_t)spi_data->chan_rx, SYSCTL_DMA_SELECT_SSI0_RX_REQ + spi_num * 2);
 
     /* configuration dma transfer */
-    dmac_set_single_mode(dma_receive_channel_num, (void *)(&spi_handle->dr[0]), rx_buff, DMAC_ADDR_NOCHANGE, DMAC_ADDR_INCREMENT,
-                         DMAC_MSIZE_1, DMAC_TRANS_WIDTH_32, rx_len);
-    if(cmd_len)
-        dmac_set_single_mode(dma_send_channel_num, cmd_buff, (void *)(&spi_handle->dr[0]), DMAC_ADDR_INCREMENT, DMAC_ADDR_NOCHANGE,
-                             DMAC_MSIZE_4, DMAC_TRANS_WIDTH_32, cmd_len);
-
-    /* only receive & standard mode: trigger transfer */
-    if(cmd_len == 0 && spi_get_frame_format(spi_num) == SPI_FF_STANDARD)
-        spi[spi_num]->dr[0] = 0xffffffff;
+    dmac_set_single_mode(spi_data->chan_rx, (void *)(&spi_handle->dr[0]), rx_buf, DMAC_ADDR_NOCHANGE, DMAC_ADDR_INCREMENT,
+                         DMAC_MSIZE_1, DMAC_TRANS_WIDTH_32, len);
+    dmac_set_single_mode(spi_data->chan_tx, tx_buf, (void *)(&spi_handle->dr[0]), DMAC_ADDR_INCREMENT, DMAC_ADDR_NOCHANGE,
+                             DMAC_MSIZE_4, DMAC_TRANS_WIDTH_32, len);
 
     /* start transfer: set select chip low */
-    spi_handle->ser = 1U << chip_select;
+    spi_handle->ser = 1U << spi_data->chip_select;
     
     /* wait dma trasfer finish */
-    if(cmd_len)
-        dmac_wait_done(dma_send_channel_num, DMAC_WAIT_TIMEOUT);
-    dmac_wait_done(dma_receive_channel_num, DMAC_WAIT_TIMEOUT);
+    dmac_wait_done(spi_data->chan_tx, DMAC_WAIT_TIMEOUT);
+    dmac_wait_done(spi_data->chan_rx, DMAC_WAIT_TIMEOUT);
 
     /* transfer clear work */
     spi_handle->ser = 0x00;      // cancel select chip
     spi_handle->ssienr = 0x00;   // forbid spi controller
+
+    return 0;
 }
 
-void spi_send_data_normal_dma(dmac_channel_number_t channel_num, spi_device_num_t spi_num,
-                              spi_chip_select_t chip_select,
-                              const void *tx_buff, uint64 tx_len, spi_transfer_width_t spi_transfer_width)
-{
-    // configASSERT(spi_num < SPI_DEVICE_MAX && spi_num != 2);
-    /* only send */
-    spi_set_tmod(spi_num, SPI_TMOD_TRANS);
-    volatile spi_t *spi_handle = spi[spi_num];
-    uint32 *buf;
-    int i;
-    switch(spi_transfer_width)
-    {
-        case SPI_TRANS_SHORT:
-            // buf = malloc((tx_len) * sizeof(uint32));
-            buf = kalloc_page();
-            for(i = 0; i < tx_len; i++)
-                buf[i] = ((uint16 *)tx_buff)[i];
-            break;
-        case SPI_TRANS_INT:
-            buf = (uint32 *)tx_buff;
-            break;
-        case SPI_TRANS_CHAR:
-        default:
-            buf = kalloc_page();
-            for(i = 0; i < tx_len; i++)
-                buf[i] = ((uint8 *)tx_buff)[i];
-            break;
-    }
-    spi_handle->dmacr = 0x2; /*enable dma transmit*/
-    spi_handle->ssienr = 0x01;
+static int spi_dw_dma_transfer(spi_device_num_t spi_num, struct spi_transfer *transfer) {
 
-    sysctl_dma_select((sysctl_dma_channel_t)channel_num, SYSCTL_DMA_SELECT_SSI0_TX_REQ + spi_num * 2);
-    dmac_set_single_mode(channel_num, buf, (void *)(&spi_handle->dr[0]), DMAC_ADDR_INCREMENT, DMAC_ADDR_NOCHANGE,
-                         DMAC_MSIZE_4, DMAC_TRANS_WIDTH_32, tx_len);
-    spi_handle->ser = 1U << chip_select;
-    dmac_wait_done(channel_num, DMAC_WAIT_TIMEOUT);
-    if(spi_transfer_width != SPI_TRANS_INT)
-        kfree_page((void *)buf);
-
-    /* wait spi bus idle */
-    // sr: bit 0 -> send fifi not empty; bit 1 -> spi bus busy flag
-    while((spi_handle->sr & 0x05) != 0x04)
-        ;
-    spi_handle->ser = 0x00;
-    spi_handle->ssienr = 0x00;
-}
-
-void spi_receive_data_standard_dma(dmac_channel_number_t dma_send_channel_num,
-                                   dmac_channel_number_t dma_receive_channel_num,
-                                   spi_device_num_t spi_num, spi_chip_select_t chip_select, const uint8 *cmd_buff,
-                                   uint64 cmd_len, uint8 *rx_buff, uint64 rx_len)
-{
-    // configASSERT(spi_num < SPI_DEVICE_MAX && spi_num != 2);
-    volatile spi_t *spi_handle = spi[spi_num];
-
-    /* read control register to get data frame width */
-    uint8 dfs_offset = 0;
-    switch(spi_num)
-    {
-        case 0:
-        case 1:
-            dfs_offset = 16;    // SPI0/1 use bit 16-20
-            break;
-        case 2:
-            // configASSERT(!"Spi Bus 2 Not Support!");
-            break;
-        case 3:
-        default:
-            dfs_offset = 0;     // SPI3 use bit 0-4
-            break;
-    }
-    uint32 data_bit_length = (spi_handle->ctrlr0 >> dfs_offset) & 0x1F;
-    spi_transfer_width_t frame_width = spi_get_frame_size(data_bit_length);
-
-    uint64 i;
+    struct spi_dw_data *spi_data = spi_dw[spi_num];
+    volatile spi_t *spi_handle = spi[spi_data->index];
+    spi_transfer_width_t frame_width = spi_get_frame_size(spi_num, spi_handle);
+    uint64 len = transfer->len;
+    const uint8 *tx_buf = transfer->tx_buf;
+    uint8 *rx_buf = transfer->rx_buf;
+    uint64 i, count = 0;
 
     /* alloc dma data buffer to send command data and receive data */
-    uint32 *write_cmd;
+    uint32 *write_cmd = kalloc_page();  ;
     uint32 *read_buf;
-    uint64 v_recv_len;
-    uint64 v_cmd_len;
     
     /* according to frame width reorganization data */
     switch(frame_width)
-    {
+    {  
+          
         case SPI_TRANS_INT:
-            write_cmd = kalloc_page();    
             // copy data: solve addr aligen and convert data len to 32bit
-            for(i = 0; i < cmd_len / 4; i++)
-                write_cmd[i] = ((uint32 *)cmd_buff)[i];
+            for(i = 0; i < len / 4; i++)
+                write_cmd[i] = ((uint32 *)tx_buf)[i];
             read_buf = &write_cmd[i];
-            v_recv_len = rx_len / 4;
-            v_cmd_len = cmd_len / 4;
+            count = len / 4;
             break;
         case SPI_TRANS_SHORT:
-            write_cmd = kalloc_page();
-            for(i = 0; i < cmd_len / 2; i++)
-                write_cmd[i] = ((uint16 *)cmd_buff)[i];
+            for(i = 0; i < len / 2; i++)
+                write_cmd[i] = ((uint16 *)tx_buf)[i];
             read_buf = &write_cmd[i];
-            v_recv_len = rx_len / 2;
-            v_cmd_len = cmd_len / 2;
+            count = len / 2;
             break;
         default:
-            write_cmd = kalloc_page();
-            for(i = 0; i < cmd_len; i++)
-                write_cmd[i] = cmd_buff[i];
+            for(i = 0; i < len; i++)
+                write_cmd[i] = tx_buf[i];
             read_buf = &write_cmd[i];
-            v_recv_len = rx_len;
-            v_cmd_len = cmd_len;
+            count = len;
             break;
     }
-
-    /* dma transfer */
-    spi_receive_data_normal_dma(dma_send_channel_num, dma_receive_channel_num, spi_num, chip_select, write_cmd, v_cmd_len, read_buf, v_recv_len);
     
-    /* according to frame width reorganization receive data */
+    spi_dw_dma_xfer(spi_num, write_cmd, read_buf, count);
+
     switch(frame_width)
     {
         case SPI_TRANS_INT:
-            for(i = 0; i < v_recv_len; i++)
-                ((uint32 *)rx_buff)[i] = read_buf[i];
+            for(i = 0; i < count; i++)
+                ((uint32 *)rx_buf)[i] = read_buf[i];
             break;
         case SPI_TRANS_SHORT:
-            for(i = 0; i < v_recv_len; i++)
-                ((uint16 *)rx_buff)[i] = read_buf[i];
+            for(i = 0; i < count; i++)
+                ((uint16 *)rx_buf)[i] = read_buf[i];
             break;
         default:
-            for(i = 0; i < v_recv_len; i++)
-                rx_buff[i] = read_buf[i];
+            for(i = 0; i < count; i++)
+                rx_buf[i] = read_buf[i];
             break;
     }
 
     kfree_page(write_cmd);
+
+    return 0;
 }
 
-void spi_send_data_standard_dma(dmac_channel_number_t channel_num, spi_device_num_t spi_num,
-                                spi_chip_select_t chip_select,
-                                const uint8 *cmd_buff, uint64 cmd_len, const uint8 *tx_buff, uint64 tx_len)
+static bool spi_can_dma(spi_device_num_t spi_num, struct spi_transfer *transfer)
 {
-    // configASSERT(spi_num < SPI_DEVICE_MAX && spi_num != 2);
+    struct spi_dw_data *spi_data = spi_dw[spi_num];
+    spi_transfer_width_t frame_width;
+    uint32 dma_unit;
+    uint64 frames;
 
-    volatile spi_t *spi_handle = spi[spi_num];
+    if(!spi_data->dma_enable || !transfer)
+        return false;
 
-    uint8 dfs_offset = 0;
-    switch(spi_num)
-    {
-        case 0:
-        case 1:
-            dfs_offset = 16;
-            break;
-        case 2:
-            // configASSERT(!"Spi Bus 2 Not Support!");
-            break;
-        case 3:
-        default:
-            dfs_offset = 0;
+    if(!transfer->tx_buf || !transfer->rx_buf)
+        return false;
+
+    frame_width = spi_get_frame_size(spi_num, spi[spi_data->index]);
+    if(frame_width != SPI_TRANS_CHAR &&
+       frame_width != SPI_TRANS_SHORT &&
+       frame_width != SPI_TRANS_INT)
+        return false;
+
+    dma_unit = SPI_DMA_WML * frame_width;
+    if(transfer->len < dma_unit)
+        return false;
+
+    if(transfer->len % dma_unit)
+        return false;
+
+    frames = transfer->len / frame_width;
+    if(frames * 2 * sizeof(uint32) > PGSIZE)
+        return false;
+
+    return true;
+}
+
+int spi_transfer(spi_device_num_t spi_num, spi_chip_select_t chip_select, 
+    struct spi_transfer *xfers, uint64 num) {
+
+    int ret = 0;
+    struct spi_dw_data *spi_data = spi_dw[spi_num];
+
+    spi_data->chip_select = chip_select;
+
+    for (int i = 0; i < num; i ++) {
+        if (spi_can_dma(spi_num, &xfers[i])) {
+            ret = spi_dw_dma_transfer(spi_num, &xfers[i]);
+        } else {
+            ret = spi_dw_poll_transfer(spi_num, &xfers[i]);
+        }
+        if(ret < 0)
             break;
     }
-    uint32 data_bit_length = (spi_handle->ctrlr0 >> dfs_offset) & 0x1F;
-    spi_transfer_width_t frame_width = spi_get_frame_size(data_bit_length);
+    
+    return ret;
+}
 
-    uint32 *buf;
-    uint64 v_send_len;
-    int i;
-    switch(frame_width)
-    {
-        case SPI_TRANS_INT:
-            buf = kalloc_page();
-            for(i = 0; i < cmd_len / 4; i++)
-                buf[i] = ((uint32 *)cmd_buff)[i];
-            for(i = 0; i < tx_len / 4; i++)
-                buf[cmd_len / 4 + i] = ((uint32 *)tx_buff)[i];
-            v_send_len = (cmd_len + tx_len) / 4;
-            break;
-        case SPI_TRANS_SHORT:
-            buf = kalloc_page();
-            for(i = 0; i < cmd_len / 2; i++)
-                buf[i] = ((uint16 *)cmd_buff)[i];
-            for(i = 0; i < tx_len / 2; i++)
-                buf[cmd_len / 2 + i] = ((uint16 *)tx_buff)[i];
-            v_send_len = (cmd_len + tx_len) / 2;
-            break;
-        default:
-            buf = kalloc_page();
-            for(i = 0; i < cmd_len; i++)
-                buf[i] = cmd_buff[i];
-            for(i = 0; i < tx_len; i++)
-                buf[cmd_len + i] = tx_buff[i];
-            v_send_len = cmd_len + tx_len;
-            break;
-    }
+int spi_write(spi_device_num_t spi_num, spi_chip_select_t chip_select,
+                const void *buf, uint64 len) 
+{
+    int ret = 0;
+    uint8 *rx = kmalloc(len);
+    memset(rx, 0xff, len);
+    struct spi_transfer xfer = {
+		.tx_buf = buf,
+		.rx_buf = rx,
+		.len = len,
+	};
 
-    spi_send_data_normal_dma(channel_num, spi_num, chip_select, buf, v_send_len, SPI_TRANS_INT);
+    ret = spi_transfer(spi_num, chip_select, &xfer, 1);
+    kfree(rx);
 
-    kfree_page((void *)buf);
+    return ret;
+}
+
+int spi_read(spi_device_num_t spi_num, spi_chip_select_t chip_select,
+                void *buf, uint64 len) 
+{
+    int ret;
+
+    uint8 *tx = kmalloc(len);
+    memset(tx, 0xff, len);
+    struct spi_transfer xfer = {
+		.tx_buf = tx,
+		.rx_buf = buf,
+		.len = len,
+	};
+
+    ret = spi_transfer(spi_num, chip_select, &xfer, 1);
+    kfree(tx);
+
+    return ret;
 }
