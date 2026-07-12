@@ -101,7 +101,6 @@ extern uint64 sys_exit(void);
 extern uint64 sys_fork(void);
 extern uint64 sys_fstat(void);
 extern uint64 sys_getpid(void);
-extern uint64 sys_kill(void);
 extern uint64 sys_link(void);
 extern uint64 sys_mkdir(void);
 extern uint64 sys_mknod(void);
@@ -132,7 +131,6 @@ static char *syscalls_name[] = {
 [SYS_wait]    "wait",
 [SYS_pipe]    "pipe",
 [SYS_read]    "read",
-[SYS_kill]    "kill",
 [SYS_exec]    "exec",
 [SYS_fstat]   "fstat",
 [SYS_chdir]   "chdir",
@@ -166,7 +164,6 @@ static char syscalls_argc[] = {
 [SYS_wait]    1,
 [SYS_pipe]    1,
 [SYS_read]    3,
-[SYS_kill]    1,
 [SYS_exec]    2,
 [SYS_fstat]   2,
 [SYS_chdir]   1,
@@ -199,7 +196,6 @@ static uint64 (*syscalls[])(void) = {
 [SYS_wait]    sys_wait,
 [SYS_pipe]    sys_pipe,
 [SYS_read]    sys_read,
-[SYS_kill]    sys_kill,
 [SYS_exec]    sys_exec,
 [SYS_fstat]   sys_fstat,
 [SYS_chdir]   sys_chdir,

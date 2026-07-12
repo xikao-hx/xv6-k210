@@ -71,7 +71,6 @@ OBJS += \
   $K/devsw/spidev.o \
   $K/devsw/i2cdev.o \
   $K/devsw/sdcarddev.o \
-  $K/devsw/uartdev.o \
   $K/driver/gpiohs.o \
   $K/driver/fpioa.o \
   $K/driver/utils.o \
@@ -224,7 +223,6 @@ UPROGS=\
 	$(UBUILD)/sh/_cat\
 	$(UBUILD)/sh/_echo\
 	$(UBUILD)/sh/_grep\
-	$(UBUILD)/sh/_kill\
 	$(UBUILD)/sh/_ln\
 	$(UBUILD)/sh/_ls\
 	$(UBUILD)/sh/_mkdir\
@@ -236,7 +234,7 @@ UPROGS=\
 	$(UBUILD)/app/_w25q64\
 	$(UBUILD)/test/_cpuburn\
 	$(UBUILD)/test/_iotest\
-	$(UBUILD)/test/_uarttest\
+	$(UBUILD)/test/_consoletest\
 	$(UBUILD)/test/_sdtest\
 	$(UBUILD)/test/_spitest\
 	$(UBUILD)/test/_i2ctest\
