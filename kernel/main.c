@@ -15,7 +15,6 @@
 #include "i2cdev.h"
 #include "sdcarddev.h"
 #include "spidev.h"
-#include "uartdev.h"
 #endif
 
 static inline void inithartid(unsigned long hartid) {
@@ -55,7 +54,6 @@ main(unsigned long hartid, unsigned long dtb_pa)
     spidev_init();   // register SPI device for user-space access
     i2cdev_init();   // register I2C device for user-space access
     sdcarddev_init(); // register SD card device for user-space access
-    uartdev_init();  // register raw UART device for user-space access
 #endif
     disk_init();     // initialize disk driver (virtio for QEMU, sdcard for K210)
     userinit();      // first user process

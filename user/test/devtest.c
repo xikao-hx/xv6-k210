@@ -1,7 +1,7 @@
 #include "types.h"
 #include "dev.h"
 #include "sdcarddev.h"
-#include "uartdev.h"
+#include "console.h"
 #include "user.h"
 #include "fcntl.h"
 
@@ -22,7 +22,7 @@ check_open(const char *name, int major, int minor)
 int
 main(void)
 {
-  struct uart_baud_info baud;
+  struct console_baud_info baud;
   uint32 nsectors = 0;
   int fd;
   int fails = 0;
@@ -32,17 +32,16 @@ main(void)
 
   fails += check_open("console", DEV_CONSOLE, 0);
   fails += check_open("stats", DEV_STATS, 0);
-  fails += check_open("uart", DEV_UART, 0);
   fails += check_open("sdcard", DEV_SDCARD, 0);
   fails += check_open("spi1.cs0", DEV_SPI, SPI_MINOR(1, 0));
   fails += check_open("i2c0", DEV_I2C, I2C_MINOR(0));
 
-  fd = dev(O_RDWR, DEV_UART, 0);
-  if (fd < 0 || ioctl(fd, UART_IOCTL_GET_BAUD_INFO, (uint64)&baud) < 0) {
-    printf("FAIL: uart ioctl\n");
+  fd = dev(O_RDWR, DEV_CONSOLE, 0);
+  if (fd < 0 || ioctl(fd, CONSOLE_IOCTL_GET_BAUD_INFO, (uint64)&baud) < 0) {
+    printf("FAIL: console ioctl\n");
     fails++;
   } else {
-    printf("uart actual baud: %u\n", baud.actual);
+    printf("console actual baud: %u\n", baud.actual);
   }
   if (fd >= 0)
     close(fd);

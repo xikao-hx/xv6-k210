@@ -7,7 +7,6 @@
 #define DEV_SPI      3
 #define DEV_I2C      4
 #define DEV_SDCARD   5
-#define DEV_UART     6
 
 // Minor number encodings exposed to user space.
 #define SPI_MINOR(bus, chip_select)  (((bus) << 2) | ((chip_select) & 3))

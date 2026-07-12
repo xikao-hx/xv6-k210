@@ -1,13 +1,4 @@
-//
-// Console input and output, to the uart.
-// Reads are character at a time (non-canonical).
-// No kernel line editing — the shell handles backspace, tab, etc.
-// Special input characters:
-//   newline -- end of line
-//   control-d -- end of file
-//   control-p -- print process list
-//
-
+// Console TTY/RAW device layered on the UART byte-stream driver.
 
 #include "proc.h"
 #include "console.h"
@@ -15,18 +6,21 @@
 #include "uarths.h"
 
 #define BACKSPACE 0x100
-#define C(x)  ((x)-'@')  // Control-x
+#define C(x)  ((x) - '@')
+#define CONSOLE_IO_CHUNK 128
 
-//
-// send one character to the uart.
-// called by printf, and to echo input characters,
-// but not from write().
-//
+struct {
+  struct spinlock lock;
+  int mode;
+  int esc;
+  int drop_lf_after_cr;
+  int eof_pending;
+} cons;
+
 void
 consputc(int c)
 {
-  if(c == BACKSPACE){
-    // if the user typed backspace, overwrite with a space.
+  if (c == BACKSPACE) {
     uartputc_sync('\b');
     uartputc_sync(' ');
     uartputc_sync('\b');
@@ -35,183 +29,227 @@ consputc(int c)
   }
 }
 
-struct {
-  struct spinlock lock;
-  
-  // input
-#define INPUT_BUF 128
-  char buf[INPUT_BUF];
-  uint r;  // Read index
-  uint w;  // Write index
-  uint e;  // Edit index
-  int esc; // ANSI escape sequence bytes should not be echoed
-} cons;
-
-//
-// user write()s to the console go here.
-//
 int
 consolewrite(int user_src, uint64 src, int n)
 {
-  int i;
+  char buf[CONSOLE_IO_CHUNK];
+  int done = 0;
+
+  while (done < n) {
+    int count = n - done;
+    int written;
+
+    if (count > sizeof(buf))
+      count = sizeof(buf);
+    if (either_copyin(buf, user_src, src + done, count) < 0)
+      break;
+    written = uart_write(buf, count);
+    if (written <= 0)
+      break;
+    done += written;
+    if (written != count)
+      break;
+  }
+  return done;
+}
+
+static int
+console_mode_get(void)
+{
+  int mode;
 
   acquire(&cons.lock);
-  for(i = 0; i < n; i++){
-    char c;
-    if(either_copyin(&c, user_src, src+i, 1) == -1)
-      break;
-    
-    /* BUG: panic: sched locks */
-    uartputc_sync(c);
-  }
+  mode = cons.mode;
   release(&cons.lock);
+  return mode;
+}
 
-  return i;
+static void
+console_set_mode(int mode)
+{
+  // IRQ is paused before the ring is cleared, so no boundary byte can be
+  // classified using the old mode after the transition completes.
+  uartrx_disable();
+  uart_flush_rx();
+  acquire(&cons.lock);
+  cons.mode = mode;
+  cons.esc = 0;
+  cons.drop_lf_after_cr = 0;
+  cons.eof_pending = 0;
+  release(&cons.lock);
+  uartrx_enable();
 }
 
 static int
 consoleioctl(int minor, uint64 cmd, uint64 arg)
 {
-  if(cmd != CONSOLE_IOCTL_FLUSH_INPUT)
-    return -1;
+  uint32 info[4];
 
-  // Drop pending keystrokes typed while a foreground program was running.
-  acquire(&cons.lock);
-  cons.r = cons.w = cons.e;
-  cons.esc = 0;
-  release(&cons.lock);
-  return 0;
+  (void)minor;
+  switch (cmd) {
+  case CONSOLE_IOCTL_FLUSH_INPUT:
+    uartrx_disable();
+    uart_flush_rx();
+    acquire(&cons.lock);
+    cons.esc = 0;
+    cons.drop_lf_after_cr = 0;
+    cons.eof_pending = 0;
+    release(&cons.lock);
+    uartrx_enable();
+    return 0;
+  case CONSOLE_IOCTL_SET_MODE:
+    if (arg != CONSOLE_MODE_TTY && arg != CONSOLE_MODE_RAW)
+      return -1;
+    console_set_mode((int)arg);
+    return 0;
+  case CONSOLE_IOCTL_GET_MODE:
+    return console_mode_get();
+  case CONSOLE_IOCTL_SET_BAUD:
+    if (arg == 0 || arg > 5000000)
+      return -1;
+    uart_set_baud((int)arg);
+    return 0;
+  case CONSOLE_IOCTL_GET_BAUD_INFO:
+    uart_get_baud_info(info);
+    return either_copyout(1, arg, info, sizeof(info));
+  case CONSOLE_IOCTL_GET_RX_STATS:
+    uart_get_rx_stats(info);
+    info[3] = console_mode_get();
+    return either_copyout(1, arg, info, sizeof(info));
+  default:
+    return -1;
+  }
 }
 
-//
-// user read()s from the console go here.
-// copy (up to) a whole input line to dst.
-// user_dist indicates whether dst is a user
-// or kernel address.
-//
+static int
+console_raw_read(int user_dst, uint64 dst, int n)
+{
+  char buf[CONSOLE_IO_CHUNK];
+  int count = n;
+  int got;
+
+  if (count > sizeof(buf))
+    count = sizeof(buf);
+  got = uart_read(buf, count);
+  if (got <= 0)
+    return got;
+  if (either_copyout(user_dst, dst, buf, got) < 0)
+    return -1;
+  return got;
+}
+
+static int
+console_tty_char(int c, char *out)
+{
+  int echo;
+
+  acquire(&cons.lock);
+  if (cons.mode != CONSOLE_MODE_TTY) {
+    release(&cons.lock);
+    return 0;
+  }
+
+  if (c == C('P')) {
+    release(&cons.lock);
+    procdump();
+    return 0;
+  }
+
+  if (c == 0) {
+    release(&cons.lock);
+    return 0;
+  }
+
+#ifndef QEMU
+  if (c == '\r') {
+    c = '\n';
+    cons.drop_lf_after_cr = 1;
+  } else if (cons.drop_lf_after_cr && c == '\n') {
+    cons.drop_lf_after_cr = 0;
+    release(&cons.lock);
+    return 0;
+  } else {
+    cons.drop_lf_after_cr = 0;
+  }
+#else
+  if (c == '\r')
+    c = '\n';
+#endif
+
+  echo = (c >= ' ' && c <= '~') || c == '\n';
+  if (c == 0x1b) {
+    cons.esc = 1;
+    echo = 0;
+  } else if (cons.esc) {
+    echo = 0;
+    if (cons.esc == 1 && (c == '[' || c == 'O'))
+      cons.esc = 2;
+    else
+      cons.esc = 0;
+  }
+  release(&cons.lock);
+
+  if (echo)
+    consputc(c);
+  *out = c;
+  return 1;
+}
+
+static int
+console_tty_read(int user_dst, uint64 dst, int n)
+{
+  int done = 0;
+
+  acquire(&cons.lock);
+  if (cons.eof_pending) {
+    cons.eof_pending = 0;
+    release(&cons.lock);
+    return 0;
+  }
+  release(&cons.lock);
+
+  while (done < n) {
+    char input;
+    char output;
+    int got = uart_read(&input, 1);
+
+    if (got <= 0)
+      return done > 0 ? done : got;
+    if (!console_tty_char((unsigned char)input, &output))
+      continue;
+    if (output == C('D')) {
+      if (done > 0) {
+        acquire(&cons.lock);
+        cons.eof_pending = 1;
+        release(&cons.lock);
+      }
+      break;
+    }
+    if (either_copyout(user_dst, dst + done, &output, 1) < 0)
+      return done > 0 ? done : -1;
+    done++;
+    if (output == '\n')
+      break;
+  }
+  return done;
+}
+
 int
 consoleread(int user_dst, uint64 dst, int n)
 {
-  uint target;
-  int c;
-  char cbuf;
-
-  target = n;
-  acquire(&cons.lock);
-  while(n > 0){
-    // wait until interrupt handler has put some
-    // input into cons.buffer.
-    while(cons.r == cons.w){
-      if(myproc()->killed){
-        release(&cons.lock);
-        return -1;
-      }
-      sleep(&cons.r, &cons.lock);
-    }
-
-    c = cons.buf[cons.r++ % INPUT_BUF];
-
-    if(c == C('D')){  // end-of-file
-      if(n < target){
-        // Save ^D for next time, to make sure
-        // caller gets a 0-byte result.
-        cons.r--;
-      }
-      break;
-    }
-
-    // copy the input byte to the user-space buffer.
-    cbuf = c;
-    if(either_copyout(user_dst, dst, &cbuf, 1) == -1)
-      break;
-
-    dst++;
-    --n;
-
-    if(c == '\n'){
-      // a whole line has arrived, return to
-      // the user-level read().
-      break;
-    }
-  }
-  release(&cons.lock);
-
-  return target - n;
-}
-
-//
-// the console input interrupt handler.
-// uartintr() calls this for input character.
-// In non-canonical mode: every character is echoed and passed
-// through to the reader immediately (no kernel line editing).
-// The shell handles backspace, tab completion, and kill-line.
-//
-void
-consoleintr(int c)
-{
-  static int drop_lf_after_cr;
-
-  acquire(&cons.lock);
-
-  switch(c){
-  case C('P'):  // Print process list.
-    procdump();
-    break;
-  default:
-    if(c != 0 && cons.e-cons.r < INPUT_BUF){
-#ifndef QEMU
-      if(c == '\r') {
-        c = '\n';
-        drop_lf_after_cr = 1;
-      } else if(drop_lf_after_cr && c == '\n') {
-        drop_lf_after_cr = 0;
-        break;
-      } else {
-        drop_lf_after_cr = 0;
-      }
-#else
-      c = (c == '\r') ? '\n' : c;
-#endif
-
-      // ANSI escape sequences, such as arrow keys, are parsed by the shell.
-      int echo = (c >= ' ' && c <= '~') || c == '\n';
-      if(c == 0x1b){
-        cons.esc = 1;
-        echo = 0;
-      } else if(cons.esc){
-        echo = 0;
-        if(cons.esc == 1 && (c == '[' || c == 'O'))
-          cons.esc = 2;
-        else
-          cons.esc = 0;
-      }
-
-      // echo back to the user (printable chars and newline only).
-      if(echo)
-        consputc(c);
-
-      // store for consumption by consoleread().
-      cons.buf[cons.e++ % INPUT_BUF] = c;
-
-      // wake up consoleread() on every character (non-canonical mode)
-      cons.w = cons.e;
-      wakeup_reason(&cons.r, WAKEUP_DEVICE);
-    }
-    break;
-  }
-
-  release(&cons.lock);
+  if (n <= 0)
+    return 0;
+  if (console_mode_get() == CONSOLE_MODE_RAW)
+    return console_raw_read(user_dst, dst, n);
+  return console_tty_read(user_dst, dst, n);
 }
 
 void
 consoleinit(void)
 {
   initlock(&cons.lock, "cons");
-
+  cons.mode = CONSOLE_MODE_TTY;
   uartinit();
-
-  // connect read and write system calls
-  // to consoleread and consolewrite.
   devsw[DEV_CONSOLE].read = consoleread;
   devsw[DEV_CONSOLE].write = consolewrite;
   devsw[DEV_CONSOLE].ioctl = consoleioctl;

@@ -1,4 +1,4 @@
-// Burn a FAT filesystem image to the SD card through the raw UART device.
+// Burn a FAT filesystem image through /dev/console in RAW mode.
 //
 // Host flow:
 //   1. Send "/burn\n" to the shell, which starts this program.
@@ -14,7 +14,7 @@
 
 #include "types.h"
 #include "file.h"
-#include "uartdev.h"
+#include "console.h"
 #include "sdcarddev.h"
 #include "oled.h"
 #include "user.h"
@@ -284,9 +284,9 @@ send_ack_payload(int fd, uint32 seq, uint8 reason, uint32 ticks)
 static uint32
 get_uart_actual_baud(int fd, uint32 *div)
 {
-  struct uart_baud_info info;
+  struct console_baud_info info;
 
-  if (ioctl(fd, UART_IOCTL_GET_BAUD_INFO, (uint64)&info) < 0) {
+  if (ioctl(fd, CONSOLE_IOCTL_GET_BAUD_INFO, (uint64)&info) < 0) {
     if (div)
       *div = 0;
     return 0;
@@ -298,9 +298,9 @@ get_uart_actual_baud(int fd, uint32 *div)
 }
 
 static void
-get_uart_raw_stats(int fd, struct uart_raw_stats *stats)
+get_uart_rx_stats(int fd, struct console_rx_stats *stats)
 {
-  if (ioctl(fd, UART_IOCTL_GET_RAW_STATS, (uint64)stats) < 0) {
+  if (ioctl(fd, CONSOLE_IOCTL_GET_RX_STATS, (uint64)stats) < 0) {
     stats->dropped = 0;
     stats->buffered = 0;
     stats->capacity = 0;
@@ -343,15 +343,15 @@ main(void)
   uint32 seq;
   uint8  payload[512];
   uint16 plen;
-  struct uart_raw_stats raw_stats = {0};
+  struct console_rx_stats rx_stats = {0};
 
   crc32_init();
 
   printf("burn: init\n");
 
-  // Open all devices before raw UART mode.  After RAW_START, stdout is no
+  // Open all devices before RAW mode. After SET_MODE, stdout is no
   // longer a safe debug channel because the host owns the UART stream.
-  uart_fd = dev(O_RDWR, DEV_UART, 0);
+  uart_fd = dev(O_RDWR, DEV_CONSOLE, 0);
   if (uart_fd < 0) {
     log_open_failed("uart");
     exit(1);
@@ -367,10 +367,14 @@ main(void)
   printf("burn: ready uart=%d sd=%d oled=%d\n",
          uart_fd, sdcard_fd, oled_rc);
 
-  // Raw mode prevents the console interrupt handler from stealing bytes.
-  ioctl(uart_fd, UART_IOCTL_RAW_START, 0);
+  if (ioctl(uart_fd, CONSOLE_IOCTL_SET_MODE, CONSOLE_MODE_RAW) < 0) {
+    show_error("RAW MODE", 0);
+    close(sdcard_fd);
+    close(uart_fd);
+    exit(1);
+  }
 
-  // Until RAW_END, host communication must use uart_fd, not printf().
+  // Until TTY mode is restored, host communication must use uart_fd.
   // OLED updates are kept sparse because I2C is slow and the UART RX FIFO
   // is tiny; after ACK, return to recv_msg() as quickly as possible.
 
@@ -429,7 +433,7 @@ main(void)
     show_phase("BAUD READY");
     send_ack_payload(uart_fd, seq, ACK_BAUD, transfer_baud);
 
-    ioctl(uart_fd, UART_IOCTL_SET_BAUD, transfer_baud);
+    ioctl(uart_fd, CONSOLE_IOCTL_SET_BAUD, transfer_baud);
     show_phase("BAUD SET");
     {
       uint32 div;
@@ -539,15 +543,15 @@ fail:
 
 finish:
   if (transfer_baud != CONSOLE_BAUD)
-    ioctl(uart_fd, UART_IOCTL_SET_BAUD, CONSOLE_BAUD);
-  get_uart_raw_stats(uart_fd, &raw_stats);
-  ioctl(uart_fd, UART_IOCTL_RAW_END, 0);
+    ioctl(uart_fd, CONSOLE_IOCTL_SET_BAUD, CONSOLE_BAUD);
+  get_uart_rx_stats(uart_fd, &rx_stats);
+  ioctl(uart_fd, CONSOLE_IOCTL_SET_MODE, CONSOLE_MODE_TTY);
 
   if (!success) {
     show_phase("BURN FAILED!");
     printf("burn: failed dup=%u crc=%u io=%u pkt=%u sd=%u raw_drop=%u raw_buf=%u/%u\n",
            dup_packets, crc_errors, io_errors, pkt_errors, sd_errors,
-           raw_stats.dropped, raw_stats.buffered, raw_stats.capacity);
+           rx_stats.dropped, rx_stats.buffered, rx_stats.capacity);
     exit(1);
   }
 
@@ -560,6 +564,6 @@ finish:
   printf("burn: stats ticks=%u sd_total=%u sd_max=%u dup=%u crc=%u io=%u pkt=%u sd=%u raw_drop=%u raw_buf=%u/%u\n",
          transfer_ticks, sd_ticks_total, sd_ticks_max, dup_packets,
          crc_errors, io_errors, pkt_errors, sd_errors,
-         raw_stats.dropped, raw_stats.buffered, raw_stats.capacity);
+         rx_stats.dropped, rx_stats.buffered, rx_stats.capacity);
   exit(0);
 }
