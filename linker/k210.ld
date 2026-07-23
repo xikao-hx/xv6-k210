@@ -31,11 +31,14 @@ SECTIONS
 
     .bss : {
         . = ALIGN(16);
+        PROVIDE(__bss_start = .);
         *(.bss.stack)
         . = ALIGN(16);
         *(.sbss .sbss.*)
         . = ALIGN(16);
         *(.bss .bss.*)
+        . = ALIGN(16);
+        PROVIDE(__bss_end = .);
     }
 
     PROVIDE(end = .);
