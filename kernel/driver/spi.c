@@ -137,7 +137,14 @@ void spi_init(spi_device_num_t spi_num, spi_work_mode_t work_mode, spi_frame_for
     
     spi_set_tmod(spi_num, SPI_TMOD_TRANS_RECV);
 
-    spi_dw[spi_num]->dma_enable = true;
+    /*
+     * SPI0 is used by the SD card. Its 512-byte full-duplex DMA path packs
+     * the expanded TX and RX buffers into one page with no guard space.
+     * On K210 the transfer can overwrite a page that has already returned
+     * to kalloc, corrupting the physical-page freelist. Keep SD traffic on
+     * the bounded polling path; SPI1 can still use DMA.
+     */
+    spi_dw[spi_num]->dma_enable = spi_num != SPI_DEVICE_0;
 }
 
 static spi_transfer_width_t spi_get_frame_size(spi_device_num_t spi_num, volatile spi_t *spi_handle)
