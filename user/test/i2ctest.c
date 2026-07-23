@@ -25,6 +25,20 @@ i2c_probe_write(uint8 addr)
   return ioctl(fd, I2C_IOCTL_TRANSFER, (uint64)&xfer);
 }
 
+static int
+i2c_probe_oled(void)
+{
+  int ret = -1;
+
+  for(int attempt = 0; attempt < 3; attempt++) {
+    ret = i2c_probe_write(OLED_ADDR);
+    if(ret >= 0)
+      return ret;
+    sleep(1);
+  }
+  return ret;
+}
+
 int
 main(void)
 {
@@ -39,7 +53,7 @@ main(void)
     exit(1);
   }
 
-  if (i2c_probe_write(OLED_ADDR) < 0) {
+  if (i2c_probe_oled() < 0) {
     printf("FAIL: probe OLED at 0x%x\n", OLED_ADDR);
     fails++;
   } else {

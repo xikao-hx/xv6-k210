@@ -169,7 +169,11 @@ int main(void)
   printf("\nSensor Data:\n");
   printf("  Accel:  X=%d  Y=%d  Z=%d\n", ax, ay, az);
   printf("  Gyro:   X=%d  Y=%d  Z=%d\n", gx, gy, gz);
-  printf("  Temp:   %d (%.1f C)\n", temp, (double)temp / 340.0 + 36.53);
+  int temp_centi = ((int)temp * 100) / 340 + 3653;
+  int temp_abs = temp_centi < 0 ? -temp_centi : temp_centi;
+  printf("  Temp:   %d (%s%d.%d%d C)\n", temp,
+         temp_centi < 0 ? "-" : "", temp_abs / 100,
+         (temp_abs / 10) % 10, temp_abs % 10);
 
   printf("\nMPU6050 test PASSED!\n");
   exit(0);
