@@ -24,11 +24,13 @@ plicinithart(void)
   // set this hart's S-mode priority threshold to 0.
   *(uint32*)PLIC_SPRIORITY(hart) = 0;
 #else
-  // K210: PLIC runs in M-mode, enable both UART and DISK interrupts
+  // K210: take ownership of the M-mode enable bitmap instead of
+  // inheriting interrupt enables left behind by firmware.
   uint32 *hart_m_enable = (uint32*)PLIC_MENABLE(hart);
-  *hart_m_enable = *hart_m_enable | (1 << DISK_IRQ);
-  uint32 *hart_m_enable_hi = hart_m_enable + 1;
-  *hart_m_enable_hi = *hart_m_enable_hi | (1 << (UART_IRQ % 32));
+  hart_m_enable[0] = 1U << DISK_IRQ;
+  hart_m_enable[1] = 1U << (UART_IRQ - 32);
+  hart_m_enable[2] = 0;
+  *(uint32*)PLIC_MPRIORITY(hart) = 0;
 #endif
 }
 
