@@ -1,6 +1,7 @@
 // OLED (SSD1306 128x64) user-space driver via I2C device.
 
 #include "types.h"
+#include "fcntl.h"
 #include "i2cdev.h"
 #include "oled.h"
 #include "oled_font.h"
@@ -56,17 +57,9 @@ oled_set_cursor(uint8 page, uint8 col)
 int
 oled_init(void)
 {
-  oled_fd = dev(0, DEV_I2C, I2C_MINOR(0));
+  oled_fd = open("/dev/oled", O_RDWR);
   if (oled_fd < 0)
     return -1;
-
-  struct i2cdev_init cfg;
-  cfg.clk_rate = 100000;
-  cfg.slave_addr = OLED_ADDR;
-  if (ioctl(oled_fd, I2C_IOCTL_INIT, (uint64)&cfg) < 0) {
-    oled_fd = -1;
-    return -1;
-  }
 
   // Init sequence
   sleep(1);                       // power-up delay

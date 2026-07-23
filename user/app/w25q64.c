@@ -1,4 +1,5 @@
 #include "types.h"
+#include "fcntl.h"
 #include "spidev.h"
 #include "user.h"
 
@@ -13,9 +14,6 @@
 #define W25Q64_PAGE_SIZE   256
 #define W25Q64_SECTOR_SIZE 4096
 
-/* SPI1, CS0 */
-#define W25Q64_MINOR SPI_MINOR(1, 0)
-
 static int spi_fd;
 
 static int w64_known_manufacturer(uint8 mid) {
@@ -23,14 +21,9 @@ static int w64_known_manufacturer(uint8 mid) {
 }
 
 static int w64_init(void) {
-  uint32 clk_rate = 1000000;  /* 1 MHz */
-  spi_fd = dev(0, DEV_SPI, W25Q64_MINOR);  // dev(omode, major, minor)
+  spi_fd = open("/dev/w25q64", O_RDWR);
   if(spi_fd < 0) {
     printf("w25q64: dev() failed\n");
-    return -1;
-  }
-  if(ioctl(spi_fd, SPI_IOCTL_INIT, (uint64)&clk_rate) < 0) {
-    printf("w25q64: ioctl init failed\n");
     return -1;
   }
   return 0;

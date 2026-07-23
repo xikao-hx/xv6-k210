@@ -4,10 +4,11 @@
 #include "types.h"
 #include "dev.h"
 
-// minor: SPI_MINOR(spi_bus, chip_select)
-
 // ioctl commands
-#define SPI_IOCTL_INIT      1   // arg = uint32 clock rate
+#define SPI_IOC_RD_MODE          1
+#define SPI_IOC_WR_MODE          2
+#define SPI_IOC_RD_MAX_SPEED_HZ  3
+#define SPI_IOC_WR_MAX_SPEED_HZ  4
 
 #define SPI_IOC_MAGIC       'k'
 

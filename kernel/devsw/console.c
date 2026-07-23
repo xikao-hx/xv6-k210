@@ -3,6 +3,7 @@
 #include "proc.h"
 #include "console.h"
 #include "file.h"
+#include "printf.h"
 #include "uarths.h"
 
 #define BACKSPACE 0x100
@@ -30,18 +31,19 @@ consputc(int c)
 }
 
 int
-consolewrite(int user_src, uint64 src, int n)
+consolewrite(struct file *f, uint64 src, int n)
 {
   char buf[CONSOLE_IO_CHUNK];
   int done = 0;
 
+  (void)f;
   while (done < n) {
     int count = n - done;
     int written;
 
     if (count > sizeof(buf))
       count = sizeof(buf);
-    if (either_copyin(buf, user_src, src + done, count) < 0)
+    if (either_copyin(buf, 1, src + done, count) < 0)
       break;
     written = uart_write(buf, count);
     if (written <= 0)
@@ -81,11 +83,11 @@ console_set_mode(int mode)
 }
 
 static int
-consoleioctl(int minor, uint64 cmd, uint64 arg)
+consoleioctl(struct file *f, uint64 cmd, uint64 arg)
 {
   uint32 info[4];
 
-  (void)minor;
+  (void)f;
   switch (cmd) {
   case CONSOLE_IOCTL_FLUSH_INPUT:
     uartrx_disable();
@@ -235,14 +237,28 @@ console_tty_read(int user_dst, uint64 dst, int n)
 }
 
 int
-consoleread(int user_dst, uint64 dst, int n)
+consoleread(struct file *f, uint64 dst, int n)
 {
+  (void)f;
   if (n <= 0)
     return 0;
   if (console_mode_get() == CONSOLE_MODE_RAW)
-    return console_raw_read(user_dst, dst, n);
-  return console_tty_read(user_dst, dst, n);
+    return console_raw_read(1, dst, n);
+  return console_tty_read(1, dst, n);
 }
+
+static int
+consoleopen(struct file *f)
+{
+  return f->minor == 0 ? 0 : -1;
+}
+
+static const struct file_operations console_ops = {
+  .open = consoleopen,
+  .read = consoleread,
+  .write = consolewrite,
+  .ioctl = consoleioctl,
+};
 
 void
 consoleinit(void)
@@ -250,7 +266,6 @@ consoleinit(void)
   initlock(&cons.lock, "cons");
   cons.mode = CONSOLE_MODE_TTY;
   uartinit();
-  devsw[DEV_CONSOLE].read = consoleread;
-  devsw[DEV_CONSOLE].write = consolewrite;
-  devsw[DEV_CONSOLE].ioctl = consoleioctl;
+  if(device_register(DEV_CONSOLE, "console", &console_ops) < 0)
+    panic("console device register");
 }

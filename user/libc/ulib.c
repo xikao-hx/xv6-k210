@@ -141,7 +141,7 @@ statistics(void *buf, int sz)
 {
   int fd, n, total;
 
-  fd = dev(O_RDONLY, DEV_STATS, 0);
+  fd = open("/dev/stats", O_RDONLY);
   if(fd < 0)
     return -1;
 

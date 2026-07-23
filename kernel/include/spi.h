@@ -173,7 +173,8 @@ struct spi_dw_data {
 
 void spi_init(spi_device_num_t spi_num, spi_work_mode_t work_mode, spi_frame_format_t frame_format,
               uint64 data_bit_length, uint32 endian);
-int spi_transfer(spi_device_num_t spi_num, spi_chip_select_t chip_select, 
+int spi_set_clk_rate(spi_device_num_t spi_num, uint32 hz);
+int spi_transfer(spi_device_num_t spi_num, spi_chip_select_t chip_select,
                     struct spi_transfer *transfer, uint64 num);
 int spi_write(spi_device_num_t spi_num, spi_chip_select_t chip_select,
                 const void *buf, uint64 len);

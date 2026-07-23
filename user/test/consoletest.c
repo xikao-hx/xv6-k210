@@ -15,7 +15,7 @@ main(void)
   printf("Console device test\n");
   printf("===================\n");
 
-  fd = dev(O_RDWR, DEV_CONSOLE, 0);
+  fd = open("/dev/console", O_RDWR);
   if (fd < 0) {
     printf("FAIL: dev(DEV_CONSOLE)\n");
     exit(1);

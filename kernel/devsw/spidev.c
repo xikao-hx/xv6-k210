@@ -1,29 +1,31 @@
 #include "dmac.h"
 #include "file.h"
 #include "kalloc.h"
+#include "printf.h"
 #include "proc.h"
 #include "spi.h"
+#include "spi_device.h"
 #include "spidev.h"
 #include "utils.h"
 #include "vm.h"
 #include "string.h"
 
-#define bufsiz 4096
-
-// allocate page for tx and rx data
-uint8 tx_buffer[bufsiz];
-uint8 rx_buffer[bufsiz];
-
 static int
-spidev_read(int user_dst, uint64 dst, int n)
+spidev_read(struct file *f, uint64 dst, int n)
 {
+  (void)f;
+  (void)dst;
+  (void)n;
   // SPI half-duplex read is not supported via standard read()
   return -1;
 }
 
 static int
-spidev_write(int user_src, uint64 src, int n)
+spidev_write(struct file *f, uint64 src, int n)
 {
+  (void)f;
+  (void)src;
+  (void)n;
   // SPI half-duplex write is not supported via standard write()
   return -1;
 }
@@ -42,7 +44,7 @@ spidev_get_ioc_message(uint64 cmd, struct spi_ioc_transfer *u_ioc, uint32 *n_ioc
     return 0;
 
   tmp = _IOC_SIZE(cmd);
-  if((tmp % sizeof(struct spi_ioc_transfer)) != 0)
+  if(tmp > PGSIZE || (tmp % sizeof(struct spi_ioc_transfer)) != 0)
     return 0;
 
   *n_ioc = tmp / sizeof(struct spi_ioc_transfer);
@@ -62,22 +64,28 @@ spidev_get_ioc_message(uint64 cmd, struct spi_ioc_transfer *u_ioc, uint32 *n_ioc
 }
 
 static int 
-spidev_message(spi_device_num_t spi_num, spi_chip_select_t chip_select, 
-                        struct spi_ioc_transfer *u_xfers, uint32 n_xfers) {
+spidev_message(struct spi_file_context *ctx,
+               struct spi_ioc_transfer *u_xfers, uint32 n_xfers)
+{
 
   struct proc *p = myproc();
   struct spi_transfer k_xfer;
   struct spi_ioc_transfer *u_tmp;
+  uint8 *tx_buffer;
+  uint8 *rx_buffer;
   uint32 n, total, off;
-  int status = 0;
+  int status = -1;
 
+  tx_buffer = kalloc_page();
+  rx_buffer = kalloc_page();
+  if(tx_buffer == 0 || rx_buffer == 0)
+    goto done;
   total = 0;
   off = 0;
 
   for (n = n_xfers, u_tmp = u_xfers; n; n--, u_tmp++) {
     total += u_tmp->len;
-    if (total > bufsiz) {
-      status = -1;
+    if (total > PGSIZE) {
       goto done;
     }
 
@@ -101,8 +109,8 @@ spidev_message(spi_device_num_t spi_num, spi_chip_select_t chip_select,
   k_xfer.len = total;
 
   /* One kernel transfer keeps CS asserted across all message segments. */
-  if(spi_transfer(spi_num, chip_select, &k_xfer, 1) < 0) {
-    status = -1;
+  if(spi_controller_transfer(ctx->device->controller, ctx->device, ctx,
+                             &k_xfer, 1) < 0) {
     goto done;
   }
 
@@ -119,29 +127,81 @@ spidev_message(spi_device_num_t spi_num, spi_chip_select_t chip_select,
   status = total;
 
 done:
+  if(tx_buffer)
+    kfree_page(tx_buffer);
+  if(rx_buffer)
+    kfree_page(rx_buffer);
   return status;
 }
 
 static int
-spidev_ioctl(int minor, uint64 cmd, uint64 arg)
+spidev_open(struct file *f)
+{
+  const struct spi_device *dev = spi_device_get(f->minor);
+  struct spi_file_context *ctx;
+
+  if(dev == 0)
+    return -1;
+  ctx = kmalloc(sizeof(*ctx));
+  if(ctx == 0)
+    return -1;
+  ctx->device = dev;
+  initsleeplock(&ctx->lock, "spi file");
+  ctx->speed_hz = dev->default_hz;
+  ctx->mode = dev->mode;
+  ctx->bits_per_word = dev->bits_per_word;
+  f->private_data = ctx;
+  return 0;
+}
+
+static int
+spidev_close(struct file *f)
+{
+  if(f->private_data)
+    kfree(f->private_data);
+  return 0;
+}
+
+static int
+spidev_ioctl(struct file *f, uint64 cmd, uint64 arg)
 {
   int ret = 0;
   struct proc *p = myproc();
-  spi_device_num_t spi_bus = SPI_MINOR_BUS(minor);
-  spi_chip_select_t chip_sel = SPI_MINOR_CS(minor);
+  struct spi_file_context *ctx = f->private_data;
   uint n_ioc;
   struct spi_ioc_transfer *ioc;
-  uint32 clk_rate;
+  uint32 value;
+
+  if(ctx == 0)
+    return -1;
 
   switch(cmd) {
-    case SPI_IOCTL_INIT:
-
-      if(copyin(p->pagetable, (char *)&clk_rate, arg, sizeof(clk_rate)) < 0)
+    case SPI_IOC_RD_MODE:
+      acquiresleep(&ctx->lock);
+      value = ctx->mode;
+      releasesleep(&ctx->lock);
+      return copyout(p->pagetable, arg, (char *)&value, sizeof(value));
+    case SPI_IOC_WR_MODE:
+      if(copyin(p->pagetable, (char *)&value, arg, sizeof(value)) < 0 ||
+         value > SPI_WORK_MODE_3)
         return -1;
-      (void)clk_rate;
-      spi_init(spi_bus, SPI_WORK_MODE_0, SPI_FF_STANDARD, 8, 0);
-      break;
-
+      acquiresleep(&ctx->lock);
+      ctx->mode = value;
+      releasesleep(&ctx->lock);
+      return 0;
+    case SPI_IOC_RD_MAX_SPEED_HZ:
+      acquiresleep(&ctx->lock);
+      value = ctx->speed_hz;
+      releasesleep(&ctx->lock);
+      return copyout(p->pagetable, arg, (char *)&value, sizeof(value));
+    case SPI_IOC_WR_MAX_SPEED_HZ:
+      if(copyin(p->pagetable, (char *)&value, arg, sizeof(value)) < 0 ||
+         value == 0 || value > ctx->device->max_hz)
+        return -1;
+      acquiresleep(&ctx->lock);
+      ctx->speed_hz = value;
+      releasesleep(&ctx->lock);
+      return 0;
     default:
       ioc = spidev_get_ioc_message(cmd, (struct spi_ioc_transfer *)arg, &n_ioc);
       if (!ioc)
@@ -150,19 +210,28 @@ spidev_ioctl(int minor, uint64 cmd, uint64 arg)
       if(!n_ioc)
         break;
 
-      ret = spidev_message(spi_bus, chip_sel, ioc, n_ioc);
+      acquiresleep(&ctx->lock);
+      ret = spidev_message(ctx, ioc, n_ioc);
+      releasesleep(&ctx->lock);
       kfree(ioc);
   }
 
   return ret;
 }
 
+static const struct file_operations spidev_ops = {
+  .open = spidev_open,
+  .read = spidev_read,
+  .write = spidev_write,
+  .ioctl = spidev_ioctl,
+  .close = spidev_close,
+};
+
 void
 spidev_init(void)
 {
-  devsw[DEV_SPI].read = spidev_read;
-  devsw[DEV_SPI].write = spidev_write;
-  devsw[DEV_SPI].ioctl = spidev_ioctl;
+  if(device_register(DEV_SPI, "spi", &spidev_ops) < 0)
+    panic("spi device register");
 }
 
 #ifdef TEST

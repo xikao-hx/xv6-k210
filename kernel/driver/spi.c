@@ -140,6 +140,26 @@ void spi_init(spi_device_num_t spi_num, spi_work_mode_t work_mode, spi_frame_for
     spi_dw[spi_num]->dma_enable = true;
 }
 
+int
+spi_set_clk_rate(spi_device_num_t spi_num, uint32 hz)
+{
+    uint32 input_hz;
+    uint32 divisor;
+
+    if(spi_num >= SPI_DEVICE_MAX || hz == 0)
+        return -1;
+    input_hz = sysctl_clock_get_freq(SYSCTL_CLOCK_SPI0 + spi_num);
+    divisor = (input_hz + hz - 1) / hz;
+    if(divisor < 2)
+        divisor = 2;
+    if(divisor & 1)
+        divisor++;
+    if(divisor > 0xfffe)
+        divisor = 0xfffe;
+    spi[spi_num]->baudr = divisor;
+    return 0;
+}
+
 static spi_transfer_width_t spi_get_frame_size(spi_device_num_t spi_num, volatile spi_t *spi_handle)
 {
     uint8 dfs_offset = 0;

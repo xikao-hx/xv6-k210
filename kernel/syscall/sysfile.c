@@ -3,6 +3,7 @@
 //
 
 #include "fcntl.h"
+#include "device.h"
 #include "file.h"
 #include "fat32.h"
 #include "kalloc.h"
@@ -46,6 +47,25 @@ fdalloc(struct file *f)
     }
   }
   return -1;
+}
+
+static int
+devicefdalloc(int flags, int major, int minor)
+{
+  struct file *f;
+  int fd;
+
+  if((f = filealloc()) == 0)
+    return -1;
+  if(fileopen_device(f, major, minor, flags) < 0) {
+    fileclose(f);
+    return -1;
+  }
+  if((fd = fdalloc(f)) < 0) {
+    fileclose(f);
+    return -1;
+  }
+  return fd;
 }
 
 uint64
@@ -122,7 +142,7 @@ create(char *path, short type, int mode)
 
   if (type == T_DIR) {
     mode = ATTR_DIRECTORY;
-  } else if (mode & O_RDONLY) {
+  } else if ((mode & O_ACCMODE) == O_RDONLY) {
     mode = ATTR_READ_ONLY;
   } else {
     mode = 0;
@@ -155,11 +175,20 @@ sys_open(void)
 {
   char path[FAT32_MAX_PATH];
   int fd, omode;
+  int major, minor;
+  char readable, writable;
   struct file *f;
   struct dirent *ep;
 
   if(argstr(0, path, FAT32_MAX_PATH) < 0 || argint(1, &omode) < 0)
     return -1;
+  if((omode & ~(O_ACCMODE | O_CREATE | O_TRUNC |
+                O_NOFOLLOW | O_APPEND)) != 0 ||
+     file_parse_access_mode(omode, &readable, &writable) < 0)
+    return -1;
+
+  if(device_path_lookup(path, &major, &minor) == 0)
+    return devicefdalloc(omode, major, minor);
 
   if(omode & O_CREATE){
     ep = create(path, T_FILE, omode);
@@ -171,7 +200,8 @@ sys_open(void)
       return -1;
     }
     elock(ep);
-    if((ep->attribute & ATTR_DIRECTORY) && omode != O_RDONLY){
+    if((ep->attribute & ATTR_DIRECTORY) &&
+       (writable || (omode & (O_TRUNC | O_APPEND)))){
       eunlock(ep);
       eput(ep);
       return -1;
@@ -194,8 +224,8 @@ sys_open(void)
   f->type = FD_ENTRY;
   f->off = (omode & O_APPEND) ? ep->file_size : 0;
   f->ep = ep;
-  f->readable = !(omode & O_WRONLY);
-  f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
+  f->readable = readable;
+  f->writable = writable;
 
   eunlock(ep);
 
@@ -303,36 +333,14 @@ sys_pipe(void)
 uint64
 sys_dev(void)
 {
-  int fd, omode;
+  int omode;
   int major, minor;
-  struct file *f;
 
   if(argint(0, &omode) < 0 || argint(1, &major) < 0 || argint(2, &minor) < 0){
     return -1;
   }
 
-  if(omode & O_CREATE){
-    panic("dev file on FAT");
-  }
-
-  if(major < 0 || major >= NDEV)
-    return -1;
-
-  if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
-    if(f)
-      fileclose(f);
-    return -1;
-  }
-
-  f->type = FD_DEVICE;
-  f->off = 0;
-  f->ep = 0;
-  f->major = major;
-  f->minor = minor;
-  f->readable = !(omode & O_WRONLY);
-  f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
-
-  return fd;
+  return devicefdalloc(omode, major, minor);
 }
 
 uint64
@@ -344,11 +352,7 @@ sys_ioctl(void)
 
   if(argfd(0, 0, &f) < 0 || argint(1, &cmd) < 0 || argaddr(2, &arg) < 0)
     return -1;
-  if(f->type != FD_DEVICE)
-    return -1;
-  if(f->major < 0 || f->major >= NDEV || !devsw[f->major].ioctl)
-    return -1;
-  return devsw[f->major].ioctl(f->minor, cmd, arg);
+  return fileioctl(f, (uint64)(uint)cmd, arg);
 }
 
 // To support ls command

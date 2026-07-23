@@ -34,6 +34,7 @@ endif
 OBJS = \
   $(ENTRY_OBJ) \
   $K/main.o \
+  $K/device.o \
   $K/devsw/console.o \
   $K/devsw/stats.o \
   $K/driver/uarths.o \
@@ -66,6 +67,7 @@ OBJS = \
 # Platform-specific objects
 ifeq ($(platform), k210)
 OBJS += \
+  $K/board/k210_devices.o \
   $K/driver/spi.o \
   $K/driver/i2c.o \
   $K/devsw/spidev.o \

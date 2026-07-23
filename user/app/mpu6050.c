@@ -1,4 +1,5 @@
 #include "types.h"
+#include "fcntl.h"
 #include "i2cdev.h"
 #include "user.h"
 
@@ -31,17 +32,9 @@ static int i2c_fd;
 
 static int mpu_init(void)
 {
-  struct i2cdev_init cfg;
-  cfg.clk_rate = 50000;
-  cfg.slave_addr = MPU6050_ADDR;
-
-  i2c_fd = dev(0, DEV_I2C, I2C_MINOR(0));
+  i2c_fd = open("/dev/mpu6050", O_RDWR);
   if(i2c_fd < 0) {
     printf("mpu6050: dev() failed\n");
-    return -1;
-  }
-  if(ioctl(i2c_fd, I2C_IOCTL_INIT, (uint64)&cfg) < 0) {
-    printf("mpu6050: ioctl init failed\n");
     return -1;
   }
   return 0;

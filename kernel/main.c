@@ -7,9 +7,11 @@
 #include "printf.h"
 #include "proc.h"
 #include "sbi.h"
+#include "stats.h"
 #include "trap.h"
 #include "vm.h"
 #ifndef QEMU
+#include "device.h"
 #include "dmac.h"
 #include "fpioa.h"
 #include "i2cdev.h"
@@ -48,9 +50,11 @@ main(unsigned long hartid, unsigned long dtb_pa)
 #endif
     binit();         // buffer cache
     fileinit();      // file table
+    statsinit();     // register read-only kernel statistics device
 #ifndef QEMU
     fpioa_pin_init(); // configure SPI0 pins for SD card
     dmac_init();      // initialize DMA controller
+    k210_devices_init(); // initialize board device bindings and bus locks
     spidev_init();   // register SPI device for user-space access
     i2cdev_init();   // register I2C device for user-space access
     sdcarddev_init(); // register SD card device for user-space access

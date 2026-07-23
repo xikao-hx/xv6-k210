@@ -6,10 +6,12 @@
 #include "printf.h"
 #include "proc.h"
 #include "file.h"
+#include "fcntl.h"
 #include "fat32.h"
+#include "string.h"
 #include "vm.h"
 
-struct devsw devsw[NDEV];
+static struct device devices[NDEV];
 struct {
   struct spinlock lock;
   struct file file[NFILE];
@@ -30,6 +32,7 @@ filealloc(void)
   acquire(&ftable.lock);
   for(f = ftable.file; f < ftable.file + NFILE; f++){
     if(f->ref == 0){
+      memset(f, 0, sizeof(*f));
       f->ref = 1;
       release(&ftable.lock);
       return f;
@@ -74,8 +77,81 @@ fileclose(struct file *f)
   } else if(ff.type == FD_ENTRY){
     eput(ff.ep);
   } else if(ff.type == FD_DEVICE){
-    // no cleanup needed for device
+    if(ff.ops && ff.ops->close)
+      ff.ops->close(&ff);
   }
+}
+
+int
+device_register(int major, const char *name,
+                const struct file_operations *ops)
+{
+  if(major <= 0 || major >= NDEV || name == 0 || ops == 0)
+    return -1;
+  if(devices[major].ops != 0)
+    return -1;
+  devices[major].name = name;
+  devices[major].ops = ops;
+  return 0;
+}
+
+const struct device *
+device_get(int major)
+{
+  if(major <= 0 || major >= NDEV || devices[major].ops == 0)
+    return 0;
+  return &devices[major];
+}
+
+int
+file_parse_access_mode(int flags, char *readable, char *writable)
+{
+  switch(flags & O_ACCMODE) {
+  case O_RDONLY:
+    *readable = 1;
+    *writable = 0;
+    return 0;
+  case O_WRONLY:
+    *readable = 0;
+    *writable = 1;
+    return 0;
+  case O_RDWR:
+    *readable = 1;
+    *writable = 1;
+    return 0;
+  default:
+    return -1;
+  }
+}
+
+int
+fileopen_device(struct file *f, int major, int minor, int flags)
+{
+  const struct device *dev;
+  char readable;
+  char writable;
+
+  if(f == 0 || (flags & ~O_ACCMODE) != 0)
+    return -1;
+  if(file_parse_access_mode(flags, &readable, &writable) < 0)
+    return -1;
+  if((dev = device_get(major)) == 0)
+    return -1;
+
+  f->type = FD_DEVICE;
+  f->readable = readable;
+  f->writable = writable;
+  f->major = major;
+  f->minor = minor;
+  f->ops = dev->ops;
+  f->private_data = 0;
+  if(f->ops->open && f->ops->open(f) < 0) {
+    f->type = FD_NONE;
+    f->ops = 0;
+    f->private_data = 0;
+    return -1;
+  }
+  return 0;
 }
 
 // Get metadata about file f.
@@ -107,15 +183,15 @@ fileread(struct file *f, uint64 addr, int n)
 {
   int r = 0;
 
-  if(f->readable == 0)
+  if(n < 0 || f->readable == 0)
     return -1;
 
   if(f->type == FD_PIPE){
     r = piperead(f->pipe, addr, n);
   } else if(f->type == FD_DEVICE){
-    if(f->major < 0 || f->major >= NDEV || !devsw[f->major].read)
+    if(f->ops == 0 || f->ops->read == 0)
       return -1;
-    r = devsw[f->major].read(1, addr, n);
+    r = f->ops->read(f, addr, n);
   } else if(f->type == FD_ENTRY){
     elock(f->ep);
     if((r = eread(f->ep, 1, addr, f->off, n)) > 0)
@@ -135,15 +211,15 @@ filewrite(struct file *f, uint64 addr, int n)
 {
   int r, ret = 0;
 
-  if(f->writable == 0)
+  if(n < 0 || f->writable == 0)
     return -1;
 
   if(f->type == FD_PIPE){
     ret = pipewrite(f->pipe, addr, n);
   } else if(f->type == FD_DEVICE){
-    if(f->major < 0 || f->major >= NDEV || !devsw[f->major].write)
+    if(f->ops == 0 || f->ops->write == 0)
       return -1;
-    ret = devsw[f->major].write(1, addr, n);
+    ret = f->ops->write(f, addr, n);
   } else if(f->type == FD_ENTRY){
     int i = 0;
     while(i < n){
@@ -165,6 +241,14 @@ filewrite(struct file *f, uint64 addr, int n)
   }
 
   return ret;
+}
+
+int
+fileioctl(struct file *f, uint64 cmd, uint64 arg)
+{
+  if(f->type != FD_DEVICE || f->ops == 0 || f->ops->ioctl == 0)
+    return -1;
+  return f->ops->ioctl(f, cmd, arg);
 }
 
 int
