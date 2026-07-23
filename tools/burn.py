@@ -60,6 +60,7 @@ CONSOLE_BAUD = 115200
 BOARD_BAUD_COMP_NUM = 11
 BOARD_BAUD_COMP_DEN = 10
 SECTOR_SIZE = 512
+SHELL_CHAR_DELAY = 0.003
 
 
 def le16(data, off):
@@ -248,7 +249,19 @@ def send_msg(ser, seq, type_, payload=b''):
 def send_shell_command(ser, cmd):
     """Clear the current shell input line and send one command."""
     ser.write(b"\x15")
-    ser.write(cmd.encode("ascii") + b"\n")
+    ser.flush()
+    time.sleep(0.02)
+
+    # The K210 UARTHS receive FIFO can lose a character when the shell command
+    # arrives as one burst while the console is also echoing it. Pace only this
+    # short text handshake; framed image data remains unthrottled.
+    for byte in cmd.encode("ascii"):
+        ser.write(bytes((byte,)))
+        ser.flush()
+        time.sleep(SHELL_CHAR_DELAY)
+
+    time.sleep(0.01)
+    ser.write(b"\n")
     ser.flush()
 
 
@@ -406,8 +419,7 @@ def main():
         buf += c
         if buf.endswith(b"BURN\n"):
             break
-        failed = f"exec {burn_cmd} failed".encode("ascii")
-        if failed in buf:
+        if b"exec " in buf and b" failed\n" in buf:
             if burn_idx + 1 >= len(burn_candidates):
                 print(
                     "Board shell could not exec burn program; "

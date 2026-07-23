@@ -5,3 +5,4 @@ maix*
 .claude
 .codex
 .vscode
+tools/__pycache__
