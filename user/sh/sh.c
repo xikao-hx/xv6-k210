@@ -134,6 +134,14 @@ runcmd(struct cmd *cmd)
 
 static int complete_word(char *buf, int *pos);
 static char history[100];
+static volatile int input_interrupted;
+
+static void __attribute__((section(".text.signal_handler")))
+shell_sigint(int signum)
+{
+  (void)signum;
+  input_interrupted = 1;
+}
 
 static void
 erase_line(char *buf, int *pos)
@@ -191,13 +199,24 @@ int
 getcmd(char *buf, int nbuf)
 {
   int i = 0;
+  int n;
   char c;
 
   fprintf(2, "$ ");
   memset(buf, 0, nbuf);
+  input_interrupted = 0;
 
   while (1) {
-    if (read(0, &c, 1) != 1) {
+    n = read(0, &c, 1);
+    if(input_interrupted) {
+      buf[0] = 0;
+      return 1;
+    }
+    if (n < 0) {
+      buf[0] = 0;
+      return 1;
+    }
+    if (n == 0) {
       buf[i] = 0;
       return -1;
     }
@@ -347,7 +366,12 @@ int
 main(void)
 {
   static char buf[100];
+  struct cmd *cmd;
+  int background;
+  int command_status;
   int fd;
+  int pid;
+  int shell_pgid;
 
   // Ensure that three file descriptors are open.
   while((fd = open("console", O_RDWR)) >= 0){
@@ -357,8 +381,19 @@ main(void)
     }
   }
 
+  signal(SIGINT, shell_sigint);
+  if(setpgid(0, 0) < 0)
+    panic("shell setpgid");
+  shell_pgid = getpgrp();
+  if(ioctl(0, CONSOLE_IOCTL_SET_FG_PGRP, shell_pgid) < 0)
+    panic("shell foreground");
+
   // Read and run input commands.
-  while(getcmd(buf, sizeof(buf)) >= 0){
+  while((command_status = getcmd(buf, sizeof(buf))) >= 0){
+    if(command_status > 0) {
+      ioctl(0, CONSOLE_IOCTL_FLUSH_INPUT, 0);
+      continue;
+    }
     save_history(buf);
     if(buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' '){
       // Chdir must be called by the parent, not the child.
@@ -367,9 +402,24 @@ main(void)
         fprintf(2, "cannot cd %s\n", buf+3);
       continue;
     }
-    if(fork1() == 0)
-      runcmd(parsecmd(buf));
+    cmd = parsecmd(buf);
+    background = cmd->type == BACK;
+    pid = fork1();
+    if(pid == 0) {
+      if(setpgid(0, 0) < 0)
+        panic("job setpgid");
+      signal(SIGINT, SIG_DFL);
+      runcmd(cmd);
+    }
+    if(setpgid(pid, pid) < 0)
+      panic("job parent setpgid");
+    if(!background &&
+       ioctl(0, CONSOLE_IOCTL_SET_FG_PGRP, pid) < 0)
+      panic("job foreground");
     wait(0);
+    if(!background &&
+       ioctl(0, CONSOLE_IOCTL_SET_FG_PGRP, shell_pgid) < 0)
+      panic("shell restore foreground");
     ioctl(0, CONSOLE_IOCTL_FLUSH_INPUT, 0);
   }
   exit(0);

@@ -48,6 +48,7 @@ struct uart_state {
   uint tx_w;
   uint rx_dropped;
   uint rx_epoch;
+  int rx_cancel_pending;
   uint32 requested_baud;
   uart_rx_observer_t rx_observer;
 };
@@ -276,6 +277,11 @@ uart_read(char *dst, int n)
 
   acquire(&uart.rx_lock);
   epoch = uart.rx_epoch;
+  if(uart.rx_cancel_pending) {
+    uart.rx_cancel_pending = 0;
+    release(&uart.rx_lock);
+    return -1;
+  }
   while (uart.rx_r == uart.rx_w) {
     if (p && signal_pending(p)) {
       release(&uart.rx_lock);
@@ -287,6 +293,11 @@ uart_read(char *dst, int n)
     }
     if (!p)
       sleep(&uart.rx_r, &uart.rx_lock);
+    if(uart.rx_cancel_pending) {
+      uart.rx_cancel_pending = 0;
+      release(&uart.rx_lock);
+      return -1;
+    }
     if (epoch != uart.rx_epoch) {
       release(&uart.rx_lock);
       return 0;
@@ -335,6 +346,7 @@ uart_flush_rx(void)
     ;
   uart.rx_r = uart.rx_w = 0;
   uart.rx_dropped = 0;
+  uart.rx_cancel_pending = 0;
   uart.rx_epoch++;
   wakeup_reason(&uart.rx_r, WAKEUP_DEVICE);
   release(&uart.rx_lock);
@@ -409,13 +421,25 @@ uartgetc(void)
 void
 uartintr(void)
 {
+  int cancelled = 0;
   int received = 0;
   int c;
 
   acquire(&uart.rx_lock);
   while ((c = uart_hw_getc()) != -1) {
-    if (uart.rx_observer && uart.rx_observer(c))
-      continue;
+    if (uart.rx_observer) {
+      int action = uart.rx_observer(c);
+
+      if (action == UART_RX_CONSUME_CANCEL) {
+        uart.rx_r = uart.rx_w;
+        uart.rx_cancel_pending = 1;
+        cancelled = 1;
+        received = 0;
+        continue;
+      }
+      if (action == UART_RX_CONSUME)
+        continue;
+    }
     uint next = (uart.rx_w + 1) % UART_RX_BUF_SIZE;
     if (next == uart.rx_r)
       uart.rx_dropped++;
@@ -425,7 +449,7 @@ uartintr(void)
       received = 1;
     }
   }
-  if (received)
+  if (received || cancelled)
     wakeup_reason(&uart.rx_r, WAKEUP_DEVICE);
   release(&uart.rx_lock);
 

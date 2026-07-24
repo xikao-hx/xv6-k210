@@ -98,8 +98,8 @@ test_invalid_inputs(void)
     fail("missing pid");
   if(sigsend(getpid(), 0) != -1)
     fail("send zero");
-  if(sigsend(-getpid(), SIGTERM) != -1)
-    fail("pgrp before support");
+  if(sigsend(-999999, SIGTERM) != -1)
+    fail("missing pgrp");
   if(sigreturn() != -1)
     fail("sigreturn context");
 }

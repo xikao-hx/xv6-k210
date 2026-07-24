@@ -19,6 +19,7 @@ struct {
   int drop_lf_after_cr;
   int eof_pending;
   int foreground_pgid;
+  int foreground_owner_pgid;
 } cons;
 
 static volatile uint tty_events;
@@ -32,9 +33,9 @@ console_rx_observer(int c)
 
   if(mode == CONSOLE_MODE_TTY && foreground_pgid > 0 && c == C('C')) {
     __atomic_fetch_or(&tty_events, TTY_EVENT_SIGINT, __ATOMIC_RELAXED);
-    return 1;
+    return UART_RX_CONSUME_CANCEL;
   }
-  return 0;
+  return UART_RX_KEEP;
 }
 
 void
@@ -106,18 +107,33 @@ static int
 console_set_foreground_pgrp(int pgid)
 {
   int caller_pgid;
+  int owner_pgid;
+  int owner_exists;
 
   if(pgid < 0 || (pgid > 0 && !signal_pgrp_exists(pgid)))
     return -1;
   caller_pgid = proc_getpgrp(myproc());
 
   acquire(&cons.lock);
-  if(cons.foreground_pgid != 0 &&
-     cons.foreground_pgid != caller_pgid) {
+  owner_pgid = cons.foreground_owner_pgid;
+  release(&cons.lock);
+  owner_exists = owner_pgid > 0 && signal_pgrp_exists(owner_pgid);
+
+  acquire(&cons.lock);
+  if(cons.foreground_owner_pgid == owner_pgid && !owner_exists) {
+    cons.foreground_owner_pgid = 0;
+    __atomic_store_n(&cons.foreground_pgid, 0, __ATOMIC_RELAXED);
+  }
+  if(cons.foreground_owner_pgid == 0 && cons.foreground_pgid == 0)
+    cons.foreground_owner_pgid = caller_pgid;
+  if(cons.foreground_owner_pgid != caller_pgid &&
+     cons.foreground_pgid != pgid) {
     release(&cons.lock);
     return -1;
   }
   __atomic_store_n(&cons.foreground_pgid, pgid, __ATOMIC_RELAXED);
+  if(pgid == 0 && cons.foreground_owner_pgid == caller_pgid)
+    cons.foreground_owner_pgid = 0;
   release(&cons.lock);
   return 0;
 }
@@ -331,6 +347,7 @@ consoleinit(void)
   initlock(&cons.lock, "cons");
   __atomic_store_n(&cons.mode, CONSOLE_MODE_TTY, __ATOMIC_RELAXED);
   __atomic_store_n(&cons.foreground_pgid, 0, __ATOMIC_RELAXED);
+  cons.foreground_owner_pgid = 0;
   __atomic_store_n(&tty_events, 0, __ATOMIC_RELAXED);
   uart_set_rx_observer(console_rx_observer);
   uartinit();
