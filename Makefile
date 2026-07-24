@@ -60,6 +60,7 @@ OBJS = \
   $K/vm/kalloc.o \
   $K/vm/kbuf.o \
   $K/vm/mmap.o \
+  $K/vm/mmap_file.o \
   $K/vm/vm.o \
   $K/vm/vmcopyin.o \
   $K/proc/swtch.o \

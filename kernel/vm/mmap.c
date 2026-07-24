@@ -3,6 +3,7 @@
 #include "kalloc.h"
 #include "kbuf.h"
 #include "mmap.h"
+#include "mmap_file.h"
 #include "printf.h"
 #include "proc.h"
 #include "string.h"
@@ -343,6 +344,8 @@ vm_fault(struct proc *p, uint64 va, int access)
   uint64 file_offset;
   uint64 anon_index;
   uint64 kbuf_index;
+  uint64 dirty_length;
+  int cached_file_page = 0;
   int pte_flags = PTE_U;
 
   if(va >= MAXVA || (vma = vma_find(p, va)) == 0)
@@ -358,7 +361,31 @@ vm_fault(struct proc *p, uint64 va, int access)
     return 0;
   }
 
-  if(vma->type == VMA_KBUF){
+  if(vma->type == VMA_FILE){
+    read_length = PGSIZE;
+    if(page + read_length > vma->valid_end)
+      read_length = vma->valid_end > page ? vma->valid_end - page : 0;
+    file_offset = vma->offset + (page - vma->start);
+    if(file_offset < vma->offset || file_offset > 0xffffffffUL)
+      return -1;
+
+    if(vma->flags & MAP_SHARED){
+      dirty_length = (vma->prot & PROT_WRITE) ? read_length : 0;
+      mem = mmap_file_page_get(vma->object->file, file_offset,
+                               dirty_length);
+      cached_file_page = 1;
+    } else {
+      mem = kalloc_page();
+      if(mem)
+        memset(mem, 0, PGSIZE);
+      if(mem && read_length > 0 &&
+         fileread_at(vma->object->file, (uint64)mem, file_offset,
+                     read_length) < 0){
+        kfree_page(mem);
+        mem = 0;
+      }
+    }
+  } else if(vma->type == VMA_KBUF){
     kbuf_index = (vma->offset + page - vma->start) / PGSIZE;
     mem = kbuf_page_get(vma->object->kbuf, kbuf_index);
   } else if(vma->type == VMA_ANON && (vma->flags & MAP_SHARED)){
@@ -372,23 +399,6 @@ vm_fault(struct proc *p, uint64 va, int access)
   if(mem == 0)
     return -1;
 
-  if(vma->type == VMA_FILE){
-    read_length = PGSIZE;
-    if(page + read_length > vma->valid_end)
-      read_length = vma->valid_end > page ? vma->valid_end - page : 0;
-    file_offset = vma->offset + (page - vma->start);
-    if(file_offset < vma->offset || file_offset > 0xffffffffUL){
-      kfree_page(mem);
-      return -1;
-    }
-    if(read_length > 0 &&
-       fileread_at(vma->object->file, (uint64)mem, file_offset,
-                   read_length) < 0){
-      kfree_page(mem);
-      return -1;
-    }
-  }
-
   if(vma->prot & PROT_READ)
     pte_flags |= PTE_R;
   if(vma->prot & PROT_WRITE)
@@ -396,7 +406,10 @@ vm_fault(struct proc *p, uint64 va, int access)
   if(vma->prot & PROT_EXEC)
     pte_flags |= PTE_X;
   if(mappages(p->pagetable, page, PGSIZE, (uint64)mem, pte_flags) < 0){
-    kfree_page(mem);
+    if(cached_file_page)
+      mmap_file_page_put(vma->object->file, file_offset, (uint64)mem);
+    else
+      kfree_page(mem);
     return -1;
   }
   upg2ukpg(p->pagetable, p->kpagetable, page, page + PGSIZE);
@@ -426,8 +439,8 @@ vma_writeback_page(struct vma_area *vma, pagetable_t pagetable,
   file_offset = vma->offset + (page - vma->start);
   if(file_offset < vma->offset || file_offset > 0xffffffffUL)
     return -1;
-  return filewrite_at(vma->object->file, PTE2PA(*pte), file_offset,
-                      length) < 0 ? -1 : 0;
+  return mmap_file_page_writeback(vma->object->file, file_offset,
+                                  PTE2PA(*pte), length);
 }
 
 static int
@@ -442,11 +455,23 @@ vma_writeback_range(struct proc *p, struct vma_area *vma,
 }
 
 static void
-vma_unmap_pages(struct proc *p, uint64 start, uint64 end)
+vma_unmap_pages(struct proc *p, struct vma_area *vma,
+                uint64 start, uint64 end)
 {
   for(uint64 page = start; page < end; page += PGSIZE){
+    pte_t *pte = walk(p->pagetable, page, 0);
+    uint64 pa = pte && (*pte & PTE_V) ? PTE2PA(*pte) : 0;
+
     uvmunmap(p->kpagetable, page, 1, 0);
-    uvmunmap(p->pagetable, page, 1, 1);
+    if(vma->type == VMA_FILE && (vma->flags & MAP_SHARED)){
+      uvmunmap(p->pagetable, page, 1, 0);
+      if(pa){
+        uint64 file_offset = vma->offset + (page - vma->start);
+        mmap_file_page_put(vma->object->file, file_offset, pa);
+      }
+    } else {
+      uvmunmap(p->pagetable, page, 1, 1);
+    }
   }
 }
 
@@ -503,7 +528,7 @@ vma_unmap(struct proc *p, uint64 addr, uint64 length)
     old = *vma;
     start = addr > old.start ? addr : old.start;
     finish = end < old.end ? end : old.end;
-    vma_unmap_pages(p, start, finish);
+    vma_unmap_pages(p, &old, start, finish);
 
     if(start == old.start && finish == old.end){
       memset(vma, 0, sizeof(*vma));
@@ -541,7 +566,7 @@ vma_destroy_all(struct proc *p)
     if(p->pagetable)
       vma_writeback_range(p, vma, vma->start, vma->end);
     if(p->pagetable && p->kpagetable)
-      vma_unmap_pages(p, vma->start, vma->end);
+      vma_unmap_pages(p, vma, vma->start, vma->end);
     mmap_object_put(vma->object);
     memset(vma, 0, sizeof(*vma));
   }
@@ -567,20 +592,41 @@ vma_fork(struct proc *parent, struct proc *child)
       pte_t *pte = walk(parent->pagetable, page, 0);
       uint flags;
       uint64 pa;
+      uint64 file_offset = 0;
+      uint64 dirty_length = 0;
+      int cached_file_page;
 
       if(pte == 0 || !(*pte & PTE_V))
         continue;
       pa = PTE2PA(*pte);
       flags = PTE_FLAGS(*pte);
+      cached_file_page = vma->type == VMA_FILE &&
+                         (vma->flags & MAP_SHARED);
       if((vma->flags & MAP_PRIVATE) && (flags & PTE_W)){
         flags = (flags | PTE_COW) & ~PTE_W;
         *pte = PA2PTE(pa) | flags;
         upg2ukpg(parent->pagetable, parent->kpagetable,
                  page, page + PGSIZE);
       }
-      if(mappages(child->pagetable, page, PGSIZE, pa, flags) < 0)
+      if(cached_file_page){
+        file_offset = vma->offset + (page - vma->start);
+        if(vma->prot & PROT_WRITE){
+          dirty_length = PGSIZE;
+          if(page + dirty_length > vma->valid_end)
+            dirty_length = vma->valid_end > page ?
+                           vma->valid_end - page : 0;
+        }
+        if(mmap_file_page_hold(vma->object->file, file_offset, pa,
+                               dirty_length) < 0)
+          goto bad;
+      }
+      if(mappages(child->pagetable, page, PGSIZE, pa, flags) < 0){
+        if(cached_file_page)
+          mmap_file_page_put(vma->object->file, file_offset, pa);
         goto bad;
-      kaddquota((void *)pa);
+      }
+      if(!cached_file_page)
+        kaddquota((void *)pa);
       upg2ukpg(child->pagetable, child->kpagetable,
                page, page + PGSIZE);
     }

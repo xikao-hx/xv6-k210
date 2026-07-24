@@ -1,112 +1,134 @@
-# Step 4 设备 page-backed kbuf mmap 代码设计
+# Step 5 共享文件 mmap page cache 代码设计
 
 ## 当前功能
 
-- 功能名称：设备 kbuf mmap
-- 所属实施步骤：Step 4
-- 关联需求：用户态与设备驱动访问同一组 page-backed 物理页
+- 功能名称：共享文件映射页缓存
+- 所属实施步骤：Step 5
+- 关联需求：不同进程、不同 mmap object 对同一文件页修改立即互见并正确写回
 
 ## 成功标准
 
-- 设备 `file_operations` 可用窄 mmap 回调返回 kbuf，不接触 proc/VMA/PTE。
-- mmap VM 按 kbuf offset 缺页映射，并同步用户页表和进程内核页表。
-- fd close、fork、munmap/exit 的任意正常顺序都不会提前释放或泄漏 kbuf 页面。
-- 长度、offset、权限和 flags 越界均拒绝。
+- 缓存键为稳定文件身份 `file->ep` 与页对齐文件 offset。
+- 不同映射独立 fault 同一键时得到同一 PA，并发首次 fault 只发布一个缓存页。
+- SHARED 可写页在 unmap/exit/最后映射释放时写回正确范围。
+- fork、fault 回滚、部分 unmap 和最后引用回收时映射计数与物理引用严格配对。
+- PRIVATE 文件映射继续使用独立页面与 COW，不进入共享缓存。
 - QEMU 完整 mmaptest 和 K210 构建通过。
 
 ## 现有代码观察
 
-- `file_operations` 已承载 open/read/write/ioctl/close，适合增加设备 mmap 回调。
-- mmap object 已处理跨 fork、VMA split 和 fd close 的 backing 生命周期。
-- shared anonymous 已验证“object 基础页引用 + 每个 PTE 映射引用”模型。
-- 设备表和 `dev()` 在 QEMU/K210 共用，可增加无硬件依赖的测试 kbuf 设备。
+- FAT32 entry cache 对同一路径返回同一 `struct dirent`，且 mmap object 的
+  `filedup` 保证 VMA 存活期间 entry 身份稳定。
+- 当前 SHARED 文件页只在 fork 复制已驻留 PTE 时共享；独立 fault 会重复读页。
+- `vma_writeback_page` 已按 VMA valid_end 和显式 offset 计算写回范围。
+- 页面分配器已有物理引用计数，但不了解文件键、dirty 或缓存映射数量。
 
 ## 修改文件
 
-- `kernel/include/kbuf.h`、`kernel/vm/kbuf.c`：kbuf object、页集合和引用接口。
-- `kernel/include/file.h`：设备 mmap 回调。
-- `kernel/include/mmap.h`、`kernel/vm/mmap.c`：`VMA_KBUF`、设备映射与 fault。
-- `kernel/include/dev.h`、`kernel/include/kbufdev.h`、
-  `kernel/devsw/kbufdev.c`：跨平台测试设备及 ioctl ABI。
-- `kernel/main.c`、`Makefile`：注册和构建。
-- `kernel/syscall/sysfile.c`：将非匿名设备 fd 分派到设备 mmap 入口。
-- `testcase/mmaptest.c`：参数、共享、一致性和生命周期测试。
-- `doc/mmap-bank/*`：同步进度、架构和长期规则。
+- `kernel/include/mmap_file.h`、`kernel/vm/mmap_file.c`：全局 mmap 文件页缓存。
+- `kernel/vm/mmap.c`：SHARED 文件 fault、writeback、unmap、fork 接入缓存。
+- `kernel/main.c`、`Makefile`：缓存初始化和构建。
+- `testcase/mmaptest.c`：跨进程独立映射即时可见、写回和重复回收测试。
+- `doc/mmap-bank/*`：最终进度、架构和长期约束。
 
 ## 禁止修改范围
 
-- 映射 buffer cache 的 `struct buf::data`。
-- 共享文件 mmap page cache：Step 5。
-- 连续 DMA/CMA 分配器和设备物理 MMIO 直映。
-- 设备驱动直接安装、删除或查询用户 PTE。
+- FAT32 buffer cache 数据结构和 `struct buf::data`。
+- PRIVATE 文件映射语义。
+- 通用文件 read/write 的 `file->off`。
+- swap、msync、mprotect、MAP_FIXED 或完整 Linux page cache。
 
 ## 职责划分
 
-- `kbuf`：拥有固定 page-backed 页面集合及基础物理引用，管理自身引用计数。
-- 设备 fd：open 时持有一个 kbuf 引用，close 时释放。
-- 设备 mmap 回调：验证设备内部 offset/length/flags，返回仍由 fd 持有的 kbuf。
-- mmap object：取得独立 kbuf 引用，使 fd close 后映射继续有效。
-- PTE：每个实际映射持有一个页面引用。
-- mmap VM：地址选择、VMA、fault、fork、unmap 和双页表同步。
+- mmap file cache：按文件键拥有共享 PA、状态、映射计数和 dirty 有效长度。
+- VMA：提供文件 offset、valid_end、flags/prot，决定是否走共享缓存。
+- mmap object：保持 `struct file/dirent` 身份在 VMA 生命周期内稳定。
+- PTE：每个实际映射持有一个物理引用。
+- FAT32：只提供显式 offset I/O，不查询缓存或进程 VM。
 
-## 依赖方向
+## 缓存项状态
 
 ```text
-sys_mmap -> mmap VM -> file_operations.mmap -> device
-                    \-> kbuf page/ref API
+LOADING -> READY <-> WRITING
+             |
+             v
+          EVICTING -> removed
 ```
 
-- 允许：mmap VM 调用设备回调取得 kbuf，并调用 kbuf 页接口。
-- 允许：设备通过 kbuf 内核地址接口访问自己持有的页面。
-- 禁止：kbuf/设备依赖 proc、trap、syscall 或页表实现。
+- `LOADING`：首次 fault 已发布占位项，文件读取在锁外进行；竞争者 sleep。
+- `READY`：可增加映射计数并取得同一 PA。
+- `WRITING`：显式写回在锁外进行；新 fault/并发写回等待完成。
+- `EVICTING`：最后映射正在锁外写回；完成后删除并唤醒等待者重新查找。
+
+状态转换只在 cache spinlock 下发生，页面分配和文件 I/O 不持有 spinlock。
 
 ## 数据与引用模型
 
 ```text
-device fd ref ----\
-                   -> kbuf -> page list [每页 1 个 kbuf 基础引用]
-mmap object ref --/                        + 每个 PTE 1 个映射引用
+cache entry(file identity, page offset)
+  -> PA [1 个 cache 基础引用]
+       + 每个实际 PTE 1 个物理引用
+  -> mappings [与实际 SHARED FILE PTE 数量一致]
+  -> dirty_length [本页允许写回的最大有效前缀]
 ```
 
-1. 测试设备 open 创建两页 kbuf，fd 持有初始引用。
-2. mmap object 对回调返回的 kbuf 增加独立引用。
-3. kbuf fault 按 `(vma.offset + page_delta) / PGSIZE` 取页并增加 PTE 引用。
-4. unmap/exit 删除 PTE，通用页面引用计数减少映射引用。
-5. fd 和最后一个 mmap object 都释放后，kbuf 释放每页基础引用。
+1. 首次 fault 创建候选节点和清零页，发布 LOADING 后读取完整文件页。
+2. READY 发布时增加 mappings 与 PTE 物理引用。
+3. 后续 fault/独立 mmap 按键命中同一 PA，并分别增加 mappings/PTE 引用。
+4. fork 在安装子 PTE 前取得同键、同 PA 的缓存映射引用；失败时成对归还。
+5. unmap 删除双页表 PTE 后归还缓存映射/PTE 引用。
+6. mappings 归零时进入 EVICTING，按 dirty_length 写回后释放 cache 基础引用。
 
 ## 接口设计
 
-- `struct kbuf *kbuf_create(uint64 size)`
-- `void kbuf_get(struct kbuf *)` / `void kbuf_put(struct kbuf *)`
-- `uint64 kbuf_size(struct kbuf *)`
-- `void *kbuf_page_get(struct kbuf *, uint64 index)`：返回带 PTE 引用的页。
-- `void *kbuf_page_address(struct kbuf *, uint64 index)`：驱动持有 kbuf 时借用页地址。
-- `file_operations.mmap(file, offset, length, prot, flags)`：返回借用的 kbuf。
-- `vma_map_device(...)`：校验 fd 权限、调用回调、建立 `VMA_KBUF`。
+- `mmap_file_cache_init()`
+- `mmap_file_page_get(file, offset, dirty_length)`：fault 获取映射引用与 PA。
+- `mmap_file_page_hold(file, offset, pa, dirty_length)`：fork 为既有 PA 增加映射。
+- `mmap_file_page_writeback(file, offset, pa, length)`：显式同步缓存 PA。
+- `mmap_file_page_put(file, offset, pa)`：归还一个 PTE/映射引用，必要时最后写回。
 
-## 测试设备
+`dirty_length == 0` 表示只读映射；可写映射使用 VMA valid_end 计算本页有效前缀。
 
-- 稳定 major：`DEV_KBUF`，minor 仅接受 0，QEMU/K210 都注册。
-- 每次 open 创建独立两页 kbuf，避免不同 fd 意外共享。
-- ioctl：
-  - `KBUF_IOCTL_FILL`：驱动侧按 offset/length 写入指定字节。
-  - `KBUF_IOCTL_CHECK`：驱动侧检查用户映射写入的内容。
-- mmap 仅接受 `MAP_SHARED`，offset 页对齐且映射有效范围不超过 kbuf。
+## 并发与锁顺序
+
+- cache spinlock 只保护链表、状态、mappings 和 dirty_length。
+- `kalloc/kmalloc/fileread_at/filewrite_at` 全部在 cache spinlock 外执行。
+- 等待状态转换使用 `sleep(entry, &cache.lock)`，完成后 `wakeup(entry)`。
+- 缓存项在唤醒等待者并从链表删除后才释放；等待者只以地址作 channel，
+  醒来后重新按键查找。
+- FAT32 不获取 cache lock，避免反向依赖。
+
+## 写回策略
+
+- 可写 SHARED 页首次映射时保守标记 dirty_length；无需依赖硬件 dirty bit。
+- `munmap/exit` 继续先执行可失败的显式写回，再删除 PTE/VMA。
+- 最后 mappings 释放时再次写回 dirty_length，覆盖其他仍存映射在先前写回后
+  的修改。
+- PRIVATE 页从不进入缓存，也不写回。
+
+## 测试设计
+
+- 父进程建立未驻留映射，子进程用独立 `open + mmap` 首次 fault 并写入。
+- 子进程保持映射期间通知父进程 fault；父进程必须立即看到修改。
+- 父进程修改后通知子进程，子进程必须在退出前立即看到。
+- 子进程先 unmap/exit 后父进程继续访问，最后 unmap 后普通 read 验证写回。
+- 预热后重复 fault/unmap，使用 sysinfo 检查物理页没有随循环线性减少。
 
 ## 风险与避免方式
 
-- fd close 后回调私有数据失效：mmap object 在 syscall 返回前取得独立 kbuf 引用。
-- 映射失败泄漏引用：object 创建失败或 VMA 插入失败不保留 kbuf 引用。
-- fork/unmap 提前释放：沿用每个 PTE 的页面引用，kbuf 始终保留基础引用。
-- 非整页有效末尾：VMA `valid_end` 限定 ABI 长度，kbuf backing 校验使用原始 length。
-- 驱动/用户并发访问：测试使用进程同步；kbuf 只保证生命周期，不提供数据一致性锁。
+- 先删除缓存项再写回导致新 fault 读旧数据：EVICTING 项保留键，等待写回完成。
+- 两个首次 fault 重复发布：LOADING 占位与等待机制保证单一发布。
+- fork 安装 PTE 失败：先 hold，失败立即 put；成功后由子 VMA 生命周期管理。
+- VMA partial unmap 后 offset 漂移：所有键继续由维护后的 VMA offset 计算。
+- 最末页错误扩展文件：dirty_length 使用 VMA valid_end，仅写有效前缀。
+- 缓存永久持页：mappings 归零即回收节点和基础页引用，不以 VMA 是否仍存在为准。
 
 ## 结构自查清单
 
-- 回调是否完全不接触 proc/VMA/PTE：已确认，回调只验证参数并返回 kbuf。
-- fd 引用、object 引用、PTE 引用是否区分：已确认并由 close/fork/unmap 测试覆盖。
-- 是否拒绝 MAP_PRIVATE、越界和权限不匹配：已由 QEMU 测试确认。
-- 是否未映射 buffer cache、未实现文件 page cache：已确认，留给 Step 5。
+- PRIVATE 路径是否完全绕过缓存：已确认并由 PRIVATE/COW 回归覆盖。
+- mappings 是否与每个 PTE 创建/删除成对：已审计 fault、fork、失败和 unmap。
+- I/O 是否全部在 cache spinlock 外：已确认，状态发布后释放锁再 I/O。
+- 最后引用是否在写回完成后删除键：已确认，EVICTING 保留到 I/O 完成。
 
 ## 验证方式
 
@@ -120,11 +142,11 @@ git diff --check
 
 ## 实施结果
 
-- `kernel/vm/kbuf.c` 以不可变页链表保存 page-backed 页面，引用归零时统一释放。
-- `file_operations.mmap` 返回设备 fd 当前持有的借用 kbuf，mmap object 随即增加
-  独立引用。
-- `vm_fault` 对 `VMA_KBUF` 调用 `kbuf_page_get` 获取 PTE 引用，后续双页表、
-  fork 和 unmap 复用统一流程。
-- `DEV_KBUF` 的跨页 fill/check ioctl 验证驱动与用户映射确实访问同一物理页。
+- `mmap_file_page_get` 通过 LOADING 占位保证同键首次 fault 单一发布，完整文件页
+  先清零再读取。
+- `mmap_file_page_hold/put` 将 fork 和 unmap 纳入缓存 mappings 与物理页引用。
+- `mmap_file_page_writeback` 使用 WRITING 状态串行化同一缓存项的显式写回。
+- 最后 put 进入 EVICTING，写回 dirty_length 后才删除缓存项并释放基础页引用。
+- 跨进程独立 open/mmap 测试确认同时驻留时双向即时可见，普通 read 确认最终写回。
+- 重复 fault/unmap 的 sysinfo 检查未发现页面随迭代线性泄漏。
 - QEMU 完整 `mmaptest`、QEMU/K210 构建和 `git diff --check` 均通过。
-- K210 未执行实机运行测试；新增测试设备本身无平台专属硬件依赖。

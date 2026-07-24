@@ -6,6 +6,7 @@
 #include "stat.h"
 #include "riscv.h"
 #include "fs.h"
+#include "sysinfo.h"
 #include "user.h"
 
 void mmap_test();
@@ -16,6 +17,7 @@ void copy_fault_test();
 void anonymous_private_test();
 void anonymous_shared_test();
 void kbuf_device_test();
+void file_shared_cache_test();
 void permission_test();
 void exec_test();
 char buf[BSIZE];
@@ -34,6 +36,7 @@ main(int argc, char *argv[])
   anonymous_private_test();
   anonymous_shared_test();
   kbuf_device_test();
+  file_shared_cache_test();
   permission_test();
   exec_test();
   printf("mmaptest: all tests succeeded\n");
@@ -682,6 +685,123 @@ kbuf_device_test(void)
   if(munmap(p, 2 * PGSIZE) < 0)
     err("kbuf munmap");
   printf("kbuf_device_test OK\n");
+}
+
+void
+file_shared_cache_test(void)
+{
+  char *p;
+  char *q;
+  char token = 'x';
+  char observed;
+  int ready[2];
+  int done[2];
+  int fd;
+  int child_fd;
+  int pid;
+  int status;
+  struct sysinfo before;
+  struct sysinfo after;
+  char *name = "mmap-cache";
+
+  printf("file_shared_cache_test starting\n");
+  testname = "file_shared_cache_test";
+  unlink(name);
+  fd = open(name, O_CREATE | O_TRUNC | O_RDWR);
+  if(fd < 0)
+    err("cache test create");
+  memset(buf, 0, sizeof(buf));
+  for(int written = 0; written < PGSIZE; written += sizeof(buf)){
+    int count = PGSIZE - written;
+    if(count > sizeof(buf))
+      count = sizeof(buf);
+    if(write(fd, buf, count) != count)
+      err("cache test initialize");
+  }
+  p = mmap(0, PGSIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  if(p == MAP_FAILED)
+    err("cache parent mmap");
+  if(pipe(ready) < 0 || pipe(done) < 0)
+    err("cache test pipe");
+
+  pid = fork();
+  if(pid < 0)
+    err("cache test fork");
+  if(pid == 0){
+    close(ready[0]);
+    close(done[1]);
+    close(fd);
+    child_fd = open(name, O_RDWR);
+    if(child_fd < 0)
+      exit(2);
+    q = mmap(0, PGSIZE, PROT_READ | PROT_WRITE,
+             MAP_SHARED, child_fd, 0);
+    if(q == MAP_FAILED)
+      exit(3);
+    q[0] = 'S';
+    q[17] = 'C';
+    if(write(ready[1], &token, 1) != 1 ||
+       read(done[0], &token, 1) != 1)
+      exit(4);
+    if(q[1] != 'P')
+      exit(5);
+    if(munmap(q, PGSIZE) < 0)
+      exit(6);
+    close(child_fd);
+    close(ready[1]);
+    close(done[0]);
+    exit(0);
+  }
+
+  close(ready[1]);
+  close(done[0]);
+  if(read(ready[0], &token, 1) != 1)
+    err("cache child ready");
+  // The child used an independent open and mmap object. The parent faults
+  // only now, while the child's mapping is still resident.
+  if(p[0] != 'S' || p[17] != 'C')
+    err("cache child to parent visibility");
+  p[1] = 'P';
+  if(write(done[1], &token, 1) != 1)
+    err("cache parent ready");
+  wait(&status);
+  if(status != 0 || p[0] != 'S' || p[1] != 'P')
+    err("cache parent after child release");
+  close(ready[0]);
+  close(done[1]);
+  if(munmap(p, PGSIZE) < 0)
+    err("cache parent munmap");
+
+  // Warm allocator/page-table metadata, then ensure repeated cache eviction
+  // does not consume one physical page per iteration.
+  p = mmap(0, PGSIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  if(p == MAP_FAILED)
+    err("cache reclaim warm mmap");
+  observed = p[0];
+  if(munmap(p, PGSIZE) < 0 || observed != 'S')
+    err("cache reclaim warm unmap");
+  if(sysinfo(&before) < 0)
+    err("cache reclaim sysinfo before");
+  for(int i = 0; i < 8; i++){
+    p = mmap(0, PGSIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if(p == MAP_FAILED)
+      err("cache reclaim mmap");
+    observed = p[0];
+    if(observed != 'S' || munmap(p, PGSIZE) < 0)
+      err("cache reclaim loop");
+  }
+  if(sysinfo(&after) < 0 ||
+     before.freemem > after.freemem + PGSIZE)
+    err("cache page leak");
+
+  close(fd);
+  fd = open(name, O_RDONLY);
+  if(fd < 0 || read(fd, buf, 18) != 18 ||
+     buf[0] != 'S' || buf[1] != 'P' || buf[17] != 'C')
+    err("cache writeback");
+  close(fd);
+  unlink(name);
+  printf("file_shared_cache_test OK\n");
 }
 
 void

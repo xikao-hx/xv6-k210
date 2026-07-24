@@ -16,6 +16,7 @@
   mmap VM 接口。
 - `kernel/vm/mmap.c`：集中管理地址分配、backing fault、unmap、fork、destroy。
 - `kernel/vm/kbuf.c`：管理 page-backed kbuf 的页面集合和引用。
+- `kernel/vm/mmap_file.c`：按文件身份与页 offset 管理 SHARED mmap 文件页缓存。
 - `kernel/devsw/kbufdev.c`：提供跨平台 kbuf mmap 测试设备，不操作用户页表。
 - `kernel/syscall/sysmmap.c`：若 syscall 入口继续增长时再独立；Step 1 暂保留在 `sysfile.c` 以避免无必要搬迁。
 - `kernel/fs/file.c`：提供显式 offset 的 mmap 文件 I/O。
@@ -97,3 +98,19 @@ syscall / trap / proc / copy paths
 - kbuf 页面仍由通用双页表路径安装/删除；设备驱动无法绕过权限校验或
   `kpagetable` 同步。
 - 当前 kbuf 是非连续 page-backed 内存；连续 DMA/CMA 和 MMIO 映射未纳入本轮。
+
+## Step 5 后确认
+
+- SHARED 文件页缓存独立于 FAT32 buffer cache，键为 VMA object 持有期间稳定的
+  `file->ep` 与页对齐文件 offset。
+- LOADING/WRITING/EVICTING 状态在 cache spinlock 下发布，但页面分配、文件读取
+  和写回都在锁外完成；竞争者以缓存项地址 sleep 并在唤醒后重新查找键。
+- cache entry 持有一个页面基础引用，`mappings` 与实际 SHARED FILE PTE 一一
+  对应；fault、fork、unmap 和失败回滚同时维护 mappings 与物理引用。
+- 最后 mappings 进入 EVICTING 后仍保留缓存键，dirty 写回完成才删除，防止新
+  fault 在写回窗口读取旧文件内容。
+- `dirty_length` 保守记录所有可写映射允许触及的最大有效前缀；显式 unmap/exit
+  写回和最后引用写回均不越过 VMA valid_end。
+- PRIVATE 文件映射不进入缓存，仍由独立物理页、COW 和“不写回”规则管理。
+- mmap page cache 只协调 mmap 路径；普通 read/write/truncate 的并发一致性不在
+  当前核心子集内。

@@ -5,7 +5,7 @@
 - 开发分支：`refactor/mmap-core-subset`，基于用户请求时的当前分支创建。
 - 已阅读 `doc/重构文档/mmap重构方案.md` 并完成现有 mmap 路径审计。
 - 已初始化 PRD、设计、技术栈、实施计划、架构、代码设计和开发规则。
-- Step 1 至 Step 3 已完成并独立提交；Step 4 已完成代码与自动验证，
+- Step 1 至 Step 4 已完成并独立提交；Step 5 已完成代码与自动验证，
   等待独立提交。
 
 ## Step 1：文件 mmap 基础与 VM 分层
@@ -107,6 +107,7 @@
 
 - 完成时间：2026-07-24
 - 状态：代码和自动验证完成。
+- 提交：`9e969d0 mmap: add device kbuf mappings`
 - 修改文件：
   - 新增 `kernel/include/kbuf.h`、`kernel/vm/kbuf.c`。
   - 新增 `kernel/include/kbufdev.h`、`kernel/devsw/kbufdev.c`。
@@ -136,3 +137,35 @@
 - 下一步提醒：
   - Step 5 为共享文件映射增加按文件身份与页 offset 索引的 page cache；
     不得复用 buffer cache 内存。
+
+## Step 5：共享文件 mmap page cache
+
+- 完成时间：2026-07-24
+- 状态：代码和自动验证完成。
+- 修改文件：
+  - 新增 `kernel/include/mmap_file.h`、`kernel/vm/mmap_file.c`。
+  - 修改 `kernel/vm/mmap.c`、`kernel/main.c`、`Makefile`。
+  - 扩展 `testcase/mmaptest.c`。
+  - 更新 `doc/mmap-bank/code-design.md`、`progress.md`、`architecture.md`、
+    `dev-rules.md`、`implementation-plan.md`。
+- 完成内容：
+  - 以稳定 `struct dirent *` 文件身份和页对齐 offset 作为缓存键。
+  - 增加 LOADING/READY/WRITING/EVICTING 状态，竞争 fault 等待同一缓存项。
+  - 页面分配和 FAT32 I/O 全部在 cache spinlock 外执行。
+  - cache 持有页面基础引用，每个 SHARED FILE PTE 对应 mappings 和物理引用。
+  - fork 在安装子 PTE 前 hold 缓存页，失败路径成对 put。
+  - unmap/exit 同步双页表后归还缓存映射；最后映射完成 dirty 写回再删除键。
+  - 可写映射以 VMA valid_end 维护 dirty_length，避免末页写回越界。
+  - PRIVATE 文件 mmap 完全绕过缓存，继续使用独立页和 COW。
+- 测试结果：
+  - QEMU 完整 `mmaptest` 通过。
+  - 子进程通过独立 `open + mmap` 先 fault，父进程在子映射仍驻留时后 fault，
+    双向修改均立即互见。
+  - 子进程先 unmap/exit 后父映射继续有效，最后普通 read 验证写回。
+  - 预热后连续 8 次 shared fault/unmap，sysinfo 未发现物理页线性减少。
+  - Step 1 至 Step 4 mmap 测试全量回归通过。
+  - `make build platform=qemu`、`make build platform=k210` 通过。
+  - `git diff --check` 通过。
+- 已知边界：
+  - 这是 mmap 专用文件页缓存，不同步普通 read/write 或 truncate 的并发修改。
+  - 未实现硬件 dirty bit、msync、mprotect、swap 或完整 Linux page cache。

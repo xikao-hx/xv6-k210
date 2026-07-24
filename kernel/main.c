@@ -4,6 +4,7 @@
 #include "file.h"
 #include "kalloc.h"
 #include "kbufdev.h"
+#include "mmap_file.h"
 #include "plic.h"
 #include "printf.h"
 #include "proc.h"
@@ -51,6 +52,7 @@ main(unsigned long hartid, unsigned long dtb_pa)
 #endif
     binit();         // buffer cache
     fileinit();      // file table
+    mmap_file_cache_init(); // shared file-backed mmap pages
     kbufdev_init();  // register page-backed mmap test device
     statsinit();     // register read-only kernel statistics device
 #ifndef QEMU
