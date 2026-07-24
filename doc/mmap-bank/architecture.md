@@ -67,3 +67,17 @@ syscall / trap / proc / copy paths
 - syscall 以 `MAP_ANONYMOUS` 决定 fd 是否必须解析；匿名 ABI 固定
   `fd == -1`、`offset == 0`。
 - mmap object 析构按 type 释放 backing，匿名 object 不触碰文件层。
+
+## Step 3 后确认
+
+- `VMA_ANON | MAP_SHARED` 的 object 持有独立 anonymous object；多个
+  fork/split VMA 通过 mmap object 引用共享它。
+- anonymous object 使用按驻留页创建的稀疏页槽，VMA 长度不会转化为预分配
+  元数据开销。
+- anonymous object 为页持有基础物理引用，实际安装的每个 PTE 再持有一个映射
+  引用；删除单个映射不会使页槽悬空。
+- shared fault 的页索引由 `vma->offset + page - vma->start` 计算，头部裁剪和
+  VMA 拆分后仍定位到同一 backing 页。
+- 首次 fault 的候选页在 object 锁外分配，并在锁内二次查找后发布；锁内不调用
+  页面或堆分配器。
+- PRIVATE anonymous 仍以进程 PTE/COW 管理页面，不依赖 anonymous object 页槽。

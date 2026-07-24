@@ -9,6 +9,17 @@
 
 #define MAP_FAILED ((uint64)-1)
 
+struct anon_page {
+  uint64 index;
+  uint64 pa;
+  struct anon_page *next;
+};
+
+struct anon_object {
+  struct spinlock lock;
+  struct anon_page *pages;
+};
+
 static struct vma_area *
 vma_find(struct proc *p, uint64 va)
 {
@@ -60,8 +71,87 @@ vma_find_address(struct proc *p, uint64 length)
   return 0;
 }
 
+static struct anon_object *
+anon_object_create(void)
+{
+  struct anon_object *anon = kmalloc(sizeof(*anon));
+
+  if(anon == 0)
+    return 0;
+  memset(anon, 0, sizeof(*anon));
+  initlock(&anon->lock, "anon_object");
+  return anon;
+}
+
+static void
+anon_object_destroy(struct anon_object *anon)
+{
+  struct anon_page *page;
+
+  acquire(&anon->lock);
+  page = anon->pages;
+  anon->pages = 0;
+  release(&anon->lock);
+
+  while(page){
+    struct anon_page *next = page->next;
+    kfree_page((void *)page->pa);
+    kfree(page);
+    page = next;
+  }
+  kfree(anon);
+}
+
+// Return a shared anonymous page with one reference owned by the caller's PTE.
+static void *
+anon_page_get(struct anon_object *anon, uint64 index)
+{
+  struct anon_page *page;
+  struct anon_page *candidate;
+  void *mem;
+
+  acquire(&anon->lock);
+  for(page = anon->pages; page; page = page->next){
+    if(page->index == index){
+      kaddquota((void *)page->pa);
+      release(&anon->lock);
+      return (void *)page->pa;
+    }
+  }
+  release(&anon->lock);
+
+  mem = kalloc_page();
+  if(mem == 0)
+    return 0;
+  memset(mem, 0, PGSIZE);
+  candidate = kmalloc(sizeof(*candidate));
+  if(candidate == 0){
+    kfree_page(mem);
+    return 0;
+  }
+  candidate->index = index;
+  candidate->pa = (uint64)mem;
+
+  acquire(&anon->lock);
+  for(page = anon->pages; page; page = page->next){
+    if(page->index == index){
+      kaddquota((void *)page->pa);
+      release(&anon->lock);
+      kfree(candidate);
+      kfree_page(mem);
+      return (void *)page->pa;
+    }
+  }
+  candidate->next = anon->pages;
+  anon->pages = candidate;
+  // kalloc's initial reference belongs to the object; add the PTE reference.
+  kaddquota(mem);
+  release(&anon->lock);
+  return mem;
+}
+
 static struct mmap_object *
-mmap_object_create(enum vma_type type, struct file *file)
+mmap_object_create(enum vma_type type, struct file *file, int flags)
 {
   struct mmap_object *object = kmalloc(sizeof(*object));
 
@@ -73,6 +163,13 @@ mmap_object_create(enum vma_type type, struct file *file)
   object->type = type;
   if(type == VMA_FILE)
     object->file = filedup(file);
+  if(type == VMA_ANON && (flags & MAP_SHARED)){
+    object->anon = anon_object_create();
+    if(object->anon == 0){
+      kfree(object);
+      return 0;
+    }
+  }
   return object;
 }
 
@@ -105,6 +202,8 @@ mmap_object_put(struct mmap_object *object)
   if(destroy){
     if(file)
       fileclose(file);
+    if(object->anon)
+      anon_object_destroy(object->anon);
     kfree(object);
   }
 }
@@ -150,7 +249,7 @@ vma_map_create(struct proc *p, uint64 addr, uint64 length, int prot,
     return MAP_FAILED;
   if(start + length < start)
     return MAP_FAILED;
-  if((object = mmap_object_create(type, file)) == 0)
+  if((object = mmap_object_create(type, file, flags)) == 0)
     return MAP_FAILED;
 
   memset(vma, 0, sizeof(*vma));
@@ -186,7 +285,8 @@ uint64
 vma_map_anon(struct proc *p, uint64 addr, uint64 length, int prot,
              int flags)
 {
-  if(flags != (MAP_PRIVATE | MAP_ANONYMOUS))
+  if(flags != (MAP_PRIVATE | MAP_ANONYMOUS) &&
+     flags != (MAP_SHARED | MAP_ANONYMOUS))
     return MAP_FAILED;
   return vma_map_create(p, addr, length, prot, flags, VMA_ANON, 0, 0);
 }
@@ -212,6 +312,7 @@ vm_fault(struct proc *p, uint64 va, int access)
   void *mem;
   uint64 read_length;
   uint64 file_offset;
+  uint64 anon_index;
   int pte_flags = PTE_U;
 
   if(va >= MAXVA || (vma = vma_find(p, va)) == 0)
@@ -227,10 +328,16 @@ vm_fault(struct proc *p, uint64 va, int access)
     return 0;
   }
 
-  mem = kalloc_page();
+  if(vma->type == VMA_ANON && (vma->flags & MAP_SHARED)){
+    anon_index = (vma->offset + page - vma->start) / PGSIZE;
+    mem = anon_page_get(vma->object->anon, anon_index);
+  } else {
+    mem = kalloc_page();
+    if(mem)
+      memset(mem, 0, PGSIZE);
+  }
   if(mem == 0)
     return -1;
-  memset(mem, 0, PGSIZE);
 
   if(vma->type == VMA_FILE){
     read_length = PGSIZE;

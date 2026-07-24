@@ -11,6 +11,7 @@
 
 struct file;
 struct proc;
+struct anon_object;
 
 enum vma_type {
   VMA_FILE,
@@ -28,6 +29,7 @@ struct mmap_object {
   int refcnt;
   enum vma_type type;
   struct file *file;
+  struct anon_object *anon;
 };
 
 struct vma_area {

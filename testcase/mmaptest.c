@@ -12,6 +12,7 @@ void fork_semantics_test();
 void offset_unmap_test();
 void copy_fault_test();
 void anonymous_private_test();
+void anonymous_shared_test();
 void permission_test();
 void exec_test();
 char buf[BSIZE];
@@ -28,6 +29,7 @@ main(int argc, char *argv[])
   offset_unmap_test();
   copy_fault_test();
   anonymous_private_test();
+  anonymous_shared_test();
   permission_test();
   exec_test();
   printf("mmaptest: all tests succeeded\n");
@@ -493,10 +495,6 @@ anonymous_private_test(void)
   testname = "anonymous_private_test";
 
   bad = mmap(0, PGSIZE, PROT_READ | PROT_WRITE,
-             MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-  if(bad != MAP_FAILED)
-    err("shared anonymous accepted in Step 2");
-  bad = mmap(0, PGSIZE, PROT_READ | PROT_WRITE,
              MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
   if(bad != MAP_FAILED)
     err("anonymous fd accepted");
@@ -548,6 +546,59 @@ anonymous_private_test(void)
   if(munmap(p, length) < 0)
     err("anonymous munmap");
   printf("anonymous_private_test OK\n");
+}
+
+void
+anonymous_shared_test(void)
+{
+  char *p;
+  int pid;
+  int status;
+
+  printf("anonymous_shared_test starting\n");
+  testname = "anonymous_shared_test";
+  p = mmap(0, PGSIZE * 3, PROT_READ | PROT_WRITE,
+           MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  if(p == MAP_FAILED)
+    err("shared anonymous mmap");
+
+  // Page 0 is resident before fork. Page 1 is first faulted by the child,
+  // and page 2 is first faulted by the parent after the child exits.
+  p[0] = 'A';
+  pid = fork();
+  if(pid < 0)
+    err("shared anonymous fork");
+  if(pid == 0){
+    if(p[0] != 'A' || p[PGSIZE] != 0)
+      exit(2);
+    p[0] = 'B';
+    p[PGSIZE] = 'C';
+    exit(0);
+  }
+  wait(&status);
+  if(status != 0 || p[0] != 'B' || p[PGSIZE] != 'C')
+    err("shared anonymous visibility");
+  if(p[2 * PGSIZE] != 0)
+    err("shared anonymous late zero page");
+  p[2 * PGSIZE] = 'D';
+
+  // A second child inherits all resident pages. Its exit must not invalidate
+  // the parent's mappings or the anonymous object's page ownership.
+  pid = fork();
+  if(pid < 0)
+    err("shared anonymous second fork");
+  if(pid == 0){
+    if(p[0] != 'B' || p[PGSIZE] != 'C' || p[2 * PGSIZE] != 'D')
+      exit(3);
+    p[2 * PGSIZE] = 'E';
+    exit(0);
+  }
+  wait(&status);
+  if(status != 0 || p[2 * PGSIZE] != 'E')
+    err("shared anonymous exit lifetime");
+  if(munmap(p, PGSIZE * 3) < 0)
+    err("shared anonymous munmap");
+  printf("anonymous_shared_test OK\n");
 }
 
 void

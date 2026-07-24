@@ -5,7 +5,7 @@
 - 开发分支：`refactor/mmap-core-subset`，基于用户请求时的当前分支创建。
 - 已阅读 `doc/重构文档/mmap重构方案.md` 并完成现有 mmap 路径审计。
 - 已初始化 PRD、设计、技术栈、实施计划、架构、代码设计和开发规则。
-- Step 1、Step 2 已完成；Step 2 等待独立提交。
+- Step 1、Step 2 已完成并独立提交；Step 3 已完成代码与自动验证，等待独立提交。
 
 ## Step 1：文件 mmap 基础与 VM 分层
 
@@ -49,6 +49,7 @@
 
 - 完成时间：2026-07-24
 - 状态：代码和自动验证完成。
+- 提交：`2ce5b47 mmap: add private anonymous mappings`
 - 修改文件：
   - `kernel/include/fcntl.h`、`kernel/include/mmap.h`
   - `kernel/vm/mmap.c`、`kernel/syscall/sysfile.c`
@@ -72,3 +73,30 @@
 - 下一步提醒：
   - Step 3 需要在 anonymous object 内增加共享页槽；PRIVATE anonymous
     仍不依赖这些页槽。
+
+## Step 3：共享匿名 mmap
+
+- 完成时间：2026-07-24
+- 状态：代码和自动验证完成。
+- 修改文件：
+  - `kernel/include/mmap.h`、`kernel/vm/mmap.c`
+  - `testcase/mmaptest.c`
+  - `doc/mmap-bank/progress.md`、`architecture.md`、`code-design.md`、
+    `dev-rules.md`
+- 完成内容：
+  - 支持 `MAP_SHARED | MAP_ANONYMOUS`，沿用匿名映射的
+    `fd == -1`、`offset == 0` ABI。
+  - shared anonymous object 用稀疏页槽按需保存已驻留页。
+  - object 为每个共享页持有基础引用，每个用户 PTE 单独持有映射引用。
+  - 并发首次缺页采用锁外分配、锁内二次查找，避免在自旋锁内分配内存。
+  - fork 前已驻留页和 fork 后任一方首次驻留页都映射同一物理页。
+  - PRIVATE anonymous 路径保持独立零页/COW，不查询共享页槽。
+- 测试结果：
+  - QEMU 完整 `mmaptest` 通过，包含父进程先驻留、子进程先驻留、
+    父进程后驻留、二次 fork 和子进程退出后的共享可见性。
+  - Step 1/Step 2 mmap 测试全量回归通过。
+  - `make build platform=qemu`、`make build platform=k210` 通过。
+  - `git diff --check` 通过。
+- 下一步提醒：
+  - Step 4 增加 page-backed kbuf 和设备 mmap 回调，不允许设备驱动直接操作
+    用户页表。

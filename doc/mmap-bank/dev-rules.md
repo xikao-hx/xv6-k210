@@ -27,6 +27,10 @@
 - 修改 PTE 所有权前必须明确 PRIVATE、SHARED、COW 或 object 页引用。
 - 失败路径必须回滚新增的 object 引用、物理页引用和 PTE。
 - unmap 拆分需要的 VMA 槽必须在修改页表前预留。
+- object-backed 共享页必须区分 object 基础引用和各 PTE 映射引用；任何单个
+  VMA 的 unmap/exit 都不能提前释放 object 所有的页面。
+- 共享页首次创建不得在自旋锁内执行 `kalloc/kmalloc`；采用锁外分配和锁内
+  二次查找，并完整释放竞争失败的候选对象。
 
 ## 文件映射
 
