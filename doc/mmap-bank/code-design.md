@@ -1,117 +1,94 @@
-# Step 1 文件 mmap 基础代码设计
+# Step 2 私有匿名 mmap 代码设计
 
 ## 当前功能
 
-- 功能名称：文件 mmap 基础与 VM 分层
-- 所属实施步骤：Step 1
-- 关联需求：文件 PRIVATE/SHARED、独立地址区、统一 fault、部分 unmap、fork/exec/exit
+- 功能名称：`MAP_PRIVATE | MAP_ANONYMOUS`
+- 所属实施步骤：Step 2
+- 关联需求：大块虚拟内存、零页懒分配、fork COW、内核 copy fault-in
 
 ## 成功标准
 
-- 行为：短末页、非零 offset、严格权限、close fd、部分 unmap 和文件写回正确。
-- 结构：VMA 修改集中在 mmap VM，syscall/trap/proc 不实现 backing 细节。
-- 验证：QEMU/K210 构建通过，QEMU mmap 测试通过。
+- 行为：创建匿名 VMA 时不分配数据页，首次读写页面得到全零内容。
+- 行为：fork 后已驻留匿名页使用 COW，父子写入互不影响。
+- 结构：匿名 fault 不调用文件层，不引入 Step 3 的共享页槽。
+- 验证：QEMU 匿名映射测试与原文件 mmap 回归通过，K210 构建通过。
 
 ## 现有代码观察
 
-- `sysfile.c` 同时承担 mmap syscall、文件 fault、VMA 查找和 munmap。
-- `proc.c` 的 fork/exit 直接复制或释放 `struct file *`。
-- `uvmcopy` 只遍历 `p->sz`，无法复制独立高地址 VMA 页。
-- `upg2ukpg` 可复用来同步已安装 PTE，但 unmap 需要成对清除两份页表。
-- `eread/ewrite` 已支持显式 offset 和 kernel/user 地址标记。
+- `vma_map_file` 已包含地址分配与 VMA 初始化，可抽出共用插入 helper。
+- `vm_fault` 已先分配并清零页面，文件读取是唯一需要按 type 分流的步骤。
+- `vma_fork` 的 PRIVATE COW 逻辑不依赖文件 backing，可直接复用。
+- syscall 当前无条件通过 `argfd` 解析 fd，匿名映射需要接受 `fd == -1`。
 
 ## 修改文件
 
-- `kernel/include/mmap.h`：新增 VMA/object 和公共接口。
-- `kernel/vm/mmap.c`：集中实现 Step 1 文件映射行为。
-- `kernel/include/proc.h`：进程持有新 VMA 结构。
-- `kernel/include/file.h`、`kernel/fs/file.c`：显式 offset mmap I/O。
-- `kernel/syscall/sysfile.c`：只解析 mmap/munmap 参数并调用 VM。
-- `kernel/trap/trap.c`：fault 原因转为 access。
-- `kernel/proc/proc.c`、`kernel/proc/exec.c`：调用 fork/destroy 接口并检查 heap 冲突。
-- `kernel/vm/vm.c`、`kernel/vm/vmcopyin.c`：为合法 VMA 提供 copy fault-in。
-- `Makefile`：编译新增 mmap VM 文件及测试程序。
-- `testcase/mmaptest.c` 或等价新测试：补齐 Step 1 验收场景。
+- `kernel/include/fcntl.h`：增加用户/内核共享的 `MAP_ANONYMOUS`。
+- `kernel/include/mmap.h`：增加 `VMA_ANON` 和 `vma_map_anon`。
+- `kernel/vm/mmap.c`：创建私有匿名 object、共用 VMA 插入及匿名 fault。
+- `kernel/syscall/sysfile.c`：按 anonymous flag 决定是否解析文件。
+- `testcase/mmaptest.c`：增加懒分配、零页、copy 和 fork COW 测试。
+- `doc/mmap-bank/*`：记录设计、验证和架构变化。
 
 ## 禁止修改范围
 
-- K210 外设驱动：Step 1 没有设备 mmap。
-- buffer cache 与 FAT32 数据结构：只增加窄文件 I/O 包装。
-- anonymous/kbuf/page cache 实现：属于后续步骤。
+- anonymous object 共享页槽：属于 Step 3。
+- 设备 file operations/kbuf：属于 Step 4。
+- 文件 mmap page cache：属于 Step 5。
 
-## 职责划分
+## 职责划分与依赖方向
 
-- syscall：ABI 参数获取，不选择地址、不改 VMA。
-- mmap VM：校验映射语义、分配地址、管理 VMA/object/PTE。
-- file：执行给定 offset 的文件内容 I/O，不管理 VMA。
-- trap/copy：只提供 access 类型和访问入口。
-- proc/exec：只触发生命周期事件。
+- syscall 只区分 ABI 参数组合并选择 `vma_map_file/vma_map_anon`。
+- mmap VM 根据 `vma->type` 选择 file read 或匿名零页。
+- PRIVATE fork 继续统一由 `vma_fork` 处理。
+- 禁止匿名 fault 调用 `file.c/FAT32`。
 
-## 依赖方向
+## 数据流
 
-- 允许：`sysfile/trap/proc/vmcopy -> mmap VM -> file/FAT32`。
-- 禁止：`file/FAT32 -> mmap VM -> proc 流程`。
-- 禁止 trap 直接读 VMA 字段。
-
-## 数据流与状态流
-
-1. syscall 取得 addr/length/prot/flags/file/offset。
-2. `vma_map_file` 校验并创建 file object，向下分配 VMA。
-3. fault/copy 调用 `vm_fault`，按 VMA offset 读入清零页。
-4. mmap VM 同步安装用户与内核 PTE。
-5. `vma_unmap` 按驻留页写回/释放并裁剪或拆分 VMA。
-6. fork/exec/exit 通过 object 引用维持或销毁资源。
+1. 用户以 `fd=-1, offset=0` 请求 PRIVATE anonymous mapping。
+2. mmap VM 创建无文件 backing 的 `VMA_ANON` object，仅插入 VMA。
+3. trap/copy 首次访问调用 `vm_fault`，分配并保留清零页。
+4. fork 对已驻留可写页设置 COW；未驻留页由父子以后独立分配。
+5. munmap/exec/exit 沿用统一页面和 object 释放流程。
 
 ## 接口设计
 
-- `uint64 vma_map_file(struct proc *, uint64, uint64, int, int, struct file *, uint64)`
-- `int vma_unmap(struct proc *, uint64, uint64)`
-- `int vm_fault(struct proc *, uint64, int)`
-- `int vma_fork(struct proc *, struct proc *)`
-- `void vma_destroy_all(struct proc *)`
-- `int vma_range_valid(struct proc *, uint64, uint64, int)`
-- `int fileread_at(struct file *, uint64, uint64, int)`
-- `int filewrite_at(struct file *, uint64, uint64, int)`
+- `uint64 vma_map_anon(struct proc *, uint64, uint64, int, int)`
+- `MAP_ANONYMOUS = 0x20`
+- anonymous ABI 限制：仅 `MAP_PRIVATE`，`fd == -1`，`offset == 0`。
 
 ## 方案取舍
 
-- 采用：Step 1 就建立 object 抽象，因为 fd 提前关闭和 fork 生命周期已经需要独立引用。
-- 采用：高地址向下 first-fit，固定 VMA 数组。
-- 不采用：Step 1 共享文件全局 page cache；其并发和 dirty 生命周期单独放在 Step 5。
-- 不采用：通用 `uvmunmap(..., do_free)` 直接处理所有 backing；由 mmap VM 决定引用语义。
+- 采用：Step 2 创建轻量 `VMA_ANON` object，但不保存页面数组。
+- 不采用：以全局零页实现第一次读；会引入额外只读/COW状态，当前内存规模下收益有限。
+- 不采用：提前让 MAP_SHARED 复用 PRIVATE 页；无法表达缺页后跨进程共享。
 
-## 风险与约束
+## 风险与避免方式
 
-- 最容易写脏：fork 失败回滚、VMA 中间拆分、双页表先后顺序、exec 旧页表清理。
-- 避免方式：先预留槽、逐页只处理有效 PTE、把 object/PTE 操作集中在窄 helper。
-- 兼容性：现有低地址 lazy allocation 和 COW 行为必须保持。
-- 降级：Step 1 的不同进程独立 fault 尚不保证同一文件页即时共享，留到 Step 5。
+- flags 组合解析容易破坏文件 mmap：分别校验 anonymous bit 和 sharing bit。
+- object 析构不能无条件 `fileclose`：按 object type 释放。
+- fault 分流必须发生在页面已清零之后、PTE 安装之前。
 
 ## 结构自查清单
 
-- 只修改 Step 1 必需文件：是；未触碰外设、匿名对象或 page cache。
-- 复用现有页面引用计数/COW/FAT32 I/O：是。
-- 避免重复 VMA 查找和写回逻辑：由 mmap VM 集中。
-- 避免越层调用：是；syscall/trap/proc 只调用 mmap 公共接口。
-- 未提前实现匿名、kbuf、全局 page cache：是。
+- 只修改 Step 2 必需文件：是。
+- 未引入共享匿名页槽：是。
+- 文件 mmap 行为保持不变：QEMU 全量回归通过。
+- 无新的反向依赖：匿名逻辑仅位于 mmap VM。
 
 ## 验证方式
 
 ```bash
 make build platform=qemu
-make fs
+make fs platform=qemu
+make run platform=qemu
+# shell 中执行 mmaptest
 make build platform=k210
 git diff --check
 ```
 
-- QEMU 预期：`mmaptest: all tests succeeded`，新增 Step 1 用例全部通过。
-
 ## 实施结果
 
-- 行为成功标准：已通过 QEMU 功能测试。
-- 结构成功标准：VMA 状态和 backing 生命周期已集中到 mmap VM。
-- 验证成功标准：QEMU/K210 构建、QEMU `mmaptest`、`git diff --check` 均通过。
-- 当前限制：不同进程在 fork 后分别首次 fault 的 SHARED 文件页尚不即时共享，
-  符合 Step 1 边界，留到 Step 5。
-- 下一步门禁：等待用户明确确认 Step 1 测试通过后，重新阅读 Memory Bank 并
-  为 Step 2 私有匿名 mmap 更新本代码设计。
+- 16 MiB PRIVATE anonymous VMA 在 QEMU 小内存配置下成功建立。
+- 选定页面首次读取为零，写入及 copyout fault-in 正常。
+- fork 后父子对已驻留和未驻留页面均保持 PRIVATE 隔离。
+- QEMU `mmaptest`、QEMU/K210 构建和差异检查均通过。

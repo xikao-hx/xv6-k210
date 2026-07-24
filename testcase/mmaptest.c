@@ -11,6 +11,7 @@ void fork_test();
 void fork_semantics_test();
 void offset_unmap_test();
 void copy_fault_test();
+void anonymous_private_test();
 void permission_test();
 void exec_test();
 char buf[BSIZE];
@@ -26,6 +27,7 @@ main(int argc, char *argv[])
   fork_semantics_test();
   offset_unmap_test();
   copy_fault_test();
+  anonymous_private_test();
   permission_test();
   exec_test();
   printf("mmaptest: all tests succeeded\n");
@@ -475,6 +477,77 @@ copy_fault_test(void)
   unlink("copy.name");
   unlink("copy.out");
   printf("copy_fault_test OK\n");
+}
+
+void
+anonymous_private_test(void)
+{
+  const int length = 16 * 1024 * 1024;
+  char *p;
+  char *bad;
+  int fd;
+  int pid;
+  int status;
+
+  printf("anonymous_private_test starting\n");
+  testname = "anonymous_private_test";
+
+  bad = mmap(0, PGSIZE, PROT_READ | PROT_WRITE,
+             MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  if(bad != MAP_FAILED)
+    err("shared anonymous accepted in Step 2");
+  bad = mmap(0, PGSIZE, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
+  if(bad != MAP_FAILED)
+    err("anonymous fd accepted");
+  bad = mmap(0, PGSIZE, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS, -1, PGSIZE);
+  if(bad != MAP_FAILED)
+    err("anonymous offset accepted");
+
+  // This VMA is larger than available physical memory. Creation can only
+  // succeed when mmap reserves virtual addresses without allocating data pages.
+  p = mmap(0, length, PROT_READ | PROT_WRITE,
+           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if(p == MAP_FAILED)
+    err("large private anonymous mmap");
+  if(p[0] != 0 || p[17 * PGSIZE] != 0 || p[length - 1] != 0)
+    err("anonymous page not zero");
+  p[0] = 'A';
+  p[17 * PGSIZE] = 'Q';
+  p[length - 1] = 'Z';
+
+  unlink("anon.src");
+  fd = open("anon.src", O_WRONLY | O_CREATE);
+  if(fd < 0 || write(fd, "anon", 4) != 4)
+    err("anonymous copy source");
+  close(fd);
+  fd = open("anon.src", O_RDONLY);
+  if(fd < 0 || read(fd, p + 2 * PGSIZE, 4) != 4)
+    err("anonymous copyout fault-in");
+  close(fd);
+  if(memcmp(p + 2 * PGSIZE, "anon", 4) != 0)
+    err("anonymous copy content");
+  unlink("anon.src");
+
+  pid = fork();
+  if(pid < 0)
+    err("anonymous fork");
+  if(pid == 0){
+    if(p[0] != 'A' || p[PGSIZE] != 0)
+      exit(2);
+    p[0] = 'C';
+    p[PGSIZE] = 'D';
+    if(p[0] != 'C' || p[PGSIZE] != 'D')
+      exit(3);
+    exit(0);
+  }
+  wait(&status);
+  if(status != 0 || p[0] != 'A' || p[PGSIZE] != 0)
+    err("anonymous private COW");
+  if(munmap(p, length) < 0)
+    err("anonymous munmap");
+  printf("anonymous_private_test OK\n");
 }
 
 void

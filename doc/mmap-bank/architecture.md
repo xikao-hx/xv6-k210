@@ -58,3 +58,12 @@ syscall / trap / proc / copy paths
 - `MMAP_TOP` 取 `KSTACK(0)`，VMA end 为 exclusive，不覆盖进程内核 stack。
 - unmap 先完成所有写回检查，再修改 PTE/VMA；中间拆分先预留槽。
 - copy 路径不再用 `p->sz` 排除高地址 VMA，并在访问物理页前校验 PTE 权限。
+
+## Step 2 后确认
+
+- `VMA_ANON | MAP_PRIVATE` 的 object 只管理 VMA 生命周期，不保存物理页数组。
+- 匿名 PRIVATE 页的唯一所有权信息仍是 PTE 与现有页面引用计数。
+- `vm_fault` 先统一分配清零页，再仅对 `VMA_FILE` 执行 backing read。
+- syscall 以 `MAP_ANONYMOUS` 决定 fd 是否必须解析；匿名 ABI 固定
+  `fd == -1`、`offset == 0`。
+- mmap object 析构按 type 释放 backing，匿名 object 不触碰文件层。

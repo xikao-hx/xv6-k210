@@ -462,17 +462,26 @@ sys_mmap(void)
   int length;
   int prot;
   int flags;
-  struct file *vfile;
+  struct file *vfile = 0;
+  int fd;
   int offset;
+  struct proc *p = myproc();
 
   if (argaddr(0, &addr) < 0 || argint(1, &length) < 0 || argint(2, &prot) < 0 ||
-      argint(3, &flags) < 0 || argfd(4, 0, &vfile) < 0 ||
+      argint(3, &flags) < 0 || argint(4, &fd) < 0 ||
       argint(5, &offset) < 0)
     return -1;
   if(length <= 0 || offset < 0)
     return -1;
 
-  return vma_map_file(myproc(), addr, length, prot, flags, vfile, offset);
+  if(flags & MAP_ANONYMOUS){
+    if(fd != -1 || offset != 0)
+      return -1;
+    return vma_map_anon(p, addr, length, prot, flags);
+  }
+  if(fd < 0 || fd >= NOFILE || (vfile = p->ofile[fd]) == 0)
+    return -1;
+  return vma_map_file(p, addr, length, prot, flags, vfile, offset);
 }
 
 uint64

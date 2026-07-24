@@ -5,12 +5,13 @@
 - 开发分支：`refactor/mmap-core-subset`，基于用户请求时的当前分支创建。
 - 已阅读 `doc/重构文档/mmap重构方案.md` 并完成现有 mmap 路径审计。
 - 已初始化 PRD、设计、技术栈、实施计划、架构、代码设计和开发规则。
-- Step 1 自动化验证已通过，等待用户确认后进入 Step 2。
+- Step 1、Step 2 已完成；Step 2 等待独立提交。
 
 ## Step 1：文件 mmap 基础与 VM 分层
 
 - 完成时间：2026-07-24
-- 状态：代码和自动化验证完成，等待用户测试确认。
+- 状态：已完成并由用户确认。
+- 提交：`4623c00 mmap: refactor file-backed mappings`
 - 修改文件：
   - 新增 `kernel/include/mmap.h`、`kernel/vm/mmap.c`。
   - 修改 `kernel/include/proc.h`、`kernel/include/file.h`。
@@ -43,3 +44,31 @@
 - 下一步提醒：
   - Step 1 尚未提供不同进程独立 fault 的文件页即时共享；留到 Step 5 page cache。
   - Step 2 只增加 `MAP_PRIVATE | MAP_ANONYMOUS`，不得提前加入共享匿名页槽。
+
+## Step 2：私有匿名 mmap
+
+- 完成时间：2026-07-24
+- 状态：代码和自动验证完成。
+- 修改文件：
+  - `kernel/include/fcntl.h`、`kernel/include/mmap.h`
+  - `kernel/vm/mmap.c`、`kernel/syscall/sysfile.c`
+  - `testcase/mmaptest.c`
+  - `doc/mmap-bank/implementation-plan.md`、`progress.md`、
+    `architecture.md`、`code-design.md`
+- 完成内容：
+  - 增加 `MAP_ANONYMOUS` 和 `VMA_ANON`。
+  - 支持 `MAP_PRIVATE | MAP_ANONYMOUS`，要求 `fd == -1`、`offset == 0`。
+  - 创建映射时只分配 VMA/object，不分配匿名数据页。
+  - 首次 trap 或 copyout 访问时按页分配并清零。
+  - fork 后已驻留页沿用 COW，未驻留页由父子独立分配。
+  - object 析构按 backing type 处理，不再假定始终持有文件。
+  - 本步明确拒绝 `MAP_SHARED | MAP_ANONYMOUS`。
+- 测试结果：
+  - QEMU 完整 `mmaptest` 通过，包含 16 MiB 懒分配、零页、copyout
+    fault-in、PRIVATE fork COW 和非法参数测试。
+  - Step 1 文件 mmap 全量回归通过。
+  - `make build platform=qemu`、`make build platform=k210` 通过。
+  - `git diff --check` 通过。
+- 下一步提醒：
+  - Step 3 需要在 anonymous object 内增加共享页槽；PRIVATE anonymous
+    仍不依赖这些页槽。

@@ -14,6 +14,7 @@ struct proc;
 
 enum vma_type {
   VMA_FILE,
+  VMA_ANON,
 };
 
 enum vm_fault_access {
@@ -43,6 +44,7 @@ struct vma_area {
 
 uint64 vma_map_file(struct proc *, uint64, uint64, int, int,
                     struct file *, uint64);
+uint64 vma_map_anon(struct proc *, uint64, uint64, int, int);
 int vma_unmap(struct proc *, uint64, uint64);
 int vm_fault(struct proc *, uint64, int);
 int vma_fork(struct proc *, struct proc *);

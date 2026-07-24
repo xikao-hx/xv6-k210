@@ -61,7 +61,7 @@ vma_find_address(struct proc *p, uint64 length)
 }
 
 static struct mmap_object *
-mmap_object_create_file(struct file *file)
+mmap_object_create(enum vma_type type, struct file *file)
 {
   struct mmap_object *object = kmalloc(sizeof(*object));
 
@@ -70,8 +70,9 @@ mmap_object_create_file(struct file *file)
   memset(object, 0, sizeof(*object));
   initlock(&object->lock, "mmap_object");
   object->refcnt = 1;
-  object->type = VMA_FILE;
-  object->file = filedup(file);
+  object->type = type;
+  if(type == VMA_FILE)
+    object->file = filedup(file);
   return object;
 }
 
@@ -88,18 +89,22 @@ mmap_object_get(struct mmap_object *object)
 static void
 mmap_object_put(struct mmap_object *object)
 {
+  int destroy = 0;
   struct file *file = 0;
 
   acquire(&object->lock);
   if(object->refcnt < 1)
     panic("mmap_object_put");
   object->refcnt--;
-  if(object->refcnt == 0)
+  if(object->refcnt == 0){
+    destroy = 1;
     file = object->file;
+  }
   release(&object->lock);
 
-  if(file){
-    fileclose(file);
+  if(destroy){
+    if(file)
+      fileclose(file);
     kfree(object);
   }
 }
@@ -116,9 +121,10 @@ vma_heap_limit(struct proc *p)
   return limit;
 }
 
-uint64
-vma_map_file(struct proc *p, uint64 addr, uint64 length, int prot,
-             int flags, struct file *file, uint64 offset)
+static uint64
+vma_map_create(struct proc *p, uint64 addr, uint64 length, int prot,
+               int flags, enum vma_type type, struct file *file,
+               uint64 offset)
 {
   struct mmap_object *object;
   struct vma_area *vma;
@@ -131,13 +137,8 @@ vma_map_file(struct proc *p, uint64 addr, uint64 length, int prot,
     return MAP_FAILED;
   if((prot & PROT_WRITE) && !(prot & PROT_READ))
     return MAP_FAILED;
-  if(flags != MAP_PRIVATE && flags != MAP_SHARED)
-    return MAP_FAILED;
-  if((offset % PGSIZE) != 0 || offset > 0xffffffffUL)
-    return MAP_FAILED;
-  if(file == 0 || file->type != FD_ENTRY || !file->readable)
-    return MAP_FAILED;
-  if(flags == MAP_SHARED && (prot & PROT_WRITE) && !file->writable)
+  int sharing = flags & (MAP_PRIVATE | MAP_SHARED);
+  if(sharing != MAP_PRIVATE && sharing != MAP_SHARED)
     return MAP_FAILED;
 
   map_length = PGROUNDUP(length);
@@ -149,12 +150,12 @@ vma_map_file(struct proc *p, uint64 addr, uint64 length, int prot,
     return MAP_FAILED;
   if(start + length < start)
     return MAP_FAILED;
-  if((object = mmap_object_create_file(file)) == 0)
+  if((object = mmap_object_create(type, file)) == 0)
     return MAP_FAILED;
 
   memset(vma, 0, sizeof(*vma));
   vma->used = 1;
-  vma->type = VMA_FILE;
+  vma->type = type;
   vma->start = start;
   vma->end = start + map_length;
   vma->valid_end = start + length;
@@ -163,6 +164,31 @@ vma_map_file(struct proc *p, uint64 addr, uint64 length, int prot,
   vma->flags = flags;
   vma->object = object;
   return start;
+}
+
+uint64
+vma_map_file(struct proc *p, uint64 addr, uint64 length, int prot,
+             int flags, struct file *file, uint64 offset)
+{
+  if(flags != MAP_PRIVATE && flags != MAP_SHARED)
+    return MAP_FAILED;
+  if((offset % PGSIZE) != 0 || offset > 0xffffffffUL)
+    return MAP_FAILED;
+  if(file == 0 || file->type != FD_ENTRY || !file->readable)
+    return MAP_FAILED;
+  if(flags == MAP_SHARED && (prot & PROT_WRITE) && !file->writable)
+    return MAP_FAILED;
+  return vma_map_create(p, addr, length, prot, flags, VMA_FILE,
+                        file, offset);
+}
+
+uint64
+vma_map_anon(struct proc *p, uint64 addr, uint64 length, int prot,
+             int flags)
+{
+  if(flags != (MAP_PRIVATE | MAP_ANONYMOUS))
+    return MAP_FAILED;
+  return vma_map_create(p, addr, length, prot, flags, VMA_ANON, 0, 0);
 }
 
 static int
@@ -206,19 +232,21 @@ vm_fault(struct proc *p, uint64 va, int access)
     return -1;
   memset(mem, 0, PGSIZE);
 
-  read_length = PGSIZE;
-  if(page + read_length > vma->valid_end)
-    read_length = vma->valid_end > page ? vma->valid_end - page : 0;
-  file_offset = vma->offset + (page - vma->start);
-  if(file_offset < vma->offset || file_offset > 0xffffffffUL){
-    kfree_page(mem);
-    return -1;
-  }
-  if(read_length > 0 &&
-     fileread_at(vma->object->file, (uint64)mem, file_offset,
-                 read_length) < 0){
-    kfree_page(mem);
-    return -1;
+  if(vma->type == VMA_FILE){
+    read_length = PGSIZE;
+    if(page + read_length > vma->valid_end)
+      read_length = vma->valid_end > page ? vma->valid_end - page : 0;
+    file_offset = vma->offset + (page - vma->start);
+    if(file_offset < vma->offset || file_offset > 0xffffffffUL){
+      kfree_page(mem);
+      return -1;
+    }
+    if(read_length > 0 &&
+       fileread_at(vma->object->file, (uint64)mem, file_offset,
+                   read_length) < 0){
+      kfree_page(mem);
+      return -1;
+    }
   }
 
   if(vma->prot & PROT_READ)
@@ -244,7 +272,8 @@ vma_writeback_page(struct vma_area *vma, pagetable_t pagetable,
   uint64 length;
   uint64 file_offset;
 
-  if(vma->flags != MAP_SHARED || !(vma->prot & PROT_WRITE))
+  if(vma->type != VMA_FILE ||
+     !(vma->flags & MAP_SHARED) || !(vma->prot & PROT_WRITE))
     return 0;
   if((pte = walk(pagetable, page, 0)) == 0 || !(*pte & PTE_V))
     return 0;
@@ -403,7 +432,7 @@ vma_fork(struct proc *parent, struct proc *child)
         continue;
       pa = PTE2PA(*pte);
       flags = PTE_FLAGS(*pte);
-      if(vma->flags == MAP_PRIVATE && (flags & PTE_W)){
+      if((vma->flags & MAP_PRIVATE) && (flags & PTE_W)){
         flags = (flags | PTE_COW) & ~PTE_W;
         *pte = PA2PTE(pa) | flags;
         upg2ukpg(parent->pagetable, parent->kpagetable,
