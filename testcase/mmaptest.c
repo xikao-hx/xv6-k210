@@ -1,5 +1,7 @@
 #include "param.h"
 #include "fcntl.h"
+#include "dev.h"
+#include "kbufdev.h"
 #include "types.h"
 #include "stat.h"
 #include "riscv.h"
@@ -13,6 +15,7 @@ void offset_unmap_test();
 void copy_fault_test();
 void anonymous_private_test();
 void anonymous_shared_test();
+void kbuf_device_test();
 void permission_test();
 void exec_test();
 char buf[BSIZE];
@@ -30,6 +33,7 @@ main(int argc, char *argv[])
   copy_fault_test();
   anonymous_private_test();
   anonymous_shared_test();
+  kbuf_device_test();
   permission_test();
   exec_test();
   printf("mmaptest: all tests succeeded\n");
@@ -599,6 +603,85 @@ anonymous_shared_test(void)
   if(munmap(p, PGSIZE * 3) < 0)
     err("shared anonymous munmap");
   printf("anonymous_shared_test OK\n");
+}
+
+void
+kbuf_device_test(void)
+{
+  struct kbuf_ioctl_region region;
+  char *bad;
+  char *p;
+  int fd;
+  int rofd;
+  int pid;
+  int status;
+
+  printf("kbuf_device_test starting\n");
+  testname = "kbuf_device_test";
+  fd = dev(O_RDWR, DEV_KBUF, 0);
+  if(fd < 0)
+    err("kbuf dev open");
+
+  bad = mmap(0, 3 * PGSIZE, PROT_READ | PROT_WRITE,
+             MAP_SHARED, fd, 0);
+  if(bad != MAP_FAILED)
+    err("kbuf oversized mmap accepted");
+  bad = mmap(0, PGSIZE, PROT_READ, MAP_SHARED, fd, 1);
+  if(bad != MAP_FAILED)
+    err("kbuf unaligned offset accepted");
+  bad = mmap(0, PGSIZE, PROT_READ, MAP_PRIVATE, fd, 0);
+  if(bad != MAP_FAILED)
+    err("kbuf private mmap accepted");
+
+  rofd = dev(O_RDONLY, DEV_KBUF, 0);
+  if(rofd < 0)
+    err("kbuf read-only open");
+  bad = mmap(0, PGSIZE, PROT_READ | PROT_WRITE,
+             MAP_SHARED, rofd, 0);
+  if(bad != MAP_FAILED)
+    err("kbuf fd permission ignored");
+  close(rofd);
+
+  p = mmap(0, 2 * PGSIZE, PROT_READ | PROT_WRITE,
+           MAP_SHARED, fd, 0);
+  if(p == MAP_FAILED)
+    err("kbuf mmap");
+  region.offset = PGSIZE - 8;
+  region.length = 16;
+  region.value = 0x5a;
+  if(ioctl(fd, KBUF_IOCTL_FILL, (uint64)&region) < 0)
+    err("kbuf driver fill");
+  for(int i = 0; i < 16; i++){
+    if((uchar)p[PGSIZE - 8 + i] != region.value)
+      err("kbuf driver to user visibility");
+  }
+
+  region.offset = PGSIZE + 64;
+  region.length = 32;
+  region.value = 0x36;
+  for(int i = 0; i < 32; i++)
+    p[region.offset + i] = region.value;
+  if(ioctl(fd, KBUF_IOCTL_CHECK, (uint64)&region) < 0)
+    err("kbuf user to driver visibility");
+
+  close(fd);
+  if((uchar)p[PGSIZE - 1] != 0x5a)
+    err("kbuf mapping after close");
+  pid = fork();
+  if(pid < 0)
+    err("kbuf fork");
+  if(pid == 0){
+    p[0] = 'K';
+    if(munmap(p, 2 * PGSIZE) < 0)
+      exit(2);
+    exit(0);
+  }
+  wait(&status);
+  if(status != 0 || p[0] != 'K')
+    err("kbuf fork sharing and release");
+  if(munmap(p, 2 * PGSIZE) < 0)
+    err("kbuf munmap");
+  printf("kbuf_device_test OK\n");
 }
 
 void

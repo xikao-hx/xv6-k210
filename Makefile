@@ -36,6 +36,7 @@ OBJS = \
   $K/main.o \
   $K/device.o \
   $K/devsw/console.o \
+  $K/devsw/kbufdev.o \
   $K/devsw/stats.o \
   $K/driver/uarths.o \
   $K/driver/plic.o \
@@ -57,6 +58,7 @@ OBJS = \
   $K/syscall/sysproc.o \
   $K/vm/kmalloc.o \
   $K/vm/kalloc.o \
+  $K/vm/kbuf.o \
   $K/vm/mmap.o \
   $K/vm/vm.o \
   $K/vm/vmcopyin.o \

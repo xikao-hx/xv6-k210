@@ -39,6 +39,16 @@
 - PRIVATE 页永不由 mmap 写回。
 - SHARED 只写回已驻留页面与有效映射/文件范围的交集。
 
+## 设备映射
+
+- 设备 mmap 回调只能验证设备参数并返回受生命周期保护的 kbuf，不得访问
+  proc、VMA 或用户/内核页表。
+- 设备 fd、mmap object、物理页 PTE 引用必须分层；fd close 不得使既有映射失效。
+- page-backed kbuf 由 kbuf 层释放基础页面引用，设备驱动和通用
+  `vma_unmap` 不得绕过该所有权。
+- 不得把 buffer cache 数据区直接暴露给用户映射；连续 DMA 与 MMIO 必须使用
+  后续专用接口。
+
 ## 验证
 
 - 公共 VM 改动至少构建 QEMU 和 K210。

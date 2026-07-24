@@ -481,6 +481,8 @@ sys_mmap(void)
   }
   if(fd < 0 || fd >= NOFILE || (vfile = p->ofile[fd]) == 0)
     return -1;
+  if(vfile->type == FD_DEVICE)
+    return vma_map_device(p, addr, length, prot, flags, vfile, offset);
   return vma_map_file(p, addr, length, prot, flags, vfile, offset);
 }
 

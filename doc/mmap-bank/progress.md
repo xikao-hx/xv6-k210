@@ -5,7 +5,8 @@
 - 开发分支：`refactor/mmap-core-subset`，基于用户请求时的当前分支创建。
 - 已阅读 `doc/重构文档/mmap重构方案.md` 并完成现有 mmap 路径审计。
 - 已初始化 PRD、设计、技术栈、实施计划、架构、代码设计和开发规则。
-- Step 1、Step 2 已完成并独立提交；Step 3 已完成代码与自动验证，等待独立提交。
+- Step 1 至 Step 3 已完成并独立提交；Step 4 已完成代码与自动验证，
+  等待独立提交。
 
 ## Step 1：文件 mmap 基础与 VM 分层
 
@@ -78,6 +79,7 @@
 
 - 完成时间：2026-07-24
 - 状态：代码和自动验证完成。
+- 提交：`e940690 mmap: add shared anonymous mappings`
 - 修改文件：
   - `kernel/include/mmap.h`、`kernel/vm/mmap.c`
   - `testcase/mmaptest.c`
@@ -100,3 +102,37 @@
 - 下一步提醒：
   - Step 4 增加 page-backed kbuf 和设备 mmap 回调，不允许设备驱动直接操作
     用户页表。
+
+## Step 4：设备 page-backed kbuf mmap
+
+- 完成时间：2026-07-24
+- 状态：代码和自动验证完成。
+- 修改文件：
+  - 新增 `kernel/include/kbuf.h`、`kernel/vm/kbuf.c`。
+  - 新增 `kernel/include/kbufdev.h`、`kernel/devsw/kbufdev.c`。
+  - 修改 `kernel/include/file.h`、`dev.h`、`mmap.h`。
+  - 修改 `kernel/vm/mmap.c`、`kernel/syscall/sysfile.c`、`kernel/main.c`、
+    `Makefile`。
+  - 扩展 `testcase/mmaptest.c`。
+  - 更新 `doc/mmap-bank/code-design.md`、`progress.md`、`architecture.md`、
+    `dev-rules.md`。
+- 完成内容：
+  - 增加独立引用计数的 page-backed kbuf，kbuf 拥有页面基础引用。
+  - `file_operations` 增加 mmap 回调，回调只返回 kbuf，不接触 VMA/PTE。
+  - 增加 `VMA_KBUF` 和设备 mmap syscall 分派，fault 按 offset 取得 kbuf 页。
+  - mmap object 持有独立 kbuf 引用，fd 关闭不终止映射。
+  - fork 和 unmap 沿用每 PTE 物理引用，支持不同释放顺序。
+  - 增加跨平台 `DEV_KBUF` 测试设备及驱动侧 fill/check ioctl。
+  - 设备映射仅接受 SHARED，拒绝执行权限、非页对齐 offset、越界长度和
+    fd 权限不匹配。
+- 测试结果：
+  - QEMU 完整 `mmaptest` 通过，包含驱动/用户双向一致性、fd close、
+    fork 共享、子进程先 unmap 和非法参数测试。
+  - Step 1 至 Step 3 mmap 测试全量回归通过。
+  - `make build platform=qemu`、`make build platform=k210` 通过。
+  - `git diff --check` 通过。
+  - 当前环境未连接 K210 实机；K210 只完成交叉构建，page-backed 测试设备
+    的平台无关行为已在 QEMU 验证。
+- 下一步提醒：
+  - Step 5 为共享文件映射增加按文件身份与页 offset 索引的 page cache；
+    不得复用 buffer cache 内存。

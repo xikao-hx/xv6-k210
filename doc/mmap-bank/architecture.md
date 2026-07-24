@@ -12,9 +12,11 @@
 
 ## 目标目录与文件作用
 
-- `kernel/include/mmap.h`：当前 file VMA/object 类型、fault access 和公共 mmap VM 接口。
-- `kernel/vm/mmap.c`：当前集中管理地址分配、文件 fault-in、unmap、fork、destroy。
-- `kernel/vm/kbuf.c`：Step 4 后管理 page-backed kbuf。
+- `kernel/include/mmap.h`：file/anon/kbuf VMA/object 类型、fault access 和公共
+  mmap VM 接口。
+- `kernel/vm/mmap.c`：集中管理地址分配、backing fault、unmap、fork、destroy。
+- `kernel/vm/kbuf.c`：管理 page-backed kbuf 的页面集合和引用。
+- `kernel/devsw/kbufdev.c`：提供跨平台 kbuf mmap 测试设备，不操作用户页表。
 - `kernel/syscall/sysmmap.c`：若 syscall 入口继续增长时再独立；Step 1 暂保留在 `sysfile.c` 以避免无必要搬迁。
 - `kernel/fs/file.c`：提供显式 offset 的 mmap 文件 I/O。
 
@@ -81,3 +83,17 @@ syscall / trap / proc / copy paths
 - 首次 fault 的候选页在 object 锁外分配，并在锁内二次查找后发布；锁内不调用
   页面或堆分配器。
 - PRIVATE anonymous 仍以进程 PTE/COW 管理页面，不依赖 anonymous object 页槽。
+
+## Step 4 后确认
+
+- 设备 mmap 回调只接收 offset/length/prot/flags 并返回借用的 kbuf；设备层
+  不依赖 proc、VMA、fault 或 PTE。
+- kbuf 在创建时分配 page-backed 页面并持有基础引用；fd 和 mmap object 分别
+  持有 kbuf 引用，每个驻留 PTE 再持有页面映射引用。
+- mmap object 在 syscall 返回前取得独立 kbuf 引用，因此 close fd 后 fault、
+  fork 和既有映射访问仍安全。
+- `VMA_KBUF` 使用 VMA offset 计算页索引，split/头部裁剪后与其他 backing
+  保持同一索引规则。
+- kbuf 页面仍由通用双页表路径安装/删除；设备驱动无法绕过权限校验或
+  `kpagetable` 同步。
+- 当前 kbuf 是非连续 page-backed 内存；连续 DMA/CMA 和 MMIO 映射未纳入本轮。

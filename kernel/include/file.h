@@ -9,12 +9,14 @@ struct proc;
 struct pipe;
 struct dirent;
 struct file;
+struct kbuf;
 
 struct file_operations {
   int (*open)(struct file *);
   int (*read)(struct file *, uint64, int);
   int (*write)(struct file *, uint64, int);
   int (*ioctl)(struct file *, uint64, uint64);
+  struct kbuf *(*mmap)(struct file *, uint64, uint64, int, int);
   int (*close)(struct file *);
 };
 

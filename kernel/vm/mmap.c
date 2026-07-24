@@ -1,6 +1,7 @@
 #include "fcntl.h"
 #include "file.h"
 #include "kalloc.h"
+#include "kbuf.h"
 #include "mmap.h"
 #include "printf.h"
 #include "proc.h"
@@ -151,7 +152,8 @@ anon_page_get(struct anon_object *anon, uint64 index)
 }
 
 static struct mmap_object *
-mmap_object_create(enum vma_type type, struct file *file, int flags)
+mmap_object_create(enum vma_type type, struct file *file, int flags,
+                   struct kbuf *kbuf)
 {
   struct mmap_object *object = kmalloc(sizeof(*object));
 
@@ -169,6 +171,10 @@ mmap_object_create(enum vma_type type, struct file *file, int flags)
       kfree(object);
       return 0;
     }
+  }
+  if(type == VMA_KBUF){
+    object->kbuf = kbuf;
+    kbuf_get(kbuf);
   }
   return object;
 }
@@ -204,6 +210,8 @@ mmap_object_put(struct mmap_object *object)
       fileclose(file);
     if(object->anon)
       anon_object_destroy(object->anon);
+    if(object->kbuf)
+      kbuf_put(object->kbuf);
     kfree(object);
   }
 }
@@ -223,7 +231,7 @@ vma_heap_limit(struct proc *p)
 static uint64
 vma_map_create(struct proc *p, uint64 addr, uint64 length, int prot,
                int flags, enum vma_type type, struct file *file,
-               uint64 offset)
+               struct kbuf *kbuf, uint64 offset)
 {
   struct mmap_object *object;
   struct vma_area *vma;
@@ -249,7 +257,7 @@ vma_map_create(struct proc *p, uint64 addr, uint64 length, int prot,
     return MAP_FAILED;
   if(start + length < start)
     return MAP_FAILED;
-  if((object = mmap_object_create(type, file, flags)) == 0)
+  if((object = mmap_object_create(type, file, flags, kbuf)) == 0)
     return MAP_FAILED;
 
   memset(vma, 0, sizeof(*vma));
@@ -278,7 +286,7 @@ vma_map_file(struct proc *p, uint64 addr, uint64 length, int prot,
   if(flags == MAP_SHARED && (prot & PROT_WRITE) && !file->writable)
     return MAP_FAILED;
   return vma_map_create(p, addr, length, prot, flags, VMA_FILE,
-                        file, offset);
+                        file, 0, offset);
 }
 
 uint64
@@ -288,7 +296,28 @@ vma_map_anon(struct proc *p, uint64 addr, uint64 length, int prot,
   if(flags != (MAP_PRIVATE | MAP_ANONYMOUS) &&
      flags != (MAP_SHARED | MAP_ANONYMOUS))
     return MAP_FAILED;
-  return vma_map_create(p, addr, length, prot, flags, VMA_ANON, 0, 0);
+  return vma_map_create(p, addr, length, prot, flags, VMA_ANON,
+                        0, 0, 0);
+}
+
+uint64
+vma_map_device(struct proc *p, uint64 addr, uint64 length, int prot,
+               int flags, struct file *file, uint64 offset)
+{
+  struct kbuf *kbuf;
+
+  if(flags != MAP_SHARED || file == 0 || file->type != FD_DEVICE ||
+     file->ops == 0 || file->ops->mmap == 0)
+    return MAP_FAILED;
+  if((prot & PROT_READ) && !file->readable)
+    return MAP_FAILED;
+  if((prot & PROT_WRITE) && !file->writable)
+    return MAP_FAILED;
+  kbuf = file->ops->mmap(file, offset, length, prot, flags);
+  if(kbuf == 0)
+    return MAP_FAILED;
+  return vma_map_create(p, addr, length, prot, flags, VMA_KBUF,
+                        0, kbuf, offset);
 }
 
 static int
@@ -313,6 +342,7 @@ vm_fault(struct proc *p, uint64 va, int access)
   uint64 read_length;
   uint64 file_offset;
   uint64 anon_index;
+  uint64 kbuf_index;
   int pte_flags = PTE_U;
 
   if(va >= MAXVA || (vma = vma_find(p, va)) == 0)
@@ -328,7 +358,10 @@ vm_fault(struct proc *p, uint64 va, int access)
     return 0;
   }
 
-  if(vma->type == VMA_ANON && (vma->flags & MAP_SHARED)){
+  if(vma->type == VMA_KBUF){
+    kbuf_index = (vma->offset + page - vma->start) / PGSIZE;
+    mem = kbuf_page_get(vma->object->kbuf, kbuf_index);
+  } else if(vma->type == VMA_ANON && (vma->flags & MAP_SHARED)){
     anon_index = (vma->offset + page - vma->start) / PGSIZE;
     mem = anon_page_get(vma->object->anon, anon_index);
   } else {

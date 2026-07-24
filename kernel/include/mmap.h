@@ -12,10 +12,12 @@
 struct file;
 struct proc;
 struct anon_object;
+struct kbuf;
 
 enum vma_type {
   VMA_FILE,
   VMA_ANON,
+  VMA_KBUF,
 };
 
 enum vm_fault_access {
@@ -30,6 +32,7 @@ struct mmap_object {
   enum vma_type type;
   struct file *file;
   struct anon_object *anon;
+  struct kbuf *kbuf;
 };
 
 struct vma_area {
@@ -47,6 +50,8 @@ struct vma_area {
 uint64 vma_map_file(struct proc *, uint64, uint64, int, int,
                     struct file *, uint64);
 uint64 vma_map_anon(struct proc *, uint64, uint64, int, int);
+uint64 vma_map_device(struct proc *, uint64, uint64, int, int,
+                      struct file *, uint64);
 int vma_unmap(struct proc *, uint64, uint64);
 int vm_fault(struct proc *, uint64, int);
 int vma_fork(struct proc *, struct proc *);

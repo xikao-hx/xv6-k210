@@ -3,6 +3,7 @@
 #include "disk.h"
 #include "file.h"
 #include "kalloc.h"
+#include "kbufdev.h"
 #include "plic.h"
 #include "printf.h"
 #include "proc.h"
@@ -50,6 +51,7 @@ main(unsigned long hartid, unsigned long dtb_pa)
 #endif
     binit();         // buffer cache
     fileinit();      // file table
+    kbufdev_init();  // register page-backed mmap test device
     statsinit();     // register read-only kernel statistics device
 #ifndef QEMU
     fpioa_pin_init(); // configure SPI0 pins for SD card

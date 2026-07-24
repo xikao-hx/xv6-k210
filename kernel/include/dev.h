@@ -7,6 +7,7 @@
 #define DEV_SPI      3
 #define DEV_I2C      4
 #define DEV_SDCARD   5
+#define DEV_KBUF     6
 
 // Stable logical device numbers. Hardware topology stays in board code.
 #define SPI_DEV_W25Q64  0
