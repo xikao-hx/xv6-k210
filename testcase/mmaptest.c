@@ -8,6 +8,11 @@
 
 void mmap_test();
 void fork_test();
+void fork_semantics_test();
+void offset_unmap_test();
+void copy_fault_test();
+void permission_test();
+void exec_test();
 char buf[BSIZE];
 
 #define MAP_FAILED ((char *) -1)
@@ -18,6 +23,11 @@ main(int argc, char *argv[])
   // sbrk(100);
   mmap_test();
   fork_test();
+  fork_semantics_test();
+  offset_unmap_test();
+  copy_fault_test();
+  permission_test();
+  exec_test();
   printf("mmaptest: all tests succeeded\n");
   exit(0);
 }
@@ -294,4 +304,248 @@ fork_test(void)
   _v1(p2);
 
   printf("fork_test OK\n");
+}
+
+void
+fork_semantics_test(void)
+{
+  char *private;
+  char *shared;
+  int fd;
+  int pid;
+  int status;
+
+  printf("fork_semantics_test starting\n");
+  testname = "fork_semantics_test";
+  unlink("mmap.fork");
+  fd = open("mmap.fork", O_RDWR | O_CREATE);
+  if(fd < 0 || write(fd, "A", 1) != 1)
+    err("fork semantics file");
+  private = mmap(0, PGSIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+  shared = mmap(0, PGSIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  close(fd);
+  if(private == MAP_FAILED || shared == MAP_FAILED)
+    err("fork semantics mmap");
+  if(private[0] != 'A' || shared[0] != 'A')
+    err("fork semantics fault-in");
+
+  pid = fork();
+  if(pid < 0)
+    err("fork semantics fork");
+  if(pid == 0){
+    private[0] = 'P';
+    shared[0] = 'S';
+    if(private[0] != 'P' || shared[0] != 'S')
+      exit(2);
+    exit(0);
+  }
+  wait(&status);
+  if(status != 0 || private[0] != 'A' || shared[0] != 'S')
+    err("fork private/shared behavior");
+  munmap(private, PGSIZE);
+  munmap(shared, PGSIZE);
+  unlink("mmap.fork");
+  printf("fork_semantics_test OK\n");
+}
+
+void
+make_pattern_file(const char *path)
+{
+  unlink(path);
+  int fd = open(path, O_WRONLY | O_CREATE);
+  if(fd < 0)
+    err("open pattern file");
+  for(int page = 0; page < 3; page++){
+    memset(buf, 'A' + page, sizeof(buf));
+    for(int i = 0; i < PGSIZE / BSIZE; i++){
+      if(write(fd, buf, sizeof(buf)) != sizeof(buf))
+        err("write pattern file");
+    }
+  }
+  close(fd);
+}
+
+void
+offset_unmap_test(void)
+{
+  char *p;
+  char *p1;
+  char *p2;
+  char *low;
+  int fd;
+
+  printf("offset_unmap_test starting\n");
+  testname = "offset_unmap_test";
+  make_pattern_file("mmap.pattern");
+
+  fd = open("mmap.pattern", O_RDONLY);
+  if(fd < 0)
+    err("open offset file");
+  p = mmap(0, PGSIZE, PROT_READ, MAP_PRIVATE, fd, PGSIZE);
+  close(fd);
+  if(p == MAP_FAILED || p[0] != 'B' || p[PGSIZE - 1] != 'B')
+    err("non-zero offset");
+  if(munmap(p, PGSIZE) < 0)
+    err("offset munmap");
+
+  fd = open("mmap.pattern", O_RDONLY);
+  p = mmap(0, PGSIZE * 3, PROT_READ, MAP_PRIVATE, fd, 0);
+  close(fd);
+  if(p == MAP_FAILED || p[0] != 'A' || p[PGSIZE * 2] != 'C')
+    err("middle map");
+  if(munmap(p + PGSIZE, PGSIZE) < 0)
+    err("middle munmap");
+  if(p[0] != 'A' || p[PGSIZE * 2] != 'C')
+    err("middle split content");
+  if(munmap(p, PGSIZE) < 0 || munmap(p + PGSIZE * 2, PGSIZE) < 0)
+    err("split tail cleanup");
+
+  fd = open("mmap.pattern", O_RDONLY);
+  p1 = mmap(0, PGSIZE, PROT_READ, MAP_PRIVATE, fd, 0);
+  p2 = mmap(0, PGSIZE, PROT_READ, MAP_PRIVATE, fd, PGSIZE);
+  close(fd);
+  if(p1 == MAP_FAILED || p2 == MAP_FAILED)
+    err("cross map");
+  low = p1 < p2 ? p1 : p2;
+  if(low + PGSIZE != (p1 < p2 ? p2 : p1))
+    err("cross maps not adjacent");
+  if(munmap(low, PGSIZE * 2) < 0)
+    err("cross-vma munmap");
+
+  unlink("mmap.pattern");
+  printf("offset_unmap_test OK\n");
+}
+
+void
+copy_fault_test(void)
+{
+  char *p;
+  char *name;
+  int fd;
+  int out;
+
+  printf("copy_fault_test starting\n");
+  testname = "copy_fault_test";
+
+  unlink("copy.src");
+  fd = open("copy.src", O_WRONLY | O_CREATE);
+  if(fd < 0 || write(fd, "copy", 4) != 4)
+    err("create copy source");
+  close(fd);
+
+  unlink("copy.backing");
+  fd = open("copy.backing", O_RDWR | O_CREATE);
+  if(fd < 0 || write(fd, "0000", 4) != 4)
+    err("create copy backing");
+  p = mmap(0, PGSIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+  close(fd);
+  if(p == MAP_FAILED)
+    err("copy mmap");
+
+  fd = open("copy.src", O_RDONLY);
+  if(fd < 0 || read(fd, p, 4) != 4)
+    err("copyout fault-in");
+  close(fd);
+  unlink("copy.out");
+  out = open("copy.out", O_WRONLY | O_CREATE);
+  if(out < 0 || write(out, p, 4) != 4)
+    err("copyin mapped buffer");
+  close(out);
+  if(munmap(p, PGSIZE) < 0)
+    err("copy munmap");
+
+  unlink("copy.name");
+  fd = open("copy.name", O_RDWR | O_CREATE);
+  if(fd < 0 || write(fd, "copy.out", 9) != 9)
+    err("create mapped name");
+  name = mmap(0, PGSIZE, PROT_READ, MAP_PRIVATE, fd, 0);
+  close(fd);
+  if(name == MAP_FAILED)
+    err("name mmap");
+  fd = open(name, O_RDONLY);
+  if(fd < 0)
+    err("copyinstr fault-in");
+  if(read(fd, buf, 4) != 4 || memcmp(buf, "copy", 4) != 0)
+    err("copy output content");
+  close(fd);
+  munmap(name, PGSIZE);
+
+  unlink("copy.src");
+  unlink("copy.backing");
+  unlink("copy.name");
+  unlink("copy.out");
+  printf("copy_fault_test OK\n");
+}
+
+void
+permission_test(void)
+{
+  int fd;
+  int pid;
+  int status;
+
+  printf("permission_test starting\n");
+  testname = "permission_test";
+  make_pattern_file("mmap.permission");
+  fd = open("mmap.permission", O_RDONLY);
+  if(fd < 0)
+    err("permission open");
+
+  pid = fork();
+  if(pid < 0)
+    err("permission fork");
+  if(pid == 0){
+    char *p = mmap(0, PGSIZE, PROT_READ, MAP_PRIVATE, fd, 0);
+    if(p == MAP_FAILED)
+      exit(2);
+    p[0] = 'X';
+    exit(0);
+  }
+  wait(&status);
+  close(fd);
+  unlink("mmap.permission");
+  if(status == 0)
+    err("read-only mapping accepted write");
+  printf("permission_test OK\n");
+}
+
+void
+exec_test(void)
+{
+  char *p;
+  char c;
+  char *args[] = { "echo", "mmap-exec", 0 };
+  int fd;
+  int pid;
+  int status;
+
+  printf("exec_test starting\n");
+  testname = "exec_test";
+  unlink("mmap.exec");
+  fd = open("mmap.exec", O_RDWR | O_CREATE);
+  if(fd < 0 || write(fd, "A", 1) != 1)
+    err("exec file");
+  p = mmap(0, PGSIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  close(fd);
+  if(p == MAP_FAILED)
+    err("exec mmap");
+
+  pid = fork();
+  if(pid < 0)
+    err("exec fork");
+  if(pid == 0){
+    p[0] = 'X';
+    exec("echo", args);
+    exit(2);
+  }
+  wait(&status);
+  if(status != 0)
+    err("exec child");
+  fd = open("mmap.exec", O_RDONLY);
+  if(fd < 0 || read(fd, &c, 1) != 1 || c != 'X')
+    err("exec writeback");
+  close(fd);
+  munmap(p, PGSIZE);
+  unlink("mmap.exec");
+  printf("exec_test OK\n");
 }

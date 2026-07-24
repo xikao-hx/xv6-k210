@@ -1,0 +1,45 @@
+# mmap 重构进度记录
+
+## 当前状态
+
+- 开发分支：`refactor/mmap-core-subset`，基于用户请求时的当前分支创建。
+- 已阅读 `doc/重构文档/mmap重构方案.md` 并完成现有 mmap 路径审计。
+- 已初始化 PRD、设计、技术栈、实施计划、架构、代码设计和开发规则。
+- Step 1 自动化验证已通过，等待用户确认后进入 Step 2。
+
+## Step 1：文件 mmap 基础与 VM 分层
+
+- 完成时间：2026-07-24
+- 状态：代码和自动化验证完成，等待用户测试确认。
+- 修改文件：
+  - 新增 `kernel/include/mmap.h`、`kernel/vm/mmap.c`。
+  - 修改 `kernel/include/proc.h`、`kernel/include/file.h`。
+  - 修改 `kernel/syscall/sysfile.c`、`kernel/fs/file.c`。
+  - 修改 `kernel/trap/trap.c`、`kernel/proc/proc.c`、`kernel/proc/exec.c`。
+  - 修改 `kernel/vm/vm.c`、`kernel/vm/vmcopyin.c`、`Makefile`。
+  - 扩展 `testcase/mmaptest.c`。
+- 完成内容：
+  - mmap 从 `MMAP_TOP` 向下分配，不再修改 `p->sz`；`growproc` 检查 VMA 下界。
+  - VMA 与 file-backed mmap object 分离，fd 关闭后映射继续持有文件。
+  - trap 和内核 copy 路径统一调用 `vm_fault`，严格按访问类型检查权限。
+  - 文件页先清零并按显式 offset 读取，支持非零 offset 和文件短末页。
+  - `munmap` 支持头尾裁剪、中间拆分、跨 VMA 和未驻留页，并同步双页表。
+  - SHARED 驻留页按明确 offset 写回；PRIVATE 页不写回。
+  - fork 对 PRIVATE 驻留页使用 COW，对 SHARED 驻留页保持物理页共享。
+  - exec、exit 和 fork 失败统一经 VMA 生命周期接口释放。
+  - `mmaptest` 正式加入用户程序镜像。
+- 测试方式：
+  - `make build platform=qemu`
+  - `make fs platform=qemu`
+  - `make run platform=qemu` 后运行 `mmaptest`
+  - `make build platform=k210`
+  - `git diff --check`
+- 测试结果：
+  - QEMU mmap 原测试全部通过。
+  - 新增 PRIVATE COW、SHARED fork、非零 offset、中间拆分、跨 VMA、
+    copyin/copyout/copyinstr fault-in、权限拒绝和 exec 写回测试全部通过。
+  - QEMU/K210 构建成功；仅有仓库已有的 RWX linker warning。
+  - 旧 `mmap_handler/find_vma/vfile/vfd` 引用无残留。
+- 下一步提醒：
+  - Step 1 尚未提供不同进程独立 fault 的文件页即时共享；留到 Step 5 page cache。
+  - Step 2 只增加 `MAP_PRIVATE | MAP_ANONYMOUS`，不得提前加入共享匿名页槽。

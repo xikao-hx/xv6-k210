@@ -5,6 +5,7 @@
 #include "param.h"
 #include "riscv.h"
 #include "spinlock.h"
+#include "mmap.h"
 
 // Saved registers for kernel context switches.
 struct context {
@@ -99,18 +100,6 @@ enum procstate { UNUSED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 #define MLFQ_TOP_LEVEL      0
 #define MLFQ_BOTTOM_LEVEL   (MLFQ_LEVELS - 1)
 #define MLFQ_BOOST_INTERVAL 200
-
-#define NVMA 16
-struct vma_area {
-  int used;
-  uint64 addr;
-  int length;
-  int prot;
-  int flags;
-  int vfd;
-  struct file *vfile;
-  int offset;
-};
 
 // Per-process state
 struct proc {

@@ -57,6 +57,7 @@ OBJS = \
   $K/syscall/sysproc.o \
   $K/vm/kmalloc.o \
   $K/vm/kalloc.o \
+  $K/vm/mmap.o \
   $K/vm/vm.o \
   $K/vm/vmcopyin.o \
   $K/proc/swtch.o \
@@ -178,6 +179,10 @@ $(UBUILD)/test/%.o: $U/test/%.c $(BUILD_CONFIG)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(UBUILD)/test/mmaptest.o: testcase/mmaptest.c $(BUILD_CONFIG)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(UBUILD)/libc/%.o: $U/libc/%.c $(BUILD_CONFIG)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -242,6 +247,7 @@ UPROGS=\
 	$(UBUILD)/test/_i2ctest\
 	$(UBUILD)/test/_dmactest\
 	$(UBUILD)/test/_devtest\
+	$(UBUILD)/test/_mmaptest\
 	$(UBUILD)/_init
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)

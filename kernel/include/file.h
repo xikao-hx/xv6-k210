@@ -47,11 +47,11 @@ int             fileread(struct file*, uint64, int n);
 int             filestat(struct file*, uint64 addr);
 int             fileioctl(struct file*, uint64, uint64);
 int             filewrite(struct file*, uint64, int n);
+int             fileread_at(struct file*, uint64, uint64, int);
+int             filewrite_at(struct file*, uint64, uint64, int);
 int             device_register(int, const char*,
                                 const struct file_operations*);
 const struct device* device_get(int);
-int             mmap_handler(uint64 va, uint64 scause);
-int             find_vma(struct proc *p, uint64 va);
 int             dirnext(struct file *f, uint64 addr);
 int             pipealloc(struct file**, struct file**);
 void            pipeclose(struct pipe*, int);

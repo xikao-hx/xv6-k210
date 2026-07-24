@@ -595,16 +595,29 @@ int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
+  struct proc *p = myproc();
+  pte_t *pte;
 
   while(len > 0){
+    if(dstva >= MAXVA)
+      return -1;
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
+    pte = walk(pagetable, va0, 0);
+    if((pte == 0 || !(*pte & PTE_V)) && pagetable == p->pagetable){
+      if(vm_fault(p, va0, VM_FAULT_WRITE) < 0)
+        return -1;
+      pte = walk(pagetable, va0, 0);
+    }
 
     if (uvmcowpage(pagetable, va0) == 0) {
       pa0 = (uint64)uvmcowmalloc(pagetable, va0);
+      pte = walk(pagetable, va0, 0);
+    } else {
+      pa0 = pte && (*pte & PTE_V) ? PTE2PA(*pte) : 0;
     }
 
-    if(pa0 == 0)
+    if(pa0 == 0 || pte == 0 ||
+       (*pte & (PTE_V | PTE_U | PTE_W)) != (PTE_V | PTE_U | PTE_W))
       return -1;
 
     n = PGSIZE - (dstva - va0);
