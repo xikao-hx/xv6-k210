@@ -703,13 +703,16 @@ wait(uint64 addr)
     }
 
     // No point waiting if we don't have any children.
-    if(!havekids || p->killed){
+    if(!havekids || signal_pending_locked(p)){
       release(&p->lock);
       return -1;
     }
     
     // Wait for a child to exit.
-    sleep(p, &p->lock);  //DOC: wait-sleep
+    if(sleep_interruptible(p, &p->lock) < 0) {
+      release(&p->lock);
+      return -1;
+    }
   }
 }
 
@@ -805,12 +808,11 @@ forkret(void)
   usertrapret();
 }
 
-// Atomically release lock and sleep on chan.
-// Reacquires lock when awakened.
-void
-sleep(void *chan, struct spinlock *lk)
+static int
+sleep_on(void *chan, struct spinlock *lk, int interruptible)
 {
   struct proc *p = myproc();
+  int interrupted = 0;
   
   // Must acquire p->lock in order to
   // change p->state and then call sched.
@@ -823,8 +825,14 @@ sleep(void *chan, struct spinlock *lk)
     release(lk);
   }
 
+  if(interruptible && signal_pending_locked(p)) {
+    interrupted = 1;
+    goto out;
+  }
+
   // Go to sleep.
   p->chan = chan;
+  p->interruptible_sleep = interruptible;
   p->state = SLEEPING;
 #ifdef SCHED_MLFQ
   // Voluntary sleep should not be punished as CPU-bound behavior.
@@ -835,12 +843,31 @@ sleep(void *chan, struct spinlock *lk)
 
   // Tidy up.
   p->chan = 0;
+  p->interruptible_sleep = 0;
+  if(interruptible && signal_pending_locked(p))
+    interrupted = 1;
 
+out:
   // Reacquire original lock.
   if(lk != &p->lock){
     release(&p->lock);
     acquire(lk);
   }
+  return interrupted ? -1 : 0;
+}
+
+// Atomically release lock and sleep on chan.
+// Reacquires lock when awakened.
+void
+sleep(void *chan, struct spinlock *lk)
+{
+  sleep_on(chan, lk, 0);
+}
+
+int
+sleep_interruptible(void *chan, struct spinlock *lk)
+{
+  return sleep_on(chan, lk, 1);
 }
 
 // Wake up all processes sleeping on chan.

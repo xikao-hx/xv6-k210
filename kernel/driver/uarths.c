@@ -2,6 +2,7 @@
 
 #include "memlayout.h"
 #include "proc.h"
+#include "signal.h"
 #include "uarths.h"
 
 #ifdef QEMU
@@ -171,6 +172,7 @@ int
 uart_write(const char *src, int n)
 {
   int i;
+  struct proc *p = myproc();
 
   acquire(&uart.tx_lock);
   for (i = 0; i < n; i++) {
@@ -179,7 +181,12 @@ uart_write(const char *src, int n)
         release(&uart.tx_lock);
         return i > 0 ? i : -1;
       }
-      sleep(&uart.tx_r, &uart.tx_lock);
+      if (p && sleep_interruptible(&uart.tx_r, &uart.tx_lock) < 0) {
+        release(&uart.tx_lock);
+        return i > 0 ? i : -1;
+      }
+      if (!p)
+        sleep(&uart.tx_r, &uart.tx_lock);
     }
 
     uart.tx_buf[uart.tx_w] = src[i];
@@ -255,6 +262,7 @@ uart_read(char *dst, int n)
 {
   int i = 0;
   uint epoch;
+  struct proc *p = myproc();
 
   if (n <= 0)
     return 0;
@@ -262,11 +270,16 @@ uart_read(char *dst, int n)
   acquire(&uart.rx_lock);
   epoch = uart.rx_epoch;
   while (uart.rx_r == uart.rx_w) {
-    if (myproc() && myproc()->killed) {
+    if (p && signal_pending(p)) {
       release(&uart.rx_lock);
       return -1;
     }
-    sleep(&uart.rx_r, &uart.rx_lock);
+    if (p && sleep_interruptible(&uart.rx_r, &uart.rx_lock) < 0) {
+      release(&uart.rx_lock);
+      return -1;
+    }
+    if (!p)
+      sleep(&uart.rx_r, &uart.rx_lock);
     if (epoch != uart.rx_epoch) {
       release(&uart.rx_lock);
       return 0;

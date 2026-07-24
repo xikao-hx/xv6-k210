@@ -42,6 +42,7 @@ signal_proc_init(struct proc *p)
   p->sig_handling = 0;
   p->sig_current = 0;
   p->sig_term = 0;
+  p->interruptible_sleep = 0;
   memset(&p->sig_saved_trapframe, 0, sizeof(p->sig_saved_trapframe));
 }
 
@@ -55,6 +56,7 @@ signal_proc_fork(struct proc *parent, struct proc *child)
   child->sig_handling = 0;
   child->sig_current = 0;
   child->sig_term = 0;
+  child->interruptible_sleep = 0;
   memset(&child->sig_saved_trapframe, 0,
          sizeof(child->sig_saved_trapframe));
 }
@@ -113,12 +115,35 @@ signal_send_pid(int pid, int signum)
         p->sig_term = signum;
         p->killed = 1;
       }
+      if(p->state == SLEEPING && p->interruptible_sleep)
+        p->state = RUNNABLE;
       release(&p->lock);
       return 0;
     }
     release(&p->lock);
   }
   return -1;
+}
+
+int
+signal_pending_locked(struct proc *p)
+{
+  uint32 pending = p->sig_pending & ~p->sig_mask;
+
+  if(p->sig_pending & signal_bit(SIGKILL))
+    pending |= signal_bit(SIGKILL);
+  return p->killed || pending != 0;
+}
+
+int
+signal_pending(struct proc *p)
+{
+  int pending;
+
+  acquire(&p->lock);
+  pending = signal_pending_locked(p);
+  release(&p->lock);
+  return pending;
 }
 
 static int

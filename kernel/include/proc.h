@@ -119,6 +119,7 @@ struct proc {
   int sig_handling;            // Running a user signal handler
   int sig_current;             // Signal currently being handled
   int sig_term;                // Signal responsible for final termination
+  int interruptible_sleep;     // Ordinary signals may wake this sleep
   struct trapframe sig_saved_trapframe;
 
   // these are private to the process, so p->lock need not be held.
@@ -159,6 +160,7 @@ void            scheduler(void) __attribute__((noreturn));
 void            sched(void);
 void            setproc(struct proc*);
 void            sleep(void*, struct spinlock*);
+int             sleep_interruptible(void*, struct spinlock*);
 void            userinit(void);
 int             wait(uint64);
 void            wakeup(void*);

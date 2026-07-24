@@ -1,6 +1,7 @@
 #include "file.h"
 #include "kalloc.h"
 #include "proc.h"
+#include "signal.h"
 #include "vm.h"
 
 #define PIPESIZE 512
@@ -78,12 +79,15 @@ pipewrite(struct pipe *pi, uint64 addr, int n)
   acquire(&pi->lock);
   for(i = 0; i < n; i++){
     while(pi->nwrite == pi->nread + PIPESIZE){  //DOC: pipewrite-full
-      if(pi->readopen == 0 || pr->killed){
+      if(pi->readopen == 0 || signal_pending(pr)){
         release(&pi->lock);
-        return -1;
+        return i > 0 ? i : -1;
       }
       wakeup(&pi->nread);
-      sleep(&pi->nwrite, &pi->lock);
+      if(sleep_interruptible(&pi->nwrite, &pi->lock) < 0) {
+        release(&pi->lock);
+        return i > 0 ? i : -1;
+      }
     }
     if(copyin(pr->pagetable, &ch, addr + i, 1) == -1)
       break;
@@ -103,11 +107,14 @@ piperead(struct pipe *pi, uint64 addr, int n)
 
   acquire(&pi->lock);
   while(pi->nread == pi->nwrite && pi->writeopen){  //DOC: pipe-empty
-    if(pr->killed){
+    if(signal_pending(pr)){
       release(&pi->lock);
       return -1;
     }
-    sleep(&pi->nread, &pi->lock); //DOC: piperead-sleep
+    if(sleep_interruptible(&pi->nread, &pi->lock) < 0) {
+      release(&pi->lock);
+      return -1;
+    }
   }
   for(i = 0; i < n; i++){  //DOC: piperead-copy
     if(pi->nread == pi->nwrite)
