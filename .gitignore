@@ -7,3 +7,4 @@ maix*
 .vscode
 tools/__pycache__
 doc/*-bank/
+AGENTS.md
