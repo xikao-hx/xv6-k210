@@ -159,14 +159,39 @@ sys_sigsend(void)
 {
   int target;
   int signum;
+  long pgid;
 
   if(argint(0, &target) < 0 || argint(1, &signum) < 0)
     return -1;
-  return signal_send_pid(target, signum);
+  if(target > 0)
+    return signal_send_pid(target, signum);
+  if(target == 0)
+    return -1;
+  pgid = -(long)target;
+  if(pgid > 0x7fffffffL)
+    return -1;
+  return signal_send_pgrp((int)pgid, signum);
 }
 
 uint64
 sys_sigreturn(void)
 {
   return signal_sigreturn(myproc());
+}
+
+uint64
+sys_setpgid(void)
+{
+  int pid;
+  int pgid;
+
+  if(argint(0, &pid) < 0 || argint(1, &pgid) < 0)
+    return -1;
+  return proc_setpgid(myproc(), pid, pgid);
+}
+
+uint64
+sys_getpgrp(void)
+{
+  return proc_getpgrp(myproc());
 }

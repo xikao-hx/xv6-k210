@@ -32,6 +32,8 @@
 #define SYS_signal 32
 #define SYS_sigsend 33
 #define SYS_sigreturn 34
+#define SYS_setpgid 35
+#define SYS_getpgrp 36
 
 #ifndef __ASSEMBLER__
 #include "types.h"

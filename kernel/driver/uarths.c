@@ -49,11 +49,18 @@ struct uart_state {
   uint rx_dropped;
   uint rx_epoch;
   uint32 requested_baud;
+  uart_rx_observer_t rx_observer;
 };
 
 static struct uart_state uart;
 
 extern volatile int panicked;
+
+void
+uart_set_rx_observer(uart_rx_observer_t observer)
+{
+  uart.rx_observer = observer;
+}
 
 static int
 uart_hw_getc(void)
@@ -407,6 +414,8 @@ uartintr(void)
 
   acquire(&uart.rx_lock);
   while ((c = uart_hw_getc()) != -1) {
+    if (uart.rx_observer && uart.rx_observer(c))
+      continue;
     uint next = (uart.rx_w + 1) % UART_RX_BUF_SIZE;
     if (next == uart.rx_r)
       uart.rx_dropped++;

@@ -126,6 +126,8 @@ extern uint64 sys_ioctl(void);
 extern uint64 sys_signal(void);
 extern uint64 sys_sigsend(void);
 extern uint64 sys_sigreturn(void);
+extern uint64 sys_setpgid(void);
+extern uint64 sys_getpgrp(void);
 
 static char *syscalls_name[] = {
 [SYS_fork]    "fork",
@@ -161,6 +163,8 @@ static char *syscalls_name[] = {
 [SYS_signal]  "signal",
 [SYS_sigsend] "sigsend",
 [SYS_sigreturn] "sigreturn",
+[SYS_setpgid] "setpgid",
+[SYS_getpgrp] "getpgrp",
 };
 
 static char syscalls_argc[] = {
@@ -196,6 +200,8 @@ static char syscalls_argc[] = {
 [SYS_signal]  2,
 [SYS_sigsend] 2,
 [SYS_sigreturn] 0,
+[SYS_setpgid] 2,
+[SYS_getpgrp] 0,
 };
 
 static uint64 (*syscalls[])(void) = {
@@ -232,6 +238,8 @@ static uint64 (*syscalls[])(void) = {
 [SYS_signal]    sys_signal,
 [SYS_sigsend]   sys_sigsend,
 [SYS_sigreturn] sys_sigreturn,
+[SYS_setpgid]   sys_setpgid,
+[SYS_getpgrp]   sys_getpgrp,
 };
 
 int

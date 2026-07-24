@@ -1,4 +1,5 @@
 #include "disk.h"
+#include "console.h"
 #include "file.h"
 #include "memlayout.h"
 #include "mmap.h"
@@ -115,6 +116,8 @@ usertrap(void)
     p->killed = 1;
   }
 
+  console_dispatch_events();
+
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2)
     yield();
@@ -191,6 +194,10 @@ kerneltrap()
     printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
     panic("kerneltrap");
   }
+
+  // The idle scheduler has no process lock or device lock held.
+  if(myproc() == 0)
+    console_dispatch_events();
 
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING)

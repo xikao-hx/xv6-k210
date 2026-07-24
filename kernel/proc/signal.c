@@ -20,6 +20,18 @@ signal_bit(int signum)
   return 1U << signum;
 }
 
+static void
+signal_mark_locked(struct proc *p, int signum)
+{
+  p->sig_pending |= signal_bit(signum);
+  if(signum == SIGKILL) {
+    p->sig_term = signum;
+    p->killed = 1;
+  }
+  if(p->state == SLEEPING && p->interruptible_sleep)
+    p->state = RUNNABLE;
+}
+
 static int
 signal_handler_valid(struct proc *p, uint64 handler)
 {
@@ -110,19 +122,50 @@ signal_send_pid(int pid, int signum)
   for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
     if(p->state != UNUSED && p->pid == pid) {
-      p->sig_pending |= signal_bit(signum);
-      if(signum == SIGKILL) {
-        p->sig_term = signum;
-        p->killed = 1;
-      }
-      if(p->state == SLEEPING && p->interruptible_sleep)
-        p->state = RUNNABLE;
+      signal_mark_locked(p, signum);
       release(&p->lock);
       return 0;
     }
     release(&p->lock);
   }
   return -1;
+}
+
+int
+signal_send_pgrp(int pgid, int signum)
+{
+  struct proc *p;
+  int found = 0;
+
+  if(pgid <= 0 || !signal_valid(signum))
+    return -1;
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state != UNUSED && p->pgid == pgid) {
+      signal_mark_locked(p, signum);
+      found = 1;
+    }
+    release(&p->lock);
+  }
+  return found ? 0 : -1;
+}
+
+int
+signal_pgrp_exists(int pgid)
+{
+  struct proc *p;
+
+  if(pgid <= 0)
+    return 0;
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state != UNUSED && p->pgid == pgid) {
+      release(&p->lock);
+      return 1;
+    }
+    release(&p->lock);
+  }
+  return 0;
 }
 
 int

@@ -1,5 +1,6 @@
 #include "types.h"
 #include "user.h"
+#include "console.h"
 
 static int failures;
 static volatile int handler_seen;
@@ -321,6 +322,127 @@ run_sleep_tests(void)
     printf("signaltest sleep: FAILED failures=%d\n", failures);
 }
 
+static void
+run_pgrp_tests(void)
+{
+  int ready[2];
+  int first;
+  int second;
+  int status1;
+  int status2;
+  char bytes[2];
+
+  printf("signaltest pgrp: starting\n");
+  if(setpgid(0, 0) < 0 || getpgrp() != getpid())
+    fail("self process group");
+  if(setpgid(-1, 1) != -1 || setpgid(999999, 1) != -1)
+    fail("setpgid invalid target");
+  if(pipe(ready) < 0) {
+    fail("pgrp ready pipe");
+    goto done;
+  }
+
+  first = fork();
+  if(first == 0) {
+    close(ready[0]);
+    signal(SIGTERM, test_handler);
+    handler_seen = 0;
+    write(ready[1], "a", 1);
+    sleep(1000);
+    exit(handler_seen == SIGTERM ? 0 : 70);
+  }
+  if(first < 0 || setpgid(first, first) < 0) {
+    fail("pgrp leader");
+    goto close_ready;
+  }
+
+  second = fork();
+  if(second == 0) {
+    close(ready[0]);
+    signal(SIGTERM, test_handler);
+    handler_seen = 0;
+    write(ready[1], "b", 1);
+    sleep(1000);
+    exit(handler_seen == SIGTERM ? 0 : 71);
+  }
+  if(second < 0 || setpgid(second, first) < 0) {
+    fail("pgrp member");
+    goto close_ready;
+  }
+
+  close(ready[1]);
+  if(read(ready[0], &bytes[0], 1) != 1 ||
+     read(ready[0], &bytes[1], 1) != 1)
+    fail("pgrp children ready");
+  if(sigsend(-first, SIGTERM) < 0)
+    fail("pgrp send");
+  if(wait(&status1) < 0 || wait(&status2) < 0 ||
+     status1 != 0 || status2 != 0)
+    fail("pgrp delivery");
+  close(ready[0]);
+  goto done;
+
+close_ready:
+  close(ready[0]);
+  close(ready[1]);
+done:
+  if(failures == 0)
+    printf("signaltest pgrp: ALL PASSED\n");
+  else
+    printf("signaltest pgrp: FAILED failures=%d\n", failures);
+}
+
+static void
+run_tty_test(void)
+{
+  int old_foreground = ioctl(0, CONSOLE_IOCTL_GET_FG_PGRP, 0);
+
+  printf("signaltest tty: starting\n");
+  if(setpgid(0, 0) < 0 ||
+     ioctl(0, CONSOLE_IOCTL_SET_FG_PGRP, getpgrp()) < 0) {
+    printf("signaltest tty: setup FAILED\n");
+    exit(1);
+  }
+  signal(SIGINT, test_handler);
+  handler_seen = 0;
+  printf("signaltest tty: READY\n");
+  while(handler_seen == 0)
+    ;
+  if(handler_seen != SIGINT ||
+     ioctl(0, CONSOLE_IOCTL_SET_FG_PGRP, old_foreground) < 0) {
+    printf("signaltest tty: FAILED\n");
+    failures++;
+  } else {
+    printf("signaltest tty: ALL PASSED\n");
+  }
+}
+
+static void
+run_raw_test(void)
+{
+  int old_mode = ioctl(0, CONSOLE_IOCTL_GET_MODE, 0);
+  char input = 0;
+  int got;
+
+  printf("signaltest raw: starting\n");
+  signal(SIGINT, test_handler);
+  handler_seen = 0;
+  if(ioctl(0, CONSOLE_IOCTL_SET_MODE, CONSOLE_MODE_RAW) < 0) {
+    printf("signaltest raw: setup FAILED\n");
+    exit(1);
+  }
+  printf("signaltest raw: READY\n");
+  got = read(0, &input, 1);
+  ioctl(0, CONSOLE_IOCTL_SET_MODE, old_mode);
+  if(got == 1 && input == 0x03 && handler_seen == 0)
+    printf("signaltest raw: ALL PASSED\n");
+  else {
+    printf("signaltest raw: FAILED got=%d byte=%d signal=%d\n",
+           got, input, handler_seen);
+    failures++;
+  }
+}
+
 static int
 run_exec_mode(char *mode)
 {
@@ -346,6 +468,18 @@ main(int argc, char **argv)
       exit(status);
     if(strcmp(argv[1], "sleep") == 0) {
       run_sleep_tests();
+      exit(failures ? 1 : 0);
+    }
+    if(strcmp(argv[1], "pgrp") == 0) {
+      run_pgrp_tests();
+      exit(failures ? 1 : 0);
+    }
+    if(strcmp(argv[1], "tty") == 0) {
+      run_tty_test();
+      exit(failures ? 1 : 0);
+    }
+    if(strcmp(argv[1], "raw") == 0) {
+      run_raw_test();
       exit(failures ? 1 : 0);
     }
   }

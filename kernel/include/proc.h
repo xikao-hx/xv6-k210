@@ -113,6 +113,7 @@ struct proc {
   int killed;                  // If non-zero, have been killed
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
+  int pgid;                    // Process group ID
   uint32 sig_pending;          // Pending signal bitset
   uint32 sig_mask;             // Internally blocked signals
   uint64 sig_handlers[NSIG];   // SIG_DFL, SIG_IGN, or user handler
@@ -170,6 +171,8 @@ int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
 int             proc_num(void);
+int             proc_setpgid(struct proc*, int, int);
+int             proc_getpgrp(struct proc*);
 void            proc_freekpagetable(pagetable_t pagetable, uint64 kstack, uint64 sz);
 void            swtch(struct context*, struct context*);
 

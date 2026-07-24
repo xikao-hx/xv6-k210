@@ -4,11 +4,13 @@
 #include "console.h"
 #include "file.h"
 #include "printf.h"
+#include "signal.h"
 #include "uarths.h"
 
 #define BACKSPACE 0x100
 #define C(x)  ((x) - '@')
 #define CONSOLE_IO_CHUNK 128
+#define TTY_EVENT_SIGINT (1U << 0)
 
 struct {
   struct spinlock lock;
@@ -16,7 +18,24 @@ struct {
   int esc;
   int drop_lf_after_cr;
   int eof_pending;
+  int foreground_pgid;
 } cons;
+
+static volatile uint tty_events;
+
+static int
+console_rx_observer(int c)
+{
+  int mode = __atomic_load_n(&cons.mode, __ATOMIC_RELAXED);
+  int foreground_pgid =
+      __atomic_load_n(&cons.foreground_pgid, __ATOMIC_RELAXED);
+
+  if(mode == CONSOLE_MODE_TTY && foreground_pgid > 0 && c == C('C')) {
+    __atomic_fetch_or(&tty_events, TTY_EVENT_SIGINT, __ATOMIC_RELAXED);
+    return 1;
+  }
+  return 0;
+}
 
 void
 consputc(int c)
@@ -74,12 +93,33 @@ console_set_mode(int mode)
   uartrx_disable();
   uart_flush_rx();
   acquire(&cons.lock);
-  cons.mode = mode;
+  __atomic_store_n(&cons.mode, mode, __ATOMIC_RELAXED);
   cons.esc = 0;
   cons.drop_lf_after_cr = 0;
   cons.eof_pending = 0;
   release(&cons.lock);
+  __atomic_store_n(&tty_events, 0, __ATOMIC_RELAXED);
   uartrx_enable();
+}
+
+static int
+console_set_foreground_pgrp(int pgid)
+{
+  int caller_pgid;
+
+  if(pgid < 0 || (pgid > 0 && !signal_pgrp_exists(pgid)))
+    return -1;
+  caller_pgid = proc_getpgrp(myproc());
+
+  acquire(&cons.lock);
+  if(cons.foreground_pgid != 0 &&
+     cons.foreground_pgid != caller_pgid) {
+    release(&cons.lock);
+    return -1;
+  }
+  __atomic_store_n(&cons.foreground_pgid, pgid, __ATOMIC_RELAXED);
+  release(&cons.lock);
+  return 0;
 }
 
 static int
@@ -118,9 +158,34 @@ consoleioctl(struct file *f, uint64 cmd, uint64 arg)
     uart_get_rx_stats(info);
     info[3] = console_mode_get();
     return either_copyout(1, arg, info, sizeof(info));
+  case CONSOLE_IOCTL_SET_FG_PGRP:
+    if(arg > 0x7fffffffUL)
+      return -1;
+    return console_set_foreground_pgrp((int)arg);
+  case CONSOLE_IOCTL_GET_FG_PGRP:
+    return __atomic_load_n(&cons.foreground_pgid, __ATOMIC_RELAXED);
   default:
     return -1;
   }
+}
+
+void
+console_dispatch_events(void)
+{
+  uint events = __atomic_exchange_n(&tty_events, 0, __ATOMIC_ACQ_REL);
+  int foreground_pgid;
+
+  if(!(events & TTY_EVENT_SIGINT))
+    return;
+  acquire(&cons.lock);
+  foreground_pgid = cons.foreground_pgid;
+  release(&cons.lock);
+  if(foreground_pgid <= 0)
+    return;
+  consputc('^');
+  consputc('C');
+  consputc('\n');
+  signal_send_pgrp(foreground_pgid, SIGINT);
 }
 
 static int
@@ -264,7 +329,10 @@ void
 consoleinit(void)
 {
   initlock(&cons.lock, "cons");
-  cons.mode = CONSOLE_MODE_TTY;
+  __atomic_store_n(&cons.mode, CONSOLE_MODE_TTY, __ATOMIC_RELAXED);
+  __atomic_store_n(&cons.foreground_pgid, 0, __ATOMIC_RELAXED);
+  __atomic_store_n(&tty_events, 0, __ATOMIC_RELAXED);
+  uart_set_rx_observer(console_rx_observer);
   uartinit();
   if(device_register(DEV_CONSOLE, "console", &console_ops) < 0)
     panic("console device register");

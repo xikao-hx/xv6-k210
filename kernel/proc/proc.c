@@ -124,6 +124,7 @@ allocproc(void)
 found:
   p->pid = allocpid();
   signal_proc_init(p);
+  p->pgid = p->pid;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc_page()) == 0){
@@ -198,6 +199,7 @@ freeproc(struct proc *p)
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
+  p->pgid = 0;
   p->parent = 0;
   p->name[0] = 0;
   p->chan = 0;
@@ -549,6 +551,7 @@ fork(void)
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   np->trace_mask = p->trace_mask;
+  np->pgid = p->pgid;
   signal_proc_fork(p, np);
   pid = np->pid;
 
@@ -565,6 +568,41 @@ fork(void)
   sfence_vma();
 
   return pid;
+}
+
+int
+proc_setpgid(struct proc *caller, int pid, int pgid)
+{
+  struct proc *p;
+  int target_pid = pid == 0 ? caller->pid : pid;
+
+  if(target_pid <= 0 || pgid < 0)
+    return -1;
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state != UNUSED && p->pid == target_pid) {
+      if(p != caller && p->parent != caller) {
+        release(&p->lock);
+        return -1;
+      }
+      p->pgid = pgid == 0 ? p->pid : pgid;
+      release(&p->lock);
+      return 0;
+    }
+    release(&p->lock);
+  }
+  return -1;
+}
+
+int
+proc_getpgrp(struct proc *p)
+{
+  int pgid;
+
+  acquire(&p->lock);
+  pgid = p->pgid;
+  release(&p->lock);
+  return pgid;
 }
 
 // Pass p's abandoned children to init.
