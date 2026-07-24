@@ -4,6 +4,7 @@
 #include "types.h"
 #include "param.h"
 #include "riscv.h"
+#include "signal.h"
 #include "spinlock.h"
 #include "mmap.h"
 
@@ -112,6 +113,13 @@ struct proc {
   int killed;                  // If non-zero, have been killed
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
+  uint32 sig_pending;          // Pending signal bitset
+  uint32 sig_mask;             // Internally blocked signals
+  uint64 sig_handlers[NSIG];   // SIG_DFL, SIG_IGN, or user handler
+  int sig_handling;            // Running a user signal handler
+  int sig_current;             // Signal currently being handled
+  int sig_term;                // Signal responsible for final termination
+  struct trapframe sig_saved_trapframe;
 
   // these are private to the process, so p->lock need not be held.
   uint64 kstack;               // Virtual address of kernel stack

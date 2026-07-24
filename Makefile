@@ -53,6 +53,7 @@ OBJS = \
   $K/lock/spinlock.o \
   $K/proc/exec.o \
   $K/proc/proc.o \
+  $K/proc/signal.o \
   $K/syscall/syscall.o \
   $K/syscall/sysfile.o \
   $K/syscall/sysproc.o \
@@ -66,6 +67,7 @@ OBJS = \
   $K/proc/swtch.o \
   $K/trap/trap.o \
   $K/trap/trampoline.o \
+  $K/trap/sigtramp.o \
   $K/trap/kernelvec.o
 
 # Platform-specific objects
@@ -251,6 +253,7 @@ UPROGS=\
 	$(UBUILD)/test/_dmactest\
 	$(UBUILD)/test/_devtest\
 	$(UBUILD)/test/_mmaptest\
+	$(UBUILD)/test/_signaltest\
 	$(UBUILD)/_init
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)

@@ -6,6 +6,7 @@
 #include "fat32.h"
 #include "printf.h"
 #include "proc.h"
+#include "signal.h"
 #include "string.h"
 #include "vm.h"
 
@@ -137,6 +138,7 @@ exec(char *path, char **argv)
   upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz);
 
   proc_freepagetable(oldpagetable, old_sz);
+  signal_reset_on_exec(p);
 
   eunlock(ep);
   eput(ep);

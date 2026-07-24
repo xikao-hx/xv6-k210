@@ -122,8 +122,10 @@ extern uint64 sys_dev(void);
 extern uint64 sys_readdir(void);
 extern uint64 sys_getcwd(void);
 extern uint64 sys_remove(void);
-
 extern uint64 sys_ioctl(void);
+extern uint64 sys_signal(void);
+extern uint64 sys_sigsend(void);
+extern uint64 sys_sigreturn(void);
 
 static char *syscalls_name[] = {
 [SYS_fork]    "fork",
@@ -156,6 +158,9 @@ static char *syscalls_name[] = {
 [SYS_getcwd]  "getcwd",
 [SYS_remove]  "remove",
 [SYS_ioctl]   "ioctl",
+[SYS_signal]  "signal",
+[SYS_sigsend] "sigsend",
+[SYS_sigreturn] "sigreturn",
 };
 
 static char syscalls_argc[] = {
@@ -188,6 +193,9 @@ static char syscalls_argc[] = {
 [SYS_getcwd]  1,
 [SYS_remove]  1,
 [SYS_ioctl]   3,
+[SYS_signal]  2,
+[SYS_sigsend] 2,
+[SYS_sigreturn] 0,
 };
 
 static uint64 (*syscalls[])(void) = {
@@ -221,6 +229,9 @@ static uint64 (*syscalls[])(void) = {
 [SYS_getcwd]    sys_getcwd,
 [SYS_remove]    sys_remove,
 [SYS_ioctl]     sys_ioctl,
+[SYS_signal]    sys_signal,
+[SYS_sigsend]   sys_sigsend,
+[SYS_sigreturn] sys_sigreturn,
 };
 
 int
