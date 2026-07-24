@@ -6,3 +6,4 @@ maix*
 .codex
 .vscode
 tools/__pycache__
+doc/*-bank/
