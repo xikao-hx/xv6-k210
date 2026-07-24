@@ -5,8 +5,8 @@
 - 开发分支：`refactor/mmap-core-subset`，基于用户请求时的当前分支创建。
 - 已阅读 `doc/重构文档/mmap重构方案.md` 并完成现有 mmap 路径审计。
 - 已初始化 PRD、设计、技术栈、实施计划、架构、代码设计和开发规则。
-- Step 1 至 Step 4 已完成并独立提交；Step 5 已完成代码与自动验证，
-  等待独立提交。
+- Step 1 至 Step 5 已全部完成、验证并独立提交。
+- mmap 核心子集实现已收口，当前进入最终审计状态。
 
 ## Step 1：文件 mmap 基础与 VM 分层
 
@@ -142,6 +142,7 @@
 
 - 完成时间：2026-07-24
 - 状态：代码和自动验证完成。
+- 提交：`a8c8be9 mmap: share file-backed pages`
 - 修改文件：
   - 新增 `kernel/include/mmap_file.h`、`kernel/vm/mmap_file.c`。
   - 修改 `kernel/vm/mmap.c`、`kernel/main.c`、`Makefile`。
@@ -169,3 +170,12 @@
 - 已知边界：
   - 这是 mmap 专用文件页缓存，不同步普通 read/write 或 truncate 的并发修改。
   - 未实现硬件 dirty bit、msync、mprotect、swap 或完整 Linux page cache。
+
+## 最终结果
+
+- 五个实施步骤均按顺序完成 QEMU 功能验证后独立提交。
+- 最终支持：文件 PRIVATE/SHARED mmap、PRIVATE/SHARED anonymous mmap、
+  设备 page-backed kbuf mmap、共享文件 mmap page cache。
+- mmap 地址空间、统一 fault、copy fault-in、双页表、partial/cross-VMA munmap、
+  fork/exec/exit 生命周期与显式 offset 写回均已纳入统一 VM 层。
+- QEMU 完整 `mmaptest` 通过；QEMU/K210 交叉构建通过。

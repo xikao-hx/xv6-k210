@@ -9,8 +9,8 @@
 
 ## 实施状态
 
-- Step 1 至 Step 4 已验证并独立提交。
-- Step 5 已完成 QEMU 功能验证和 QEMU/K210 构建，等待独立提交。
+- Step 1 至 Step 5 已全部完成 QEMU 功能验证并独立提交。
+- QEMU/K210 构建均通过；当前计划已完成。
 
 ## Step 1：文件 mmap 基础与 VM 分层
 
