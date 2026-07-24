@@ -288,7 +288,7 @@ QEMUOPTS += -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 # k210
 image = $T/kernel.bin
 k210 = $T/k210.bin
-k210-serialport := /dev/ttyUSB1
+k210-serialport := /dev/ttyUSB0
 
 boot:
 	@sudo chmod 777 $(k210-serialport)
