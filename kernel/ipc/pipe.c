@@ -78,8 +78,9 @@ pipewrite(struct pipe *pi, uint64 addr, int n)
 
   acquire(&pi->lock);
   for(i = 0; i < n; i++){
-    while(pi->nwrite == pi->nread + PIPESIZE){  //DOC: pipewrite-full
-      if(pi->readopen == 0 || signal_pending(pr)){
+    while(pi->nwrite == pi->nread + PIPESIZE &&
+          pi->readopen){  //DOC: pipewrite-full
+      if(signal_pending(pr)){
         release(&pi->lock);
         return i > 0 ? i : -1;
       }
@@ -88,6 +89,11 @@ pipewrite(struct pipe *pi, uint64 addr, int n)
         release(&pi->lock);
         return i > 0 ? i : -1;
       }
+    }
+    if(pi->readopen == 0) {
+      release(&pi->lock);
+      signal_send_pid(pr->pid, SIGPIPE);
+      return i > 0 ? i : -1;
     }
     if(copyin(pr->pagetable, &ch, addr + i, 1) == -1)
       break;

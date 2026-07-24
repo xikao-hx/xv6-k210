@@ -323,6 +323,92 @@ run_sleep_tests(void)
 }
 
 static void
+test_sigpipe_source(void)
+{
+  int fds[2];
+  int pid;
+
+  pid = fork();
+  if(pid == 0) {
+    if(pipe(fds) < 0)
+      exit(72);
+    close(fds[0]);
+    write(fds[1], "x", 1);
+    exit(73);
+  }
+  if(pid < 0 || wait_status(pid) != -SIGPIPE)
+    fail("sigpipe default");
+
+  if(signal(SIGPIPE, SIG_IGN) == SIG_ERR || pipe(fds) < 0) {
+    fail("sigpipe ignore setup");
+  } else {
+    close(fds[0]);
+    if(write(fds[1], "x", 1) != -1)
+      fail("sigpipe ignore result");
+    close(fds[1]);
+  }
+  signal(SIGPIPE, SIG_DFL);
+
+  handler_seen = 0;
+  if(signal(SIGPIPE, test_handler) == SIG_ERR || pipe(fds) < 0) {
+    fail("sigpipe handler setup");
+  } else {
+    close(fds[0]);
+    if(write(fds[1], "x", 1) != -1 || handler_seen != SIGPIPE)
+      fail("sigpipe handler");
+    close(fds[1]);
+  }
+  signal(SIGPIPE, SIG_DFL);
+}
+
+static void
+test_sigchld_source(void)
+{
+  int got;
+  int pid;
+  int status = -1;
+
+  handler_seen = 0;
+  if(signal(SIGCHLD, test_handler) == SIG_ERR) {
+    fail("sigchld handler setup");
+    return;
+  }
+  pid = fork();
+  if(pid == 0)
+    exit(37);
+  got = wait(&status);
+  if(got < 0)
+    got = wait(&status);
+  if(pid < 0 || got != pid || status != 37 || handler_seen != SIGCHLD)
+    fail("sigchld handler");
+
+  signal(SIGCHLD, SIG_IGN);
+  pid = fork();
+  if(pid == 0)
+    exit(38);
+  status = -1;
+  got = wait(&status);
+  if(pid < 0 || got != pid || status != 38)
+    fail("sigchld ignore");
+  signal(SIGCHLD, SIG_DFL);
+}
+
+static void
+run_source_tests(void)
+{
+  int before = failures;
+
+  printf("signaltest sources: starting\n");
+  test_sigpipe_source();
+  test_sigchld_source();
+  if(failures == before)
+    printf("signaltest sources: ALL PASSED\n");
+  else
+    printf("signaltest sources: FAILED failures=%d\n",
+           failures - before);
+}
+
+static void
 run_pgrp_tests(void)
 {
   int ready[2];
@@ -482,6 +568,10 @@ main(int argc, char **argv)
       run_raw_test();
       exit(failures ? 1 : 0);
     }
+    if(strcmp(argv[1], "sources") == 0) {
+      run_source_tests();
+      exit(failures ? 1 : 0);
+    }
   }
 
   printf("signaltest basic: starting\n");
@@ -495,10 +585,11 @@ main(int argc, char **argv)
   test_fork_inherits_handler();
   printf("signaltest: exec semantics\n");
   test_exec_semantics();
+  run_source_tests();
 
   if(failures == 0)
-    printf("signaltest basic: ALL PASSED\n");
+    printf("signaltest: ALL PASSED\n");
   else
-    printf("signaltest basic: FAILED failures=%d\n", failures);
+    printf("signaltest: FAILED failures=%d\n", failures);
   exit(failures ? 1 : 0);
 }

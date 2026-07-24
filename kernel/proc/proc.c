@@ -684,6 +684,9 @@ exit(int status)
   // Give any children to init.
   reparent(p);
 
+  // Notify the stable parent while its lock is already held.
+  signal_send_locked(original_parent, SIGCHLD);
+
   // Parent might be sleeping in wait().
   wakeup1(original_parent);
 

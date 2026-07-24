@@ -8,6 +8,8 @@
 
 extern struct proc proc[NPROC];
 
+static int signal_default_ignored(int);
+
 static int
 signal_valid(int signum)
 {
@@ -23,6 +25,11 @@ signal_bit(int signum)
 static void
 signal_mark_locked(struct proc *p, int signum)
 {
+  uint64 handler = p->sig_handlers[signum];
+
+  if(handler == (uint64)SIG_IGN ||
+     (handler == (uint64)SIG_DFL && signal_default_ignored(signum)))
+    return;
   p->sig_pending |= signal_bit(signum);
   if(signum == SIGKILL) {
     p->sig_term = signum;
@@ -107,6 +114,9 @@ signal_set_handler(struct proc *p, int signum, uint64 handler)
   acquire(&p->lock);
   old = p->sig_handlers[signum];
   p->sig_handlers[signum] = handler;
+  if(handler == (uint64)SIG_IGN ||
+     (handler == (uint64)SIG_DFL && signal_default_ignored(signum)))
+    p->sig_pending &= ~signal_bit(signum);
   release(&p->lock);
   return old;
 }
@@ -148,6 +158,15 @@ signal_send_pgrp(int pgid, int signum)
     release(&p->lock);
   }
   return found ? 0 : -1;
+}
+
+int
+signal_send_locked(struct proc *p, int signum)
+{
+  if(p->state == UNUSED || !signal_valid(signum))
+    return -1;
+  signal_mark_locked(p, signum);
+  return 0;
 }
 
 int
