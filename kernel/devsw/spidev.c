@@ -1,14 +1,43 @@
-#include "dmac.h"
 #include "file.h"
 #include "kalloc.h"
 #include "printf.h"
 #include "proc.h"
-#include "spi.h"
-#include "spi_device.h"
-#include "spidev.h"
 #include "utils.h"
 #include "vm.h"
 #include "string.h"
+#include "spi.h"
+#include "spidev.h"
+#include "spi_config.h"
+
+static int
+spidev_open(struct file *f)
+{
+  struct spidev_data *spidev;
+
+  spidev = kmalloc(sizeof(struct spidev_data));
+  if(spidev == 0)
+    return -1;
+  
+  initsleeplock(&spidev->lock, "spi file");
+
+  spidev->minor = f->minor;
+  spidev->dev = spi_devices[f->minor];
+  spidev->speed_hz = 1000000;
+  f->private_data = spidev;
+
+  return 0;
+}
+
+static int
+spidev_close(struct file *f)
+{
+   if(f->private_data) {
+    kfree(f->private_data);
+    f->private_data = 0;
+  }
+
+  return 0;
+}
 
 static int
 spidev_read(struct file *f, uint64 dst, int n)
@@ -64,7 +93,7 @@ spidev_get_ioc_message(uint64 cmd, struct spi_ioc_transfer *u_ioc, uint32 *n_ioc
 }
 
 static int 
-spidev_message(struct spi_file_context *ctx,
+spidev_message(struct spidev_data *spidev,
                struct spi_ioc_transfer *u_xfers, uint32 n_xfers)
 {
 
@@ -109,8 +138,7 @@ spidev_message(struct spi_file_context *ctx,
   k_xfer.len = total;
 
   /* One kernel transfer keeps CS asserted across all message segments. */
-  if(spi_controller_transfer(ctx->device->controller, ctx->device, ctx,
-                             &k_xfer, 1) < 0) {
+  if(spi_transfer(spidev->dev, &k_xfer, 1) < 0) {
     goto done;
   }
 
@@ -135,86 +163,64 @@ done:
 }
 
 static int
-spidev_open(struct file *f)
-{
-  const struct spi_device *dev = spi_device_get(f->minor);
-  struct spi_file_context *ctx;
-
-  if(dev == 0)
-    return -1;
-  ctx = kmalloc(sizeof(*ctx));
-  if(ctx == 0)
-    return -1;
-  ctx->device = dev;
-  initsleeplock(&ctx->lock, "spi file");
-  ctx->speed_hz = dev->default_hz;
-  ctx->mode = dev->mode;
-  ctx->bits_per_word = dev->bits_per_word;
-  f->private_data = ctx;
-  return 0;
-}
-
-static int
-spidev_close(struct file *f)
-{
-  if(f->private_data)
-    kfree(f->private_data);
-  return 0;
-}
-
-static int
 spidev_ioctl(struct file *f, uint64 cmd, uint64 arg)
 {
   int ret = 0;
   struct proc *p = myproc();
-  struct spi_file_context *ctx = f->private_data;
-  uint n_ioc;
-  struct spi_ioc_transfer *ioc;
+  struct spidev_data *spidev = f->private_data;
+  uint n_ioc = 0;
+  struct spi_ioc_transfer *ioc = 0;
   uint32 value;
 
-  if(ctx == 0)
+  if(spidev == 0)
     return -1;
 
+  struct spi_device *dev = spidev->dev;
+  acquiresleep(&spidev->lock);
   switch(cmd) {
     case SPI_IOC_RD_MODE:
-      acquiresleep(&ctx->lock);
-      value = ctx->mode;
-      releasesleep(&ctx->lock);
-      return copyout(p->pagetable, arg, (char *)&value, sizeof(value));
+      value = dev->mode;
+      ret = copyout(p->pagetable, arg, (char *)&value, sizeof(value));
+      break;
     case SPI_IOC_WR_MODE:
       if(copyin(p->pagetable, (char *)&value, arg, sizeof(value)) < 0 ||
-         value > SPI_WORK_MODE_3)
-        return -1;
-      acquiresleep(&ctx->lock);
-      ctx->mode = value;
-      releasesleep(&ctx->lock);
-      return 0;
+         value > SPI_WORK_MODE_3) {
+          ret = -1;
+          break;
+      }
+        
+      dev->mode = value;
+      ret = 0;
+      break;
     case SPI_IOC_RD_MAX_SPEED_HZ:
-      acquiresleep(&ctx->lock);
-      value = ctx->speed_hz;
-      releasesleep(&ctx->lock);
-      return copyout(p->pagetable, arg, (char *)&value, sizeof(value));
+      value = spidev->speed_hz;
+      ret = copyout(p->pagetable, arg, (char *)&value, sizeof(value));
+      break;
     case SPI_IOC_WR_MAX_SPEED_HZ:
       if(copyin(p->pagetable, (char *)&value, arg, sizeof(value)) < 0 ||
-         value == 0 || value > ctx->device->max_hz)
-        return -1;
-      acquiresleep(&ctx->lock);
-      ctx->speed_hz = value;
-      releasesleep(&ctx->lock);
-      return 0;
+         value == 0 || value > dev->max_speed_hz) {
+          ret = -1;
+          break;
+      }
+        
+      spidev->speed_hz = value;
+      ret = 0;
+      break;
     default:
       ioc = spidev_get_ioc_message(cmd, (struct spi_ioc_transfer *)arg, &n_ioc);
-      if (!ioc)
-        return -1;
+      if (!ioc) {
+        ret = -1;
+        break;
+      }
 
       if(!n_ioc)
         break;
 
-      acquiresleep(&ctx->lock);
-      ret = spidev_message(ctx, ioc, n_ioc);
-      releasesleep(&ctx->lock);
+      ret = spidev_message(spidev, ioc, n_ioc);
       kfree(ioc);
+      break;
   }
+  releasesleep(&spidev->lock);
 
   return ret;
 }
@@ -230,6 +236,7 @@ static const struct file_operations spidev_ops = {
 void
 spidev_init(void)
 {
+  spi_init();
   if(device_register(DEV_SPI, "spi", &spidev_ops) < 0)
     panic("spi device register");
 }

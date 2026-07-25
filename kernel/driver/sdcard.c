@@ -20,14 +20,13 @@ static void sd_lowlevel_init(uint8 spi_index) {
     // spi_set_clk_rate(SPI_DEVICE_0, 200000);     /*set clk rate*/
 }
 
+extern struct spi_device spi_sd_dev;
 static void sd_write_data(uint8 const *data_buff, uint32 length) {
-    spi_init(SPI_DEVICE_0, SPI_WORK_MODE_0, SPI_FF_STANDARD, 8, 0);
-	spi_write(SPI_DEVICE_0, SPI_CHIP_SELECT_3, data_buff, length);
+	spi_write(&spi_sd_dev, data_buff, length);
 }
 
 static void sd_read_data(uint8 *data_buff, uint32 length) {
-    spi_init(SPI_DEVICE_0, SPI_WORK_MODE_0, SPI_FF_STANDARD, 8, 0);
-	spi_read(SPI_DEVICE_0, SPI_CHIP_SELECT_3, data_buff, length);
+	spi_read(&spi_sd_dev, data_buff, length);
 }
 
 /*
