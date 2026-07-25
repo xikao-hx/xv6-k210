@@ -107,7 +107,7 @@ static void spi_set_tmod(uint8 spi_num, uint32 tmod)
 void spi_init(void) {
     char name[10];
 
-    for (int i = 0; i < SPI_DEVICE_1; i ++) {
+    for (int i = 0; i <= SPI_DEVICE_1; i ++) {
         snprintf(name, sizeof(name), "spi_%d", i);
         initsleeplock(&spi_ctrls[i]->lock, name);
     }
@@ -482,6 +482,7 @@ int spi_transfer(struct spi_device *dev, struct spi_transfer *xfers, uint64 num)
     return ret;
 }
 
+/* sd 卡 */
 int spi_write(struct spi_device *dev, const void *buf, uint64 len) 
 {
     int ret = 0;
@@ -499,6 +500,7 @@ int spi_write(struct spi_device *dev, const void *buf, uint64 len)
     return ret;
 }
 
+/* sd 卡 */
 int spi_read(struct spi_device *dev, void *buf, uint64 len) 
 {
     int ret;
