@@ -54,7 +54,6 @@ main(unsigned long hartid, unsigned long dtb_pa)
 #ifndef QEMU
     fpioa_pin_init(); // configure SPI0 pins for SD card
     dmac_init();      // initialize DMA controller
-    k210_devices_init(); // initialize board device bindings and bus locks
     spidev_init();   // register SPI device for user-space access
     i2cdev_init();   // register I2C device for user-space access
     sdcarddev_init(); // register SD card device for user-space access
@@ -63,7 +62,7 @@ main(unsigned long hartid, unsigned long dtb_pa)
     userinit();      // first user process
 
     /* workaround: wait some time, k210 need this to boot success */
-    printf("hart 0 init done\n");
+    // printf("hart 0 init done\n");
     
     // Start secondary harts via SBI HSM
     for(int i = 0; i < NCPU; i++) {

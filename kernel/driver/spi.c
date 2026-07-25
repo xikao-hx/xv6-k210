@@ -113,11 +113,15 @@ void spi_init(void) {
     }
 }
 
-static void spi_dw_init(spi_device_num_t spi_num, spi_work_mode_t work_mode, spi_frame_format_t frame_format,
-              uint64 data_bit_length, uint32 endian)
+static void spi_dw_init(struct spi_device *dev, spi_frame_format_t frame_format, uint32 endian)
 {
+    
     // configASSERT(data_bit_length >= 4 && data_bit_length <= 32);
     // configASSERT(spi_num < SPI_DEVICE_MAX && spi_num != 2);
+    spi_device_num_t spi_num = dev->bus_num;
+    spi_work_mode_t work_mode = (spi_work_mode_t)dev->mode;
+    uint64 data_bit_length = dev->bits_per_word;
+    
     spi_clk_init(spi_num);
 
     // uint8 dfs_offset, frf_offset, work_mode_offset;
@@ -458,8 +462,7 @@ int __spi_transfer(struct spi_device *dev, struct spi_transfer *xfers, uint64 nu
 
     spi_data->chip_select = dev->chip_select;
 
-    spi_dw_init(dev->bus_num, (spi_work_mode_t)dev->mode,
-            SPI_FF_STANDARD, dev->bits_per_word, 0);
+    spi_dw_init(dev, SPI_FF_STANDARD, 0);
     for (int i = 0; i < num; i ++) {
         if (spi_can_dma(spi_data, &xfers[i])) {
             ret = spi_dw_dma_transfer(spi_data, &xfers[i]);

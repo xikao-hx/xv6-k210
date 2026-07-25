@@ -67,7 +67,6 @@ OBJS = \
 # Platform-specific objects
 ifeq ($(platform), k210)
 OBJS += \
-  $K/board/k210_devices.o \
   $K/driver/spi.o \
   $K/driver/i2c.o \
   $K/devsw/spidev.o \
