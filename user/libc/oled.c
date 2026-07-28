@@ -70,8 +70,8 @@ oled_init(void)
   oled_write_cmd(0xD3); oled_write_cmd(0x00);  // display offset
   oled_write_cmd(0x40);       // start line = 0
 
-  oled_write_cmd(0xA0);       // segment remap: normal
-  oled_write_cmd(0xC0);       // COM scan: normal
+  oled_write_cmd(0xA1);       // segment remap: column 127 = SEG0 (left-to-right)
+  oled_write_cmd(0xC8);       // COM scan: remapped (bottom-to-top)
 
   oled_write_cmd(0xDA); oled_write_cmd(0x12);  // COM pins
   oled_write_cmd(0x81); oled_write_cmd(0xCF);  // contrast
