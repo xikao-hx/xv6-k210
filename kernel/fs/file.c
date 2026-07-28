@@ -154,6 +154,69 @@ fileopen_device(struct file *f, int major, int minor, int flags)
   return 0;
 }
 
+// Open a file by path.
+// Handles both device nodes (ATTR_DEVICE) and regular filesystem paths.
+// Intended to be called from sys_open after filealloc() succeeds.
+// On success, f is initialized and takes ownership of the dirent (if any).
+// On failure, all local resources are cleaned up (caller must still fileclose(f)).
+int
+fileopen(struct file *f, const char *path, int omode)
+{
+  char readable, writable;
+  struct dirent *ep;
+
+  // Validate mode flags
+  if((omode & ~(O_ACCMODE | O_CREATE | O_TRUNC |
+                O_NOFOLLOW | O_APPEND)) != 0)
+    return -1;
+
+  // Parse access mode
+  if(file_parse_access_mode(omode, &readable, &writable) < 0)
+    return -1;
+
+  // Look up or create the directory entry
+  if(omode & O_CREATE){
+    ep = create(path, T_FILE, omode, 0, 0);
+    if(ep == 0)
+      return -1;
+  } else {
+    if((ep = ename(path)) == 0)
+      return -1;
+    elock(ep);
+  }
+
+  // Device node: extract major/minor from dirent and open via device layer
+  if(ep->attribute & ATTR_DEVICE) {
+    int major = ep->first_clus;
+    int minor = ep->file_size;
+    eunlock(ep);
+    eput(ep);
+    return fileopen_device(f, major, minor, omode);
+  }
+
+  // Directory writable check (non-O_CREATE only; create() handles the O_CREATE case)
+  if(!(omode & O_CREATE) && (ep->attribute & ATTR_DIRECTORY) &&
+     (writable || (omode & (O_TRUNC | O_APPEND)))){
+    eunlock(ep);
+    eput(ep);
+    return -1;
+  }
+
+  // Truncate if requested (not for directories)
+  if(!(ep->attribute & ATTR_DIRECTORY) && (omode & O_TRUNC))
+    etrunc(ep);
+
+  // Initialize the file struct
+  f->type = FD_ENTRY;
+  f->off = (omode & O_APPEND) ? ep->file_size : 0;
+  f->ep = ep;
+  f->readable = readable;
+  f->writable = writable;
+
+  eunlock(ep);
+  return 0;
+}
+
 // Get metadata about file f.
 // addr is a user virtual address, pointing to a struct stat.
 int

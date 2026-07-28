@@ -11,7 +11,6 @@
 #include "trap.h"
 #include "vm.h"
 #ifndef QEMU
-#include "device.h"
 #include "dmac.h"
 #include "fpioa.h"
 #include "i2cdev.h"

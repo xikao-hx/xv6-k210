@@ -23,7 +23,7 @@ static int w64_known_manufacturer(uint8 mid) {
 static int w64_init(void) {
   spi_fd = open("/dev/w25q64", O_RDWR);
   if(spi_fd < 0) {
-    printf("w25q64: dev() failed\n");
+    printf("w25q64: open /dev/w25q64 failed\n");
     return -1;
   }
   return 0;

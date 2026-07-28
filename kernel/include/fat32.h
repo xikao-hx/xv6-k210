@@ -10,6 +10,7 @@
 #define ATTR_VOLUME_ID      0x08
 #define ATTR_DIRECTORY      0x10
 #define ATTR_ARCHIVE        0x20
+#define ATTR_DEVICE         0x40
 #define ATTR_LONG_NAME      0x0F
 
 #define LAST_LONG_ENTRY     0x40
@@ -55,6 +56,7 @@ void            fat32_invalidate(void);
 struct dirent*  dirlookup(struct dirent *entry, char *filename, uint *poff);
 char*           formatname(char *name);
 void            emake(struct dirent *dp, struct dirent *ep, uint off);
+struct dirent*  create(char *path, short type, int mode, int major, int minor);
 struct dirent*  ealloc(struct dirent *dp, char *name, int attr);
 struct dirent*  edup(struct dirent *entry);
 void            eupdate(struct dirent *entry);

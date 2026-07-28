@@ -3,7 +3,6 @@
 //
 
 #include "fcntl.h"
-#include "device.h"
 #include "file.h"
 #include "fat32.h"
 #include "kalloc.h"
@@ -47,25 +46,6 @@ fdalloc(struct file *f)
     }
   }
   return -1;
-}
-
-static int
-devicefdalloc(int flags, int major, int minor)
-{
-  struct file *f;
-  int fd;
-
-  if((f = filealloc()) == 0)
-    return -1;
-  if(fileopen_device(f, major, minor, flags) < 0) {
-    fileclose(f);
-    return -1;
-  }
-  if((fd = fdalloc(f)) < 0) {
-    fileclose(f);
-    return -1;
-  }
-  return fd;
 }
 
 uint64
@@ -131,8 +111,8 @@ sys_fstat(void)
   return filestat(f, st);
 }
 
-static struct dirent*
-create(char *path, short type, int mode)
+struct dirent*
+create(char *path, short type, int mode, int major, int minor)
 {
   struct dirent *ep, *dp;
   char name[FAT32_MAX_FILENAME + 1];
@@ -142,6 +122,8 @@ create(char *path, short type, int mode)
 
   if (type == T_DIR) {
     mode = ATTR_DIRECTORY;
+  } else if (type == T_DEVICE) {
+    mode = ATTR_DEVICE;
   } else if ((mode & O_ACCMODE) == O_RDONLY) {
     mode = ATTR_READ_ONLY;
   } else {
@@ -156,11 +138,18 @@ create(char *path, short type, int mode)
   }
 
   if ((type == T_DIR && !(ep->attribute & ATTR_DIRECTORY)) ||
+      (type == T_DEVICE && !(ep->attribute & ATTR_DEVICE)) ||
       (type == T_FILE && (ep->attribute & ATTR_DIRECTORY))) {
     eunlock(dp);
     eput(ep);
     eput(dp);
     return 0;
+  }
+
+  if (type == T_DEVICE) {
+    ep->first_clus = major;
+    ep->file_size = minor;
+    ep->dirty = 1;
   }
 
   eunlock(dp);
@@ -175,59 +164,23 @@ sys_open(void)
 {
   char path[FAT32_MAX_PATH];
   int fd, omode;
-  int major, minor;
-  char readable, writable;
   struct file *f;
-  struct dirent *ep;
 
   if(argstr(0, path, FAT32_MAX_PATH) < 0 || argint(1, &omode) < 0)
     return -1;
-  if((omode & ~(O_ACCMODE | O_CREATE | O_TRUNC |
-                O_NOFOLLOW | O_APPEND)) != 0 ||
-     file_parse_access_mode(omode, &readable, &writable) < 0)
+
+  if((f = filealloc()) == 0)
     return -1;
 
-  if(device_path_lookup(path, &major, &minor) == 0)
-    return devicefdalloc(omode, major, minor);
-
-  if(omode & O_CREATE){
-    ep = create(path, T_FILE, omode);
-    if(ep == 0){
-      return -1;
-    }
-  } else {
-    if((ep = ename(path)) == 0){
-      return -1;
-    }
-    elock(ep);
-    if((ep->attribute & ATTR_DIRECTORY) &&
-       (writable || (omode & (O_TRUNC | O_APPEND)))){
-      eunlock(ep);
-      eput(ep);
-      return -1;
-    }
-  }
-
-  if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
-    if (f) {
-      fileclose(f);
-    }
-    eunlock(ep);
-    eput(ep);
+  if(fileopen(f, path, omode) < 0) {
+    fileclose(f);
     return -1;
   }
 
-  if(!(ep->attribute & ATTR_DIRECTORY) && (omode & O_TRUNC)){
-    etrunc(ep);
+  if((fd = fdalloc(f)) < 0) {
+    fileclose(f);
+    return -1;
   }
-
-  f->type = FD_ENTRY;
-  f->off = (omode & O_APPEND) ? ep->file_size : 0;
-  f->ep = ep;
-  f->readable = readable;
-  f->writable = writable;
-
-  eunlock(ep);
 
   return fd;
 }
@@ -268,7 +221,7 @@ sys_mkdir(void)
   char path[FAT32_MAX_PATH];
   struct dirent *ep;
 
-  if(argstr(0, path, FAT32_MAX_PATH) < 0 || (ep = create(path, T_DIR, 0)) == 0){
+  if(argstr(0, path, FAT32_MAX_PATH) < 0 || (ep = create(path, T_DIR, 0, 0, 0)) == 0){
     return -1;
   }
   eunlock(ep);
@@ -329,18 +282,24 @@ sys_pipe(void)
   return 0;
 }
 
-// To open console/device.
 uint64
-sys_dev(void)
+sys_mknod(void)
 {
-  int omode;
+  char path[FAT32_MAX_PATH];
   int major, minor;
+  struct dirent *ep;
 
-  if(argint(0, &omode) < 0 || argint(1, &major) < 0 || argint(2, &minor) < 0){
+  if(argstr(0, path, FAT32_MAX_PATH) < 0 ||
+     argint(1, &major) < 0 ||
+     argint(2, &minor) < 0)
     return -1;
-  }
 
-  return devicefdalloc(omode, major, minor);
+  if((ep = create(path, T_DEVICE, 0, major, minor)) == 0)
+    return -1;
+
+  eunlock(ep);
+  eput(ep);
+  return 0;
 }
 
 uint64
@@ -502,13 +461,6 @@ sys_mmap(void)
 }
 
 // FAT32 stubs for unsupported syscalls
-
-uint64
-sys_mknod(void)
-{
-  // FAT32 has no device nodes; use sys_dev instead
-  return -1;
-}
 
 uint64
 sys_link(void)

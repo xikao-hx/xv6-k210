@@ -43,6 +43,7 @@ struct file*    filedup(struct file*);
 void            fileinit(void);
 int             file_parse_access_mode(int, char*, char*);
 int             fileopen_device(struct file*, int, int, int);
+int             fileopen(struct file*, const char*, int);
 int             fileread(struct file*, uint64, int n);
 int             filestat(struct file*, uint64 addr);
 int             fileioctl(struct file*, uint64, uint64);

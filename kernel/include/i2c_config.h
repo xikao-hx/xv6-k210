@@ -2,7 +2,6 @@
 #define _I2C_CONFIG_H
 
 #include "types.h"
-#include "device.h"
 #include "dev.h"
 #include "i2c.h"
 

@@ -34,7 +34,7 @@ static int mpu_init(void)
 {
   i2c_fd = open("/dev/mpu6050", O_RDWR);
   if(i2c_fd < 0) {
-    printf("mpu6050: dev() failed\n");
+    printf("mpu6050: open /dev/mpu6050 failed\n");
     return -1;
   }
   return 0;

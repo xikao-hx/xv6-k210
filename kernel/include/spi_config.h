@@ -2,7 +2,6 @@
 #define _SPI_CONFIG_H
 
 #include "types.h"
-#include "device.h"
 #include "dev.h"
 #include "spi.h"
 
