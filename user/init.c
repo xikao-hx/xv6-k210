@@ -5,6 +5,7 @@
 #include "file.h"
 #include "user.h"
 #include "fcntl.h"
+#include "dev.h"
 
 char *argv[] = { "sh", 0 };
 
@@ -13,7 +14,10 @@ main(void)
 {
   int pid, wpid;
   printf("init: starting\n");
-  dev(O_RDWR, DEV_CONSOLE, 0);
+  mkdir("/dev");
+  mknod("/dev/console", DEV_CONSOLE, 0);
+  mknod("/dev/stats", DEV_STATS, 0);
+  open("/dev/console", O_RDWR);
   dup(0);  // stdout
   dup(0);  // stderr
 

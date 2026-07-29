@@ -24,11 +24,10 @@
 #define SYS_symlink  24
 #define SYS_mmap  25
 #define SYS_munmap 26
-#define SYS_dev    27
-#define SYS_readdir 28
-#define SYS_getcwd 29
-#define SYS_remove 30
-#define SYS_ioctl 31
+#define SYS_readdir 27
+#define SYS_getcwd 28
+#define SYS_remove 29
+#define SYS_ioctl 30
 
 #ifndef __ASSEMBLER__
 #include "types.h"

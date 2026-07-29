@@ -1,6 +1,8 @@
 
 #include "proc.h"
 #include "file.h"
+#include "printf.h"
+#include "dev.h"
 
 #define BUFSZ 4096
 static struct {
@@ -14,16 +16,20 @@ int statscopyin(char*, int);
 int statslock(char*, int);
   
 int
-statswrite(int user_src, uint64 src, int n)
+statswrite(struct file *f, uint64 src, int n)
 {
+  (void)f;
+  (void)src;
+  (void)n;
   return -1;
 }
 
 int
-statsread(int user_dst, uint64 dst, int n)
+statsread(struct file *f, uint64 dst, int n)
 {
   int m;
 
+  (void)f;
   acquire(&stats.lock);
 
   if(stats.sz == 0) {
@@ -39,7 +45,7 @@ statsread(int user_dst, uint64 dst, int n)
   if (m > 0) {
     if(m > n)
       m  = n;
-    if(either_copyout(user_dst, dst, stats.buf+stats.off, m) != -1) {
+    if(either_copyout(1, dst, stats.buf+stats.off, m) != -1) {
       stats.off += m;
     }
   } else {
@@ -51,11 +57,25 @@ statsread(int user_dst, uint64 dst, int n)
   return m;
 }
 
+static int
+statsopen(struct file *f)
+{
+  if(f->minor != 0 || f->writable)
+    return -1;
+  return 0;
+}
+
+static const struct file_operations stats_ops = {
+  .open = statsopen,
+  .read = statsread,
+  .write = statswrite,
+};
+
 void
 statsinit(void)
 {
   initlock(&stats.lock, "stats");
 
-  devsw[DEV_STATS].read = statsread;
-  devsw[DEV_STATS].write = statswrite;
+  if(device_register(DEV_STATS, "stats", &stats_ops) < 0)
+    panic("stats device register");
 }

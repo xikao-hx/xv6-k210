@@ -589,6 +589,8 @@ struct dirent *ealloc(struct dirent *dp, char *name, int attr)
         ep->cur_clus = ep->first_clus = alloc_clus(dp->dev);
         emake(ep, ep, 0);
         emake(ep, dp, 32);
+    } else if (attr == ATTR_DEVICE) {
+        ep->attribute |= ATTR_DEVICE;
     } else {
         ep->attribute |= ATTR_ARCHIVE;
     }

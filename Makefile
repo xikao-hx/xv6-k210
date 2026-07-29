@@ -34,6 +34,7 @@ endif
 OBJS = \
   $(ENTRY_OBJ) \
   $K/main.o \
+  $K/devsw/device.o \
   $K/devsw/console.o \
   $K/devsw/stats.o \
   $K/driver/uarths.o \
@@ -185,7 +186,11 @@ $(UBUILD)/%.o: $U/%.c $(BUILD_CONFIG)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # user lib
-ULIB = $(UBUILD)/libc/ulib.o $(UBUILD)/usys.o $(UBUILD)/libc/printf.o $(UBUILD)/libc/umalloc.o $(UBUILD)/libc/oled.o
+ULIB = $(UBUILD)/libc/ulib.o $(UBUILD)/usys.o $(UBUILD)/libc/printf.o $(UBUILD)/libc/umalloc.o
+
+ifeq ($(platform), k210)
+ULIB += $(UBUILD)/libc/oled.o
+endif
 
 define LINK_USER
 	@mkdir -p $(dir $@)
@@ -218,7 +223,7 @@ $(UBUILD)/usys.o : $(UBUILD)/usys.S
 # Prevent deletion of intermediate files
 .PRECIOUS: $(UBUILD)/sh/%.o $(UBUILD)/app/%.o $(UBUILD)/test/%.o $(UBUILD)/libc/%.o $(UBUILD)/%.o $(KBUILD)/%.o
 
-# user programe list
+# user programe (all platforms)
 UPROGS=\
 	$(UBUILD)/sh/_cat\
 	$(UBUILD)/sh/_echo\
@@ -229,18 +234,23 @@ UPROGS=\
 	$(UBUILD)/sh/_rm\
 	$(UBUILD)/sh/_sh\
 	$(UBUILD)/sh/_find\
-	$(UBUILD)/app/_burn\
+	$(UBUILD)/test/_devtest\
+	$(UBUILD)/_init
+
+# Platform-specific objects
+ifeq ($(platform), k210)
+UPROGS += \
 	$(UBUILD)/app/_mpu6050\
 	$(UBUILD)/app/_w25q64\
+	$(UBUILD)/app/_burn\
 	$(UBUILD)/test/_cpuburn\
 	$(UBUILD)/test/_iotest\
 	$(UBUILD)/test/_consoletest\
 	$(UBUILD)/test/_sdtest\
 	$(UBUILD)/test/_spitest\
 	$(UBUILD)/test/_i2ctest\
-	$(UBUILD)/test/_dmactest\
-	$(UBUILD)/test/_devtest\
-	$(UBUILD)/_init
+	$(UBUILD)/test/_dmactest
+endif
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 

@@ -6,6 +6,7 @@
 #include "plic.h"
 #include "printf.h"
 #include "proc.h"
+#include "stats.h"
 #include "sbi.h"
 #include "trap.h"
 #include "vm.h"
@@ -48,6 +49,7 @@ main(unsigned long hartid, unsigned long dtb_pa)
 #endif
     binit();         // buffer cache
     fileinit();      // file table
+    statsinit();     // register stats device
 #ifndef QEMU
     fpioa_pin_init(); // configure SPI0 pins for SD card
     dmac_init();      // initialize DMA controller

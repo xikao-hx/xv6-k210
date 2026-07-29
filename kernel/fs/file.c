@@ -8,8 +8,8 @@
 #include "file.h"
 #include "fat32.h"
 #include "vm.h"
+#include "dev.h"
 
-struct devsw devsw[NDEV];
 struct {
   struct spinlock lock;
   struct file file[NFILE];
@@ -51,8 +51,28 @@ filedup(struct file *f)
   return f;
 }
 
+int 
+fileopen(struct file *f) {
+  struct device *dev;
+
+  if (f->type != FD_DEVICE)
+    return -1;
+
+  dev = device_get(f->major);
+  if (dev == 0)
+      return -1;
+
+  f->ops = dev->ops;
+  if (!f->ops)
+    return -1;
+  if (f->ops->open)
+    return f->ops->open(f);
+
+  return 0;
+}
+
 // Close file f.  (Decrement ref count, close when reaches 0.)
-void
+int
 fileclose(struct file *f)
 {
   struct file ff;
@@ -62,7 +82,7 @@ fileclose(struct file *f)
     panic("fileclose");
   if(--f->ref > 0){
     release(&ftable.lock);
-    return;
+    return 0;
   }
   ff = *f;
   f->ref = 0;
@@ -74,8 +94,13 @@ fileclose(struct file *f)
   } else if(ff.type == FD_ENTRY){
     eput(ff.ep);
   } else if(ff.type == FD_DEVICE){
-    // no cleanup needed for device
+    if (!ff.ops)
+      return -1;
+    if (ff.ops->close)
+      return ff.ops->close(&ff);
   }
+
+  return 0;
 }
 
 // Get metadata about file f.
@@ -105,27 +130,28 @@ filestat(struct file *f, uint64 addr)
 int
 fileread(struct file *f, uint64 addr, int n)
 {
-  int r = 0;
+  int ret = 0;
 
   if(f->readable == 0)
     return -1;
 
   if(f->type == FD_PIPE){
-    r = piperead(f->pipe, addr, n);
+    ret = piperead(f->pipe, addr, n);
   } else if(f->type == FD_DEVICE){
-    if(f->major < 0 || f->major >= NDEV || !devsw[f->major].read)
+    if(!f->ops) 
       return -1;
-    r = devsw[f->major].read(1, addr, n);
+    if (f->ops->read)
+      ret = f->ops->read(f, addr, n);
   } else if(f->type == FD_ENTRY){
     elock(f->ep);
-    if((r = eread(f->ep, 1, addr, f->off, n)) > 0)
-      f->off += r;
+    if((ret = eread(f->ep, 1, addr, f->off, n)) > 0)
+      f->off += ret;
     eunlock(f->ep);
   } else {
     panic("fileread");
   }
 
-  return r;
+  return ret;
 }
 
 // Write to file f.
@@ -141,9 +167,10 @@ filewrite(struct file *f, uint64 addr, int n)
   if(f->type == FD_PIPE){
     ret = pipewrite(f->pipe, addr, n);
   } else if(f->type == FD_DEVICE){
-    if(f->major < 0 || f->major >= NDEV || !devsw[f->major].write)
+    if(!f->ops)
       return -1;
-    ret = devsw[f->major].write(1, addr, n);
+    if (f->ops->write)
+      ret = f->ops->write(f, addr, n);
   } else if(f->type == FD_ENTRY){
     int i = 0;
     while(i < n){
@@ -165,6 +192,21 @@ filewrite(struct file *f, uint64 addr, int n)
   }
 
   return ret;
+}
+
+int 
+fileioctl(struct file *f, uint64 cmd, uint64 arg) {
+
+  if(f->type != FD_DEVICE)
+    return -1;
+
+  if (!f->ops)
+    return -1;
+  
+  if (f->ops->ioctl)
+    return f->ops->ioctl(f, cmd, arg);
+  
+  return 0;
 }
 
 int
