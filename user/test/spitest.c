@@ -1,9 +1,9 @@
 #include "types.h"
+#include "fcntl.h"
 #include "spidev.h"
 #include "user.h"
 
 #define CMD_JEDEC_ID 0x9F
-#define W25Q64_MINOR SPI_MINOR(1, 0)
 
 static int
 known_mid(uint8 mid)
@@ -14,26 +14,46 @@ known_mid(uint8 mid)
 int
 main(void)
 {
-  uint32 clk_rate = 1000000;
   uint8 cmd = CMD_JEDEC_ID;
   uint8 rx[3];
   struct spi_ioc_transfer xfer[2];
   int fd;
+  int independent_fd;
   int fails = 0;
+  uint32 speed;
 
   printf("SPI dev test\n");
   printf("============\n");
 
-  fd = dev(0, DEV_SPI, W25Q64_MINOR);
+  fd = open("/dev/w25q64", O_RDWR);
   if (fd < 0) {
     printf("FAIL: dev(DEV_SPI)\n");
     exit(1);
   }
 
-  if (ioctl(fd, SPI_IOCTL_INIT, (uint64)&clk_rate) < 0) {
-    printf("FAIL: SPI_IOCTL_INIT\n");
-    close(fd);
-    exit(1);
+  if (ioctl(fd, SPI_IOC_RD_MAX_SPEED_HZ, (uint64)&speed) < 0 ||
+      speed != 1000000) {
+    printf("FAIL: default SPI speed\n");
+    fails++;
+  }
+  speed = 2000000;
+  if (ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, (uint64)&speed) < 0) {
+    printf("FAIL: set per-open SPI speed\n");
+    fails++;
+  }
+  independent_fd = open("/dev/w25q64", O_RDWR);
+  if (independent_fd < 0 ||
+      ioctl(independent_fd, SPI_IOC_RD_MAX_SPEED_HZ, (uint64)&speed) < 0 ||
+      speed != 1000000) {
+    printf("FAIL: independent SPI open state\n");
+    fails++;
+  }
+  if (independent_fd >= 0)
+    close(independent_fd);
+  speed = 20000000;
+  if (ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, (uint64)&speed) >= 0) {
+    printf("FAIL: SPI speed exceeded board limit\n");
+    fails++;
   }
 
   memset(xfer, 0, sizeof(xfer));

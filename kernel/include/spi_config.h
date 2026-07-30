@@ -2,32 +2,34 @@
 #define _SPI_CONFIG_H
 
 #include "types.h"
-#include "dmac.h"
-#include "memlayout.h"
+#include "dev.h"
 #include "spi.h"
 
-volatile spi_t *spi[4] = {
-    (volatile spi_t *)SPI0_V,
-    (volatile spi_t *)SPI1_V,
-    (volatile spi_t *)SPI_SLAVE_V,
-    (volatile spi_t *)SPI2_V
+struct spidev_data {
+    int minor;
+    struct spi_device *dev;
+    struct sleeplock lock;
+    uint32 speed_hz;
 };
 
-struct spi_dw_data spi_data_0 = {
-    .index = SPI_DEVICE_0,
-    .chan_tx = DMAC_CHANNEL0,
-    .chan_rx = DMAC_CHANNEL1,
+struct spi_device spi_w25q64_dev = {
+    .bus_num = SPI_DEVICE_1,
+    .chip_select = SPI_CHIP_SELECT_0,
+    .max_speed_hz = 10000000,
+    .mode = SPI_WORK_MODE_0,
+    .bits_per_word = 8,
 };
 
-struct spi_dw_data spi_data_1 = {
-    .index = SPI_DEVICE_1,
-    .chan_tx = DMAC_CHANNEL4,
-    .chan_rx = DMAC_CHANNEL5,
+struct spi_device spi_sd_dev = {
+	.bus_num = SPI_DEVICE_0,
+	.chip_select = SPI_CHIP_SELECT_3,
+	.max_speed_hz = 10000000,
+	.mode = SPI_WORK_MODE_0,
+	.bits_per_word = 8,
 };
 
-struct spi_dw_data *spi_dw[SPI_DEVICE_MAX] = {
-    [SPI_DEVICE_0] = &spi_data_0,
-    [SPI_DEVICE_1] = &spi_data_1,
+static struct spi_device *spi_devices[SPI_CHIP_SELECT_MAX] = {
+    [SPI_DEV_W25Q64] = &spi_w25q64_dev,
 };
 
-#endif /* _SPI_ROUTER_H */
+#endif /* _SPI_CONFIG_H */

@@ -30,13 +30,18 @@ main(void)
   uint8 buf[512];
   uint32 nsectors = 0;
   uint32 pos = 0;
+  uint32 shared_pos = 0;
   int fd;
+  int independent_fd;
+  int shared_fd;
+  int child;
+  int status;
   int fails = 0;
 
   printf("SD card dev test\n");
   printf("================\n");
 
-  fd = dev(O_RDWR, DEV_SDCARD, 0);
+  fd = open("/dev/sdcard", O_RDWR);
   if (fd < 0) {
     printf("FAIL: dev(DEV_SDCARD)\n");
     exit(1);
@@ -45,6 +50,48 @@ main(void)
   if (ioctl(fd, SDCARD_IOCTL_TELL, (uint64)&pos) < 0) {
     printf("FAIL: TELL\n");
     fails++;
+  }
+
+  independent_fd = open("/dev/sdcard", O_RDWR);
+  if (independent_fd < 0 ||
+      ioctl(fd, SDCARD_IOCTL_SEEK, 7) < 0 ||
+      ioctl(independent_fd, SDCARD_IOCTL_TELL, (uint64)&shared_pos) < 0 ||
+      shared_pos != 0) {
+    printf("FAIL: independent open sector state\n");
+    fails++;
+  }
+  if (independent_fd >= 0)
+    close(independent_fd);
+
+  shared_fd = dup(fd);
+  if (shared_fd < 0 ||
+      ioctl(shared_fd, SDCARD_IOCTL_SEEK, 9) < 0 ||
+      ioctl(fd, SDCARD_IOCTL_TELL, (uint64)&shared_pos) < 0 ||
+      shared_pos != 9) {
+    printf("FAIL: dup shared sector state\n");
+    fails++;
+  }
+  if (shared_fd >= 0)
+    close(shared_fd);
+
+  if (ioctl(fd, SDCARD_IOCTL_SEEK, 11) < 0) {
+    printf("FAIL: prepare fork shared state\n");
+    fails++;
+  } else {
+    child = fork();
+    if (child < 0) {
+      printf("FAIL: fork\n");
+      fails++;
+    } else if (child == 0) {
+      exit(ioctl(fd, SDCARD_IOCTL_SEEK, 12) < 0);
+    } else {
+      if (wait(&status) < 0 || status != 0 ||
+          ioctl(fd, SDCARD_IOCTL_TELL, (uint64)&shared_pos) < 0 ||
+          shared_pos != 12) {
+        printf("FAIL: fork shared sector state\n");
+        fails++;
+      }
+    }
   }
 
   if (ioctl(fd, SDCARD_IOCTL_NSECTORS, (uint64)&nsectors) < 0 || nsectors == 0) {

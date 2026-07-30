@@ -1,9 +1,9 @@
 #include "types.h"
+#include "fcntl.h"
 #include "spidev.h"
 #include "user.h"
 
 #define CMD_READ_DATA 0x03
-#define W25Q64_MINOR SPI_MINOR(1, 0)
 #define TEST_LEN 256
 
 static uint32
@@ -19,7 +19,6 @@ checksum(uint8 *buf, int n)
 int
 main(void)
 {
-  uint32 clk_rate = 1000000;
   uint8 tx[4];
   uint8 rx[TEST_LEN];
   struct spi_ioc_transfer xfer[2];
@@ -29,15 +28,9 @@ main(void)
   printf("DMA-backed SPI test\n");
   printf("===================\n");
 
-  fd = dev(0, DEV_SPI, W25Q64_MINOR);
+  fd = open("/dev/w25q64", O_RDWR);
   if (fd < 0) {
     printf("FAIL: dev(DEV_SPI)\n");
-    exit(1);
-  }
-
-  if (ioctl(fd, SPI_IOCTL_INIT, (uint64)&clk_rate) < 0) {
-    printf("FAIL: SPI_IOCTL_INIT\n");
-    close(fd);
     exit(1);
   }
 
