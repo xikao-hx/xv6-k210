@@ -1,4 +1,5 @@
 #include "types.h"
+#include "fcntl.h"
 #include "i2cdev.h"
 #include "oled.h"
 #include "user.h"
@@ -24,44 +25,45 @@ i2c_probe_write(uint8 addr)
   return ioctl(fd, I2C_IOCTL_TRANSFER, (uint64)&xfer);
 }
 
+static int
+i2c_probe_oled(void)
+{
+  int ret = -1;
+
+  for(int attempt = 0; attempt < 3; attempt++) {
+    ret = i2c_probe_write(OLED_ADDR);
+    if(ret >= 0)
+      return ret;
+    sleep(1);
+  }
+  return ret;
+}
+
 int
 main(void)
 {
-  struct i2cdev_init cfg;
-  int found = 0;
   int fails = 0;
 
   printf("I2C dev test\n");
   printf("============\n");
 
-  fd = dev(0, DEV_I2C, I2C_MINOR(0));
+  fd = open("/dev/oled", O_RDWR);
   if (fd < 0) {
     printf("FAIL: dev(DEV_I2C)\n");
     exit(1);
   }
 
-  cfg.clk_rate = 100000;
-  cfg.slave_addr = OLED_ADDR;
-  if (ioctl(fd, I2C_IOCTL_INIT, (uint64)&cfg) < 0) {
-    printf("FAIL: I2C_IOCTL_INIT\n");
-    close(fd);
-    exit(1);
-  }
-
-  printf("scan:");
-  for (uint8 addr = 0x08; addr < 0x78; addr++) {
-    if (i2c_probe_write(addr) == 0) {
-      printf(" 0x%x", addr);
-      found++;
-    }
-  }
-  printf("\nfound: %d device(s)\n", found);
-
-  if (i2c_probe_write(OLED_ADDR) < 0) {
+  if (i2c_probe_oled() < 0) {
     printf("FAIL: probe OLED at 0x%x\n", OLED_ADDR);
     fails++;
   } else {
     printf("OLED probe: 0x%x OK\n", OLED_ADDR);
+  }
+  if (i2c_probe_write(0x68) >= 0) {
+    printf("FAIL: OLED fd accepted another I2C address\n");
+    fails++;
+  } else {
+    printf("fixed-address binding: PASS\n");
   }
 
   close(fd);
