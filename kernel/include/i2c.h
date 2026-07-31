@@ -3,9 +3,9 @@
 
 #include "sleeplock.h"
 #include "types.h"
-#include "dmac.h"
 #include "i2c-dw.h"
 #include "stdbool.h"
+#include "dmac.h"
 
 struct i2c_msg {
     uint16 addr;    // slave address (7-bit)

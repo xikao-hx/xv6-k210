@@ -3,9 +3,16 @@
 
 #include "types.h"
 #include "dev.h"
+#include "sleeplock.h"
 #include "i2c.h"
 
 #define I2C_IOCTL_TRANSFER  4  // arg = &i2c_transfer
+
+struct i2cdev_data {
+    int minor;
+    struct i2c_device *dev;
+    struct sleeplock lock;
+};
 
 #define I2C_MAX_MSGS  2
 

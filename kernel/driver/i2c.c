@@ -17,7 +17,7 @@
 #include "log.h"
 #include "sysctl.h"
 #include "stdbool.h"
-#include "i2c.h"
+#include "i2c_board.h"
 
 #define I2C_WAIT_TIMEOUT  1000000UL
 #define DMAC_WAIT_TIMEOUT 10000UL
@@ -29,21 +29,7 @@ volatile i2c_t *const i2c[3] = {
     (volatile i2c_t *)I2C2_V
 };
 
-static struct i2c_controller i2c_ctrl_0 = {
-    .i2c_data = {
-        .speed_hz = 100000,
-        .chan_tx = DMAC_CHANNEL2,
-        .chan_rx = DMAC_CHANNEL3,
-    },
-};
-
-static struct i2c_controller *i2c_ctrls[I2C_DEVICE_MAX] = {
-    [I2C_DEVICE_0] = &i2c_ctrl_0,
-};
-
-static int
-i2c_wait_done(i2c_device_number_t i2c_num, volatile i2c_t *i2c_adapter)
-{
+static int i2c_wait_done(i2c_device_number_t i2c_num, volatile i2c_t *i2c_adapter) {
     int timeout = I2C_WAIT_TIMEOUT;
 
     while(1) {
@@ -79,26 +65,20 @@ i2c_wait_done(i2c_device_number_t i2c_num, volatile i2c_t *i2c_adapter)
 //     sysctl_clock_set_threshold(SYSCTL_THRESHOLD_I2C0 + i2c_num, 3);  // I2C_clk = PLL0 / 8 ≈ 100MHz
 // }
 
+void i2c_write_slave_addr(i2c_device_number_t i2c_num, uint16 slave_address) {
+    volatile i2c_t *i2c_adapter = i2c[i2c_num];
 
-void i2c_init() {
-    char name[10];
-    for (int i = 0; i <= I2C_DEVICE_0; i ++) {
-        snprintf(name, sizeof(name), "i2c_%d", i);
-        initsleeplock(&i2c_ctrls[i]->lock, name);
-    }
+    /* current only support 7 bits address */
+    if(slave_address == 10)
+        i2c_adapter->tar = I2C_TAR_ADDRESS(slave_address) | I2C_TAR_10BITADDR_MASTER;
+    else
+        i2c_adapter->tar = I2C_TAR_ADDRESS(slave_address);
 }
 
-void i2c_dw_init(struct i2c_device *dev)
-{
-    // configASSERT(i2c_num < I2C_MAX_NUM);
-    // configASSERT(address_width == 7 || address_width == 10);
 
-    i2c_device_number_t i2c_num = dev->bus_num;
+void i2c_dw_init(i2c_device_number_t i2c_num) {
     volatile i2c_t *i2c_adapter = i2c[i2c_num];
     struct i2c_controller *i2c_ctrl = i2c_ctrls[i2c_num];
-
-    /* clock init */
-    // i2c_clk_init(i2c_num);
 
     /* calculation divider value */
     // NOTE: Both sysctl_clock_get_freq(I2C0) and sysctl_clock_get_threshold()
@@ -115,13 +95,10 @@ void i2c_dw_init(struct i2c_device *dev)
     i2c_adapter->enable = 0;
     while(i2c_adapter->enable_status & I2C_ENABLE_STATUS_IC_ENABLE)
         ;
-
     i2c_adapter->con = I2C_CON_MASTER_MODE | I2C_CON_SLAVE_DISABLE | I2C_CON_RESTART_EN |
-                       (dev->address_width == 10 ? I2C_CON_10BITADDR_SLAVE : 0) | I2C_CON_SPEED(0);
+                       I2C_CON_SPEED(0);
     i2c_adapter->ss_scl_hcnt = I2C_SS_SCL_HCNT_COUNT(v_period_clk_cnt);  // scl high/low level count
     i2c_adapter->ss_scl_lcnt = I2C_SS_SCL_LCNT_COUNT(v_period_clk_cnt);
-
-    i2c_adapter->tar = I2C_TAR_ADDRESS(dev->slave_address);
     i2c_adapter->intr_mask = 0;   // forbid all I2C interrupt
 
     /* configurate DMA control */
@@ -131,7 +108,6 @@ void i2c_dw_init(struct i2c_device *dev)
     i2c_adapter->enable = I2C_ENABLE_ENABLE;
     while(!(i2c_adapter->enable_status & I2C_ENABLE_STATUS_IC_ENABLE))
         ;
-
     i2c_adapter->sda_hold = I2C_SDA_HOLD_TX(v_period_clk_cnt / 4) |
             I2C_SDA_HOLD_RX(v_period_clk_cnt / 8);
 
@@ -140,11 +116,25 @@ void i2c_dw_init(struct i2c_device *dev)
     i2c_ctrl->i2c_data.index = i2c_num;
 }
 
+void i2c_init(void) {
+
+    for (int i = 0; i < I2C_DEVICE_MAX; i++) {
+        if(i2c_ctrls[i] == 0)
+            continue;
+            
+        i2c_dw_init(i);
+        char name[10];
+        snprintf(name, sizeof(name), "i2c_%d", i);
+        initsleeplock(&i2c_ctrls[i]->lock, name);
+    }
+}
+
 /* polling */
 int i2c_send_data(struct i2c_dw_data *i2c_data, const uint8_t *send_buf, 
                     size_t send_buf_len, bool need_restart, bool is_lastmsg)
 {
     // configASSERT(i2c_num < I2C_MAX_NUM);
+    int ret = 0;
     i2c_device_number_t i2c_num = i2c_data->index;
     volatile i2c_t *i2c_adapter = i2c[i2c_num];
     size_t fifo_len, index;
@@ -174,35 +164,20 @@ int i2c_send_data(struct i2c_dw_data *i2c_data, const uint8_t *send_buf,
             send_buf_len--;
         }
        
-        /* check transfer error */
-        if(i2c_adapter->tx_abrt_source != 0) {
-            (void)i2c_adapter->clr_tx_abrt;
-
-            while((i2c_adapter->status & I2C_STATUS_ACTIVITY) ||
-                    !(i2c_adapter->status & I2C_STATUS_TFE))
-                ;
-
-            (void)i2c_adapter->clr_stop_det;
-            for(volatile int i = 0; i < 200; i++)
-                ;
-            return -1;
+        ret = i2c_wait_done(i2c_num, i2c_adapter);
+        if (ret) {
+            break;
         }
     }
 
-    if (is_lastmsg && i2c_wait_done(i2c_num, i2c_adapter) < 0)
-        return -1;
-    
-    LOG_D("i2c dma write ok: bus=%d len=%d restart=%d last=%d status=%x txflr=%d rxflr=%d\n",
-          i2c_num, send_buf_len, need_restart, is_lastmsg, i2c_adapter->status,
-          i2c_adapter->txflr, i2c_adapter->rxflr);
-
-    return 0;
+    return ret;
 }
 
 int i2c_send_data_dma(struct i2c_dw_data *i2c_data, const uint8_t *send_buf, 
                     size_t send_buf_len, bool need_restart, bool is_lastmsg)
 {
     // configASSERT(i2c_num < I2C_MAX_NUM);
+    int ret = 0;
     i2c_device_number_t i2c_num = i2c_data->index;
     volatile i2c_t *i2c_adapter = i2c[i2c_num];
     int i;
@@ -210,10 +185,6 @@ int i2c_send_data_dma(struct i2c_dw_data *i2c_data, const uint8_t *send_buf,
     uint32_t *buf = kalloc_page();
     if(buf == 0)
         return -1;
-
-    /* clear hardware status */
-    (void)i2c_adapter->clr_tx_abrt;
-    (void)i2c_adapter->clr_stop_det;
 
     /* deal with addr aligen */
     /* repeat start */
@@ -237,37 +208,38 @@ int i2c_send_data_dma(struct i2c_dw_data *i2c_data, const uint8_t *send_buf,
                          DMAC_MSIZE_4, DMAC_TRANS_WIDTH_32, send_buf_len);
 
     /* waiting for dma send done */
-    dmac_wait_done(i2c_data->chan_tx, DMAC_WAIT_TIMEOUT);
-    LOG_D("i2c dma write tx done: status=%x txflr=%d rxflr=%d abrt=%x\n",
-          i2c_adapter->status, i2c_adapter->txflr, i2c_adapter->rxflr,
-          i2c_adapter->tx_abrt_source);
+    if(dmac_wait_done(i2c_data->chan_tx, DMAC_WAIT_TIMEOUT) < 0) {
+        LOG_E("i2c dma write tx timeout: bus=%d\n", i2c_num);
+        kfree_page((void *)buf);
+        ret = -1;
+        goto error;
+    }
 
     kfree_page((void *)buf);
 
-    if (is_lastmsg && i2c_wait_done(i2c_num, i2c_adapter) < 0)
+    if (i2c_wait_done(i2c_num, i2c_adapter) < 0)
         return -1;
 
     if(i2c_adapter->tx_abrt_source != 0) {
         LOG_E("i2c dma write abort done: bus=%d abrt=%x status=%x txflr=%d rxflr=%d\n",
-              i2c_num, i2c_adapter->tx_abrt_source, i2c_adapter->status,
-              i2c_adapter->txflr, i2c_adapter->rxflr);
-
-        /* clear hardware status */
-        (void)i2c_adapter->clr_tx_abrt;
-        (void)i2c_adapter->clr_stop_det;
-        return -1;
+                i2c_num, i2c_adapter->tx_abrt_source, i2c_adapter->status,
+                i2c_adapter->txflr, i2c_adapter->rxflr);
+        ret = -1;
     }
 
-    LOG_D("i2c dma write ok: bus=%d len=%d restart=%d last=%d status=%x txflr=%d rxflr=%d\n",
-          i2c_num, send_buf_len, need_restart, is_lastmsg, i2c_adapter->status,
-          i2c_adapter->txflr, i2c_adapter->rxflr);
-    return 0;
+error:    
+    /* clear hardware status */
+    (void)i2c_adapter->clr_tx_abrt;
+    (void)i2c_adapter->clr_stop_det;
+
+    return ret;
 }
 
 int i2c_recv_data(struct i2c_dw_data *i2c_data, uint8_t *receive_buf, 
                     size_t receive_buf_len, bool need_restart, bool is_lastmsg)
 {
     // configASSERT(i2c_num < I2C_MAX_NUM);
+    int ret = 0;
     uint32_t i2c_num = i2c_data->index;
     size_t fifo_len, index;
     size_t rx_len = receive_buf_len;
@@ -301,13 +273,10 @@ int i2c_recv_data(struct i2c_dw_data *i2c_data, uint8_t *receive_buf,
             receive_buf_len--;
         }
 
-        if(i2c_adapter->tx_abrt_source != 0)
-            return -1;
+        ret = i2c_wait_done(i2c_num, i2c_adapter);
+        if (ret)
+            break;
     }
-
-    LOG_D("i2c read ok: bus=%d len=%d restart=%d last=%d status=%x txflr=%d rxflr=%d\n",
-          i2c_num, receive_buf_len, need_restart, is_lastmsg, i2c_adapter->status,
-          i2c_adapter->txflr, i2c_adapter->rxflr);
 
     return 0;
 }
@@ -316,16 +285,13 @@ int i2c_recv_data_dma(struct i2c_dw_data *i2c_data, uint8_t *receive_buf, size_t
                     bool need_restart, bool is_lastmsg)
 {
     // configASSERT(i2c_num < I2C_MAX_NUM);
+    int ret = 0;
     i2c_device_number_t i2c_num = i2c_data->index;
     volatile i2c_t *i2c_adapter = i2c[i2c_num];
     size_t i;
     uint32_t *write_cmd = kalloc_page();
     if(write_cmd == 0)
         return -1;
-
-    /* clear hardware status */
-    (void)i2c_adapter->clr_tx_abrt;
-    (void)i2c_adapter->clr_stop_det;
 
     /* repeat start */
     write_cmd[0] = I2C_DATA_CMD_CMD;
@@ -352,15 +318,19 @@ int i2c_recv_data_dma(struct i2c_dw_data *i2c_data, uint8_t *receive_buf, size_t
                          DMAC_ADDR_NOCHANGE, DMAC_MSIZE_4, DMAC_TRANS_WIDTH_32, receive_buf_len);
 
     /* waiting for dma rx and tx done */
-    dmac_wait_done(i2c_data->chan_tx, DMAC_WAIT_TIMEOUT);
-    LOG_D("i2c dma read tx done: status=%x txflr=%d rxflr=%d abrt=%x\n",
-          i2c_adapter->status, i2c_adapter->txflr, i2c_adapter->rxflr,
-          i2c_adapter->tx_abrt_source);
+    if(dmac_wait_done(i2c_data->chan_tx, DMAC_WAIT_TIMEOUT) < 0) {
+        LOG_E("i2c dma read tx timeout: bus=%d\n", i2c_num);
+        kfree_page((void *)write_cmd);
+        ret = -1;
+        goto error;
+    }
 
-    dmac_wait_done(i2c_data->chan_rx, DMAC_WAIT_TIMEOUT);
-    LOG_D("i2c dma read rx done: status=%x txflr=%d rxflr=%d abrt=%x\n",
-          i2c_adapter->status, i2c_adapter->txflr, i2c_adapter->rxflr,
-          i2c_adapter->tx_abrt_source);
+    if(dmac_wait_done(i2c_data->chan_rx, DMAC_WAIT_TIMEOUT) < 0) {
+        LOG_E("i2c dma read rx timeout: bus=%d\n", i2c_num);
+        kfree_page((void *)write_cmd);
+        ret = -1;
+        goto error;
+    }
 
     if (is_lastmsg && i2c_wait_done(i2c_num, i2c_adapter) < 0) {
         kfree_page((void *)write_cmd);
@@ -379,17 +349,15 @@ int i2c_recv_data_dma(struct i2c_dw_data *i2c_data, uint8_t *receive_buf, size_t
         LOG_E("i2c dma read abort: bus=%d abrt=%x status=%x txflr=%d rxflr=%d\n",
               i2c_num, i2c_adapter->tx_abrt_source, i2c_adapter->status,
               i2c_adapter->txflr, i2c_adapter->rxflr);
-
-        /* clear hardware status */
-        (void)i2c_adapter->clr_tx_abrt;
-        (void)i2c_adapter->clr_stop_det;
-        return -1;
+        ret = -1;
     }
 
-    LOG_D("i2c dma read ok: bus=%d len=%d restart=%d last=%d status=%x txflr=%d rxflr=%d\n",
-          i2c_num, receive_buf_len, need_restart, is_lastmsg, i2c_adapter->status,
-          i2c_adapter->txflr, i2c_adapter->rxflr);
-    return 0;
+error:
+    /* clear hardware status */
+    (void)i2c_adapter->clr_tx_abrt;
+    (void)i2c_adapter->clr_stop_det;
+
+    return ret;
 }
 
 int i2c_transfer(struct i2c_device *dev, struct i2c_msg *msgs, int num) {
@@ -398,20 +366,33 @@ int i2c_transfer(struct i2c_device *dev, struct i2c_msg *msgs, int num) {
     int i = 0;
     bool is_lastmsg = false;
     bool need_restart = false;
-    struct i2c_controller *i2c_ctrl = i2c_ctrls[dev->bus_num];
+
+    /* Entry validation */
+    if(dev == 0 || msgs == 0 || num <= 0)
+        return -1;
+
+    i2c_device_number_t bus_num = dev->bus_num;
+    if(bus_num >= I2C_DEVICE_MAX)
+        return -1;
+    /* Only 7-bit addresses are currently supported */
+    if(dev->address_width != 7)
+        return -1;
+
+    struct i2c_controller *i2c_ctrl = i2c_ctrls[bus_num];
+    if(i2c_ctrl == 0)
+        return -1;
+
     struct i2c_dw_data *i2c_data = &i2c_ctrl->i2c_data;
 
     acquiresleep(&i2c_ctrl->lock);
-    i2c_dw_init(dev);
     for (i = 0; i < num; i ++) {
+
+        /* slave addr */
+        i2c_write_slave_addr(bus_num, msgs[i].addr);
         /* last byte: stop */
-        if (i == num - 1)
-            is_lastmsg = true;
-        
+        if (i == num - 1) is_lastmsg = true;
         /* repeat restart */
-        if (i > 0) {
-            need_restart = true;
-        }
+        if (i > 0) need_restart = true;
 
         /* read/write */
         if (msgs[i].flags & I2C_M_RD) {

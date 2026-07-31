@@ -11,10 +11,13 @@
 #define DEV_SDCARD   5
 
 // Stable logical device numbers. Hardware topology stays in board code.
-#define SPI_DEV_W25Q64  0
+#define SPI_DEV_W25Q64   0
+#define SPI_DEV_SDCARD   1
+#define SPI_DEV_NR       2
 
 #define I2C_DEV_OLED     0
 #define I2C_DEV_MPU6050  1
+#define I2C_DEV_NR       2
 
 struct file_operations;
 struct device {

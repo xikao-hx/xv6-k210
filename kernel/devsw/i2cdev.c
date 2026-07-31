@@ -3,11 +3,12 @@
 #include "printf.h"
 #include "proc.h"
 #include "vm.h"
-#include "i2c_config.h"
+#include "i2c_board.h"
 #include "i2c.h"
 #include "i2cdev.h"
 #include "dev.h"
 
+/* Validate message length against DMA page capacity */
 #define MAX_MSG_LEN (PGSIZE / sizeof(uint32))
 
 static int
@@ -15,14 +16,21 @@ i2cdev_open(struct file *f)
 {
     struct i2cdev_data *i2cdev;
 
+    if(f->minor < 0 || f->minor >= I2C_DEV_NR)
+        return -1;
+
     i2cdev = kmalloc(sizeof(struct i2cdev_data));
     if(i2cdev == 0)
-    return -1;
+        return -1;
 
     initsleeplock(&i2cdev->lock, "i2c file");
 
     i2cdev->minor = f->minor;
-    i2cdev->dev = i2c_devices[f->minor];
+    i2cdev->dev = i2c_device_get(f->minor);
+    if(i2cdev->dev == 0) {
+        kfree(i2cdev);
+        return -1;
+    }
     f->private_data = (void *)i2cdev;
     return 0;
 }
