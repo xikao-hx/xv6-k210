@@ -1,32 +1,17 @@
 #include "gpiohs.h"
 #include "buf.h"
 #include "printf.h"
-#include "spi.h"
+#include "spi_board.h"
 
-void SD_CS_HIGH(void) {
-    gpiohs_set_pin(7, GPIO_PV_HIGH);
-}
-
-void SD_CS_LOW(void) {
-    gpiohs_set_pin(7, GPIO_PV_LOW);
-}
-
-void SD_HIGH_SPEED_ENABLE(void) {
-    // spi_set_clk_rate(SPI_DEVICE_0, 10000000);
-}
-
-static void sd_lowlevel_init(uint8 spi_index) {
-    gpiohs_set_drive_mode(7, GPIO_DM_OUTPUT);
-    // spi_set_clk_rate(SPI_DEVICE_0, 200000);     /*set clk rate*/
-}
-
-extern struct spi_device spi_sd_dev;
+static struct spi_device *spi_sd_dev = 0;
 static void sd_write_data(uint8 const *data_buff, uint32 length) {
-	spi_write(&spi_sd_dev, data_buff, length);
+	spi_sd_dev = spi_device_get(SPI_DEV_SDCARD);
+	spi_write(spi_sd_dev, data_buff, length);
 }
 
 static void sd_read_data(uint8 *data_buff, uint32 length) {
-	spi_read(&spi_sd_dev, data_buff, length);
+	spi_sd_dev = spi_device_get(SPI_DEV_SDCARD);
+	spi_read(spi_sd_dev, data_buff, length);
 }
 
 /*
@@ -44,14 +29,12 @@ static void sd_send_cmd(uint8 cmd, uint32 arg, uint8 crc) {
 	frame[3] = (uint8)(arg >> 8);
 	frame[4] = (uint8)(arg);
 	frame[5] = (crc);
-	SD_CS_LOW();
+
 	sd_write_data(frame, 6);
 }
 
 static void sd_end_cmd(void) {
 	uint8 frame[1] = {0xFF};
-	/*!< SD chip select high */
-	SD_CS_HIGH();
 	/*!< Send the Cmd bytes (10 bytes = 80 SPI clocks of CS high, ~400us at 200kHz) */
 	sd_write_data(frame, 1);
 }
@@ -274,10 +257,6 @@ static int check_block_size(void) {
 static int sd_init(void) {
 	uint8 frame[10];
 
-	sd_lowlevel_init(0);
-	//SD_CS_HIGH();
-	SD_CS_LOW();
-
 	// send dummy bytes for 80 clock cycles 
 	for (int i = 0; i < 10; i ++) 
 		frame[i] = 0xff;
@@ -306,7 +285,6 @@ static uint32 card_nsectors = 0;
 
 static void sd_read_csd(void) {
 	uint8 start;
-	SD_CS_LOW();
 
 	sd_send_cmd(9, 0, 0);           // CMD9 — SEND_CSD
 	(void)sd_get_response_R1();      // ignore R1 (we assume cmd succeeded)
@@ -318,7 +296,6 @@ static void sd_read_csd(void) {
 	}
 	if (0 == timeout) {
 		printf("sdcard: timeout reading CSD\n");
-		SD_CS_HIGH();
 		return;
 	}
 
@@ -326,7 +303,6 @@ static void sd_read_csd(void) {
 
 	uint8 dummy[2];
 	sd_read_data(dummy, 2);         // CRC-16 (discard)
-	SD_CS_HIGH();
 
 	csd_valid = 1;
 
