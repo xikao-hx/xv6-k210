@@ -7,8 +7,11 @@
 #include "string.h"
 #include "spi.h"
 #include "spidev.h"
-#include "spi_config.h"
-#include "dev.h"
+#include "spi_board.h"
+#include "gpiohs.h"
+
+/* Bounce buffer size: one page per direction, fixed for the lifetime of an open. */
+#define SPIDEV_BUFSIZ PGSIZE
 
 static int
 spidev_open(struct file *f)
@@ -18,12 +21,28 @@ spidev_open(struct file *f)
   spidev = kmalloc(sizeof(struct spidev_data));
   if(spidev == 0)
     return -1;
-  
+
   initsleeplock(&spidev->lock, "spi file");
 
   spidev->minor = f->minor;
-  spidev->dev = spi_devices[f->minor];
+  spidev->dev = spi_device_get(f->minor);
   spidev->speed_hz = 1000000;
+
+  /* Pre-allocate fixed bounce buffers for this open instance.  Every
+   * SPI_IOC_MESSAGE transfer bounces tx/rx data through these pages,
+   * so no allocation is needed in the ioctl path.
+   */
+  spidev->tx_buffer = kalloc_page();
+  spidev->rx_buffer = kalloc_page();
+  if(spidev->tx_buffer == 0 || spidev->rx_buffer == 0) {
+    if(spidev->tx_buffer)
+      kfree_page(spidev->tx_buffer);
+    if(spidev->rx_buffer)
+      kfree_page(spidev->rx_buffer);
+    kfree(spidev);
+    return -1;
+  }
+
   f->private_data = spidev;
 
   return 0;
@@ -32,8 +51,14 @@ spidev_open(struct file *f)
 static int
 spidev_close(struct file *f)
 {
-   if(f->private_data) {
-    kfree(f->private_data);
+  struct spidev_data *spidev = f->private_data;
+
+  if(spidev) {
+    if(spidev->tx_buffer)
+      kfree_page(spidev->tx_buffer);
+    if(spidev->rx_buffer)
+      kfree_page(spidev->rx_buffer);
+    kfree(spidev);
     f->private_data = 0;
   }
 
@@ -93,73 +118,89 @@ spidev_get_ioc_message(uint64 cmd, struct spi_ioc_transfer *u_ioc, uint32 *n_ioc
   return ioc;
 }
 
-static int 
+static int
 spidev_message(struct spidev_data *spidev,
                struct spi_ioc_transfer *u_xfers, uint32 n_xfers)
 {
-
   struct proc *p = myproc();
-  struct spi_transfer k_xfer;
+  struct spi_transfer *k_xfers;
+  struct spi_transfer *k_tmp;
   struct spi_ioc_transfer *u_tmp;
-  uint8 *tx_buffer;
-  uint8 *rx_buffer;
-  uint32 n, total, off;
+  uint8 *tx_buf, *rx_buf;
+  uint32 n, total, rx_total;
   int status = -1;
 
-  tx_buffer = kalloc_page();
-  rx_buffer = kalloc_page();
-  if(tx_buffer == 0 || rx_buffer == 0)
-    goto done;
-  total = 0;
-  off = 0;
+  if(spidev->tx_buffer == 0 || spidev->rx_buffer == 0)
+    return -1;
 
-  for (n = n_xfers, u_tmp = u_xfers; n; n--, u_tmp++) {
-    total += u_tmp->len;
-    if (total > PGSIZE) {
+  /* One kernel transfer per message segment, bounced through the fixed
+   * per-open buffers.  The driver keeps CS asserted across the whole
+   * message, so this preserves the single-CS-assertion semantics.
+   */
+  k_xfers = kalloc_page();
+  if(k_xfers == 0)
+    return -1;
+  memset(k_xfers, 0, PGSIZE);
+
+  tx_buf = spidev->tx_buffer;
+  rx_buf = spidev->rx_buffer;
+  total = 0;
+  rx_total = 0;
+
+  /* 0xFF-fill the TX bounce buffer: rx-only segments send this dummy. */
+  memset(spidev->tx_buffer, 0xff, SPIDEV_BUFSIZ);
+
+  for (n = n_xfers, k_tmp = k_xfers, u_tmp = u_xfers; n; n--, k_tmp++, u_tmp++) {
+    k_tmp->len = u_tmp->len;
+    k_tmp->tx_buf = tx_buf;
+
+    total += k_tmp->len;
+    if (total > SPIDEV_BUFSIZ) {
+      status = -1;
       goto done;
     }
+    tx_buf += k_tmp->len;
 
     if (u_tmp->tx_buf) {
-      if (copyin(p->pagetable, (char *)&tx_buffer[off], u_tmp->tx_buf, u_tmp->len) < 0) {
+      if (copyin(p->pagetable, (char *)k_tmp->tx_buf, u_tmp->tx_buf, u_tmp->len) < 0) {
         status = -1;
         goto done;
       }
-    } else {
-      memset(&tx_buffer[off], 0xff, u_tmp->len);
     }
 
-    off += u_tmp->len;
+    if (u_tmp->rx_buf) {
+      /* this segment needs room in the RX bounce buffer */
+      rx_total += k_tmp->len;
+      if (rx_total > SPIDEV_BUFSIZ) {
+        status = -1;
+        goto done;
+      }
+      k_tmp->rx_buf = rx_buf;
+      rx_buf += k_tmp->len;
+    }
   }
 
   if(total == 0)
     goto done;
 
-  k_xfer.tx_buf = tx_buffer;
-  k_xfer.rx_buf = rx_buffer;
-  k_xfer.len = total;
-
-  /* One kernel transfer keeps CS asserted across all message segments. */
-  if(spi_transfer(spidev->dev, &k_xfer, 1) < 0) {
+  if(spi_transfer(spidev->dev, k_xfers, n_xfers) < 0)
     goto done;
-  }
 
-  off = 0;
+  /* copy any rx data out of the bounce buffer */
+  rx_buf = spidev->rx_buffer;
   for (n = n_xfers, u_tmp = u_xfers; n; n--, u_tmp++) {
     if (u_tmp->rx_buf) {
-      if (copyout(p->pagetable, u_tmp->rx_buf, (char *)&rx_buffer[off], u_tmp->len) < 0) {
+      if (copyout(p->pagetable, u_tmp->rx_buf, (char *)rx_buf, u_tmp->len) < 0) {
         status = -1;
         goto done;
       }
+      rx_buf += u_tmp->len;
     }
-    off += u_tmp->len;
   }
   status = total;
 
 done:
-  if(tx_buffer)
-    kfree_page(tx_buffer);
-  if(rx_buffer)
-    kfree_page(rx_buffer);
+  kfree_page(k_xfers);
   return status;
 }
 
@@ -237,6 +278,11 @@ static const struct file_operations spidev_ops = {
 void
 spidev_init(void)
 {
+  // gpiohs_set_drive_mode(SD_SELECT, GPIO_DM_OUTPUT);
+    gpiohs_set_drive_mode(W25Q64_SELECT, GPIO_DM_OUTPUT);
+    // gpiohs_set_pin(SD_SELECT, GPIO_PV_HIGH);
+    gpiohs_set_pin(W25Q64_SELECT, GPIO_PV_HIGH);
+    
   spi_init();
   if(device_register(DEV_SPI, "spi", &spidev_ops) < 0)
     panic("spi device register");

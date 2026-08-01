@@ -3,6 +3,7 @@
 
 #include "types.h"
 #include "dev.h"
+#include "sleeplock.h"
 
 // ioctl commands
 #define SPI_IOC_RD_MODE          1
@@ -34,6 +35,15 @@
 
 #define SPI_MSGSIZE(n)      ((n) * sizeof(struct spi_ioc_transfer))
 #define SPI_IOC_MESSAGE(n)  _IOC(_IOC_WRITE, SPI_IOC_MAGIC, 0, SPI_MSGSIZE(n))
+
+struct spidev_data {
+    int minor;
+    struct spi_device *dev;
+    struct sleeplock lock;
+    uint32 speed_hz;
+    uint8 *tx_buffer;   /* pre-allocated bounce buffer for TX (PGSIZE) */
+    uint8 *rx_buffer;   /* pre-allocated bounce buffer for RX (PGSIZE) */
+};
 
 struct spi_ioc_transfer {
     uint64 tx_buf;   // user-space address (NULL = receive only)

@@ -79,6 +79,7 @@ OBJS += \
   $K/driver/dmac.o \
   $K/driver/sysctl.o \
   $K/board/i2c_board.o \
+  $K/board/spi_board.o
 else
 OBJS += \
   $K/driver/virtio_disk.o

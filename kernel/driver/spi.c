@@ -8,32 +8,14 @@
 #include "kalloc.h"
 #include "dmac.h"
 #include "memlayout.h"
-#include "spi.h"
+#include "spi_board.h"
+#include "gpiohs.h"
 
 volatile spi_t *spi[4] = {
     (volatile spi_t *)SPI0_V,
     (volatile spi_t *)SPI1_V,
     (volatile spi_t *)SPI_SLAVE_V,
     (volatile spi_t *)SPI2_V
-};
-
-static struct spi_controller spi_ctrl_0 = {
-    .spi_data = {
-        .chan_tx = DMAC_CHANNEL0,
-        .chan_rx = DMAC_CHANNEL1,
-    },
-};
-
-static struct spi_controller spi_ctrl_1 = {
-    .spi_data = {
-        .chan_tx = DMAC_CHANNEL4,
-        .chan_rx = DMAC_CHANNEL5,
-    },
-};
-
-static struct spi_controller *spi_ctrls[SPI_DEVICE_MAX] = {
-    [SPI_DEVICE_0] = &spi_ctrl_0,
-    [SPI_DEVICE_1] = &spi_ctrl_1,
 };
 
 #define DMAC_WAIT_TIMEOUT 10000UL
@@ -104,30 +86,14 @@ static void spi_set_tmod(uint8 spi_num, uint32 tmod)
     set_bit(&spi_handle->ctrlr0, 3 << tmod_offset, tmod << tmod_offset);
 }
 
-void spi_init(void) {
-    char name[10];
+static void spi_setup(struct spi_device *dev, spi_frame_format_t frame_format, uint32 endian) {
 
-    for (int i = 0; i <= SPI_DEVICE_1; i ++) {
-        snprintf(name, sizeof(name), "spi_%d", i);
-        initsleeplock(&spi_ctrls[i]->lock, name);
-    }
-}
-
-static void spi_dw_init(struct spi_device *dev, spi_frame_format_t frame_format, uint32 endian)
-{
-    
-    // configASSERT(data_bit_length >= 4 && data_bit_length <= 32);
-    // configASSERT(spi_num < SPI_DEVICE_MAX && spi_num != 2);
     spi_device_num_t spi_num = dev->bus_num;
     spi_work_mode_t work_mode = (spi_work_mode_t)dev->mode;
     uint64 data_bit_length = dev->bits_per_word;
-    
-    spi_clk_init(spi_num);
+    uint8 dfs_offset = 0, frf_offset = 0, work_mode_offset = 0;
+    uint32 dfs_mask = 0, frf_mask = 0, work_mode_mask = 0;
 
-    // uint8 dfs_offset, frf_offset, work_mode_offset;
-    uint8 dfs_offset = 0;
-    uint8 frf_offset = 0;
-    uint8 work_mode_offset = 0;
     switch(spi_num)
     {
         case 0:
@@ -135,6 +101,10 @@ static void spi_dw_init(struct spi_device *dev, spi_frame_format_t frame_format,
             dfs_offset = 16;
             frf_offset = 21;
             work_mode_offset = 6;
+
+            dfs_mask = 0x1F << 16;
+            frf_mask = 0x3 << 21;
+            work_mode_mask = 0x3 << 6;
             break;
         case 2:
             // configASSERT(!"Spi Bus 2 Not Support!");
@@ -144,6 +114,10 @@ static void spi_dw_init(struct spi_device *dev, spi_frame_format_t frame_format,
             dfs_offset = 0;
             frf_offset = 22;
             work_mode_offset = 8;
+
+            dfs_mask = 0x1F << 0;
+            frf_mask = 0x3 << 22;
+            work_mode_mask = 0x3 << 8;
             break;
     }
 
@@ -161,6 +135,21 @@ static void spi_dw_init(struct spi_device *dev, spi_frame_format_t frame_format,
         default:
             break;
     }
+
+    volatile spi_t *const spi_adapter = spi[spi_num];
+    set_bit(&spi_adapter->ctrlr0, dfs_mask, ((data_bit_length - 1) << dfs_offset));
+    set_bit(&spi_adapter->ctrlr0, frf_mask, (frame_format << frf_offset));
+    set_bit(&spi_adapter->ctrlr0, work_mode_mask, (work_mode << work_mode_offset));
+    spi_adapter->endian = endian;
+}
+
+static void spi_dw_init(spi_device_num_t spi_num)
+{
+    // configASSERT(data_bit_length >= 4 && data_bit_length <= 32);
+    // configASSERT(spi_num < SPI_DEVICE_MAX && spi_num != 2);
+
+    spi_clk_init(spi_num);
+    
     volatile spi_t *const spi_adapter = spi[spi_num];
     if(spi_adapter->baudr == 0)
         spi_adapter->baudr = 0x14;
@@ -170,16 +159,27 @@ static void spi_dw_init(struct spi_device *dev, spi_frame_format_t frame_format,
     spi_adapter->dmardlr = 0x00;
     spi_adapter->ser = 0x00;
     spi_adapter->ssienr = 0x00;
-    spi_adapter->ctrlr0 = (work_mode << work_mode_offset) | (frame_format << frf_offset) | ((data_bit_length - 1) << dfs_offset);
     spi_adapter->spi_ctrlr0 = 0;
-    spi_adapter->endian = endian;
-    
+
     spi_set_tmod(spi_num, SPI_TMOD_TRANS_RECV);
 
     struct spi_controller *spi_ctrl = spi_ctrls[spi_num];
     spi_ctrl->bus_num = spi_num;
     spi_ctrl->spi_data.dma_enable = true;
     spi_ctrl->spi_data.index = spi_num;
+}
+
+void spi_init(void) {
+
+    for (int i = 0; i < SPI_DEVICE_MAX; i ++) {
+        char name[10];
+        if (spi_ctrls[i] == 0)
+            continue;
+        
+        spi_dw_init(i);
+        snprintf(name, sizeof(name), "spi_%d", i);
+        initsleeplock(&spi_ctrls[i]->lock, name);
+    }
 }
 
 int
@@ -238,7 +238,8 @@ static spi_transfer_width_t spi_get_frame_size(spi_device_num_t spi_num, volatil
 }
 
 static int spi_dw_poll_transfer(struct spi_dw_data *spi_data, struct spi_transfer *transfer) {
-    
+
+    int ret = 0;
     spi_device_num_t spi_num = spi_data->index;
     volatile spi_t *spi_handle = spi[spi_num];
     spi_transfer_width_t frame_width = spi_get_frame_size(spi_num, spi_handle);
@@ -258,11 +259,6 @@ static int spi_dw_poll_transfer(struct spi_dw_data *spi_data, struct spi_transfe
         return -1;
 
     tx_len = rx_len = spi_data->count / frame_width;
-
-    spi_handle->ctrlr1 = (uint32)(tx_len - 1);
-    spi_handle->ssienr = 0x01;
-    spi_handle->ser = 1U << spi_data->chip_select;
-
     /*
      * SPI is full-duplex.  Drain RX while feeding TX so reads longer than the
      * 32-frame FIFO cannot overflow and leave the receive loop stuck forever.
@@ -314,16 +310,12 @@ static int spi_dw_poll_transfer(struct spi_dw_data *spi_data, struct spi_transfe
         if(progress) {
             idle = 0;
         } else if(++idle > SPI_POLL_WAIT_TIMEOUT) {
-            spi_handle->ser = 0x00;
-            spi_handle->ssienr = 0x00;
-            return -1;
+            ret = -1;
+            break;
         }
     }
 
-    spi_handle->ser = 0x00;
-    spi_handle->ssienr = 0x00;
-
-    return 0;
+    return ret;
 }
 
 static int spi_dw_dma_xfer(struct spi_dw_data *spi_data, const void *tx_buf, 
@@ -331,9 +323,7 @@ static int spi_dw_dma_xfer(struct spi_dw_data *spi_data, const void *tx_buf,
     spi_device_num_t spi_num = spi_data->index;
     volatile spi_t *spi_handle = spi[spi_num];
 
-    spi_handle->ctrlr1 = (uint32)(len - 1);   // set receive data len
-    spi_handle->dmacr = 0x3;                     // enable send and receive dma
-    spi_handle->ssienr = 0x01;                   // enable spi controller
+    spi_handle->dmacr = 0x3;     // enable send and receive dma
 
     /* configuration dma request source */
     sysctl_dma_select((sysctl_dma_channel_t)spi_data->chan_tx, SYSCTL_DMA_SELECT_SSI0_TX_REQ + spi_num * 2);
@@ -344,18 +334,13 @@ static int spi_dw_dma_xfer(struct spi_dw_data *spi_data, const void *tx_buf,
                          DMAC_MSIZE_1, DMAC_TRANS_WIDTH_32, len);
     dmac_set_single_mode(spi_data->chan_tx, tx_buf, (void *)(&spi_handle->dr[0]), DMAC_ADDR_INCREMENT, DMAC_ADDR_NOCHANGE,
                              DMAC_MSIZE_4, DMAC_TRANS_WIDTH_32, len);
-
-    /* start transfer: set select chip low */
-    spi_handle->ser = 1U << spi_data->chip_select;
     
     /* wait dma trasfer finish */
     dmac_wait_done(spi_data->chan_tx, DMAC_WAIT_TIMEOUT);
     dmac_wait_done(spi_data->chan_rx, DMAC_WAIT_TIMEOUT);
-
-    /* transfer clear work */
-    spi_handle->ser = 0x00;      // cancel select chip
-    spi_handle->ssienr = 0x00;   // forbid spi controller
-
+    
+    spi_handle->dmacr = 0x00;    // clear dma enable
+    
     return 0;
 }
 
@@ -454,15 +439,34 @@ static bool spi_can_dma(struct spi_dw_data *spi_data, struct spi_transfer *trans
     return true;
 }
 
-int __spi_transfer(struct spi_device *dev, struct spi_transfer *xfers, uint64 num) {
+static void spi_set_cs(struct spi_device *dev, bool enable) {
+
+    volatile spi_t *spi_handle = spi[dev->bus_num];
+    if (!dev->cs_gpio) {
+        /* spi cs */
+        if (enable) spi_handle->ser = 1U << dev->chip_select;
+        else spi_handle->ser =0;
+    } else {
+        /* spi cs-gpio */
+        spi_handle->ser = 1U << dev->chip_select;    // generate clk
+        if (enable) gpiohs_set_pin(dev->cs_gpio, GPIO_PV_LOW);
+        else gpiohs_set_pin(dev->cs_gpio, GPIO_PV_HIGH);
+    }
+}
+
+static int __spi_transfer(struct spi_device *dev, struct spi_transfer *xfers, uint64 num) {
 
     int ret = 0;
     struct spi_controller *spi_ctrl = spi_ctrls[dev->bus_num];
     struct spi_dw_data *spi_data = &spi_ctrl->spi_data;
+    volatile spi_t *spi_handle = spi[dev->bus_num];
 
-    spi_data->chip_select = dev->chip_select;
+    spi_set_cs(dev, true);
+    
+    spi_handle->ssienr = 0x00;
+    spi_setup(dev, SPI_FF_STANDARD, 0);
+    spi_handle->ssienr = 0x01;
 
-    spi_dw_init(dev, SPI_FF_STANDARD, 0);
     for (int i = 0; i < num; i ++) {
         if (spi_can_dma(spi_data, &xfers[i])) {
             ret = spi_dw_dma_transfer(spi_data, &xfers[i]);
@@ -472,6 +476,8 @@ int __spi_transfer(struct spi_device *dev, struct spi_transfer *xfers, uint64 nu
         if(ret < 0)
             break;
     }
+    spi_set_cs(dev, false);
+    
     return ret;
 }
 

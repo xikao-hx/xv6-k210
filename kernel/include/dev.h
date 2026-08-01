@@ -15,6 +15,9 @@
 #define SPI_DEV_SDCARD   1
 #define SPI_DEV_NR       2
 
+// spi cs-gpio
+#define W25Q64_SELECT    8
+
 #define I2C_DEV_OLED     0
 #define I2C_DEV_MPU6050  1
 #define I2C_DEV_NR       2

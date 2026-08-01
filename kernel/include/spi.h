@@ -2,10 +2,11 @@
 #define _SPI_H
 
 #include "types.h"
-#include "dmac.h"
 #include "stdbool.h"
 #include "spi-dw.h"
 #include "sleeplock.h"
+#include "spi_board.h"
+#include "dmac.h"
 
 struct spi_transfer {
     const uint8 *tx_buf;
@@ -21,7 +22,7 @@ struct spi_dw_data {
     unsigned int bytes_per_word;
     dmac_channel_number_t chan_tx;
     dmac_channel_number_t chan_rx;
-    spi_chip_select_t chip_select;
+    uint8 chip_select;
     bool dma_enable;
 };
 
@@ -34,6 +35,7 @@ struct spi_controller {
 struct spi_device {
   spi_device_num_t bus_num;
   spi_chip_select_t chip_select;
+  uint8 cs_gpio;
   uint32 max_speed_hz;
   uint8 mode;
   uint8 bits_per_word;
