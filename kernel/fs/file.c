@@ -154,6 +154,22 @@ fileread(struct file *f, uint64 addr, int n)
   return ret;
 }
 
+// Read from a regular file at an explicit offset without changing f->off.
+// addr is a kernel virtual address.
+int
+fileread_at(struct file *f, uint64 addr, uint64 offset, int n)
+{
+  int r;
+
+  if(f == 0 || f->type != FD_ENTRY || n < 0 || offset > 0xffffffffUL)
+    return -1;
+  elock(f->ep);
+  r = eread(f->ep, 0, addr, (uint)offset, n);
+  eunlock(f->ep);
+  return r;
+}
+
+
 // Write to file f.
 // addr is a user virtual address.
 int
@@ -192,6 +208,29 @@ filewrite(struct file *f, uint64 addr, int n)
   }
 
   return ret;
+}
+
+// Write to an existing regular-file range without changing f->off.
+// mmap writeback never extends a file beyond its current size.
+// addr is a kernel virtual address.
+int
+filewrite_at(struct file *f, uint64 addr, uint64 offset, int n)
+{
+  int r;
+
+  if(f == 0 || f->type != FD_ENTRY || !f->writable ||
+     n < 0 || offset > 0xffffffffUL)
+    return -1;
+  elock(f->ep);
+  if(offset >= f->ep->file_size){
+    eunlock(f->ep);
+    return 0;
+  }
+  if(offset + n > f->ep->file_size)
+    n = f->ep->file_size - offset;
+  r = ewrite(f->ep, 0, addr, (uint)offset, n);
+  eunlock(f->ep);
+  return r == n ? r : -1;
 }
 
 int 

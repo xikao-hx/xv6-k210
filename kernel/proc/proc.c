@@ -181,6 +181,7 @@ found:
 static void
 freeproc(struct proc *p)
 {
+  vma_destroy_all(p);
   if(p->trapframe)
     kfree_page((void*)p->trapframe);
   p->trapframe = 0;
@@ -469,11 +470,13 @@ userinit(void)
 int
 growproc(int n)
 {
-  uint sz;
+  uint64 sz;
   struct proc *p = myproc();
 
   sz = p->sz;
   if(n > 0){
+    if(sz + (uint64)n < sz || sz + (uint64)n > vma_heap_limit(p))
+      return -1;
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
@@ -507,6 +510,13 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+  if(vma_fork(p, np) < 0){
+    upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz);
+    sfence_vma();
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
 
   np->parent = p;
 
@@ -521,14 +531,6 @@ fork(void)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = edup(p->cwd);
-
-  for (int i = 0; i < NVMA; i ++) {
-    struct vma_area *vma = &p->vmas[i];
-    if (vma->used == 1) {
-      memmove(&np->vmas[i], vma, sizeof(struct vma_area));
-      filedup(vma->vfile);
-    }
-  }
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
@@ -596,18 +598,7 @@ exit(int status)
     }
   }
 
-  // 取消映射
-  for (int i = 0; i < NVMA; i ++) {
-    struct vma_area *vma = &p->vmas[i];
-    if (vma->used) {
-      if ((vma->prot & PROT_WRITE) && (vma->flags == MAP_SHARED)) {
-        filewrite(vma->vfile, vma->addr, vma->length);
-      }
-      fileclose(vma->vfile);
-      uvmunmap(p->pagetable, PGROUNDDOWN(vma->addr), vma->length / PGSIZE, 1);
-      vma->used = 0;
-    }
-  }
+  vma_destroy_all(p);
 
   eput(p->cwd);
   p->cwd = 0;

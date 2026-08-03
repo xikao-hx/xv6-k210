@@ -9,6 +9,7 @@
 #include "trap.h"
 #include "uarths.h"
 #include "vm.h"
+#include "mmap.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -76,35 +77,39 @@ usertrap(void)
 
     syscall();
   } else if((which_dev = devintr()) != 0){
-    // ok
-	} else if (r_scause() == 13 || r_scause() == 15
-	#ifndef QEMU
-	             || r_scause() == 5 || r_scause() == 7
-	#endif
-	) {
-    struct proc *p = myproc();
+    // ok 
+  } else if(r_scause() == 1 || r_scause() == 5 || r_scause() == 7 ||
+            r_scause() == 12 || r_scause() == 13 || r_scause() == 15) {
+
     uint64 va = r_stval();
     pagetable_t pagetable = p->pagetable;
+    uint64 cause = r_scause();
+    int access;
 
-    if (find_vma(p, va) == 0) {
-      if (mmap_handler(va, r_scause()) != 0) {
+    if(cause == 1 || cause == 12)
+      access = VM_FAULT_EXEC;
+    else if(cause == 5 || cause == 13)
+      access = VM_FAULT_READ;
+    else
+      access = VM_FAULT_WRITE;
+    
+    if (vm_fault(p, va, access) == 0) {
+      // ok
+    } else if (va < p->sz) {
+      if (access == VM_FAULT_WRITE && uvmcowpage(pagetable, va) == 0) {
+        if (uvmcowmalloc(pagetable, PGROUNDDOWN(va)) == 0) {
+          p->killed = 1;
+        }
+      } else if (PGROUNDUP(p->trapframe->sp) - 1 < va) {
+        if (uvmlazymalloc(pagetable, PGROUNDDOWN(va)) != 0) {
+          p->killed = 1;
+        }
+      } else {
         p->killed = 1;
       }
     } else {
-      if (va < p->sz) {
-        if (uvmcowpage(pagetable, va) == 0) {
-          if (uvmcowmalloc(pagetable, PGROUNDDOWN(va)) == 0) {
-            p->killed = 1;
-          }
-        } else if (PGROUNDUP(p->trapframe->sp) - 1 < va) {
-          if (uvmlazymalloc(pagetable, PGROUNDDOWN(va)) != 0) {
-            p->killed = 1;
-          }
-        }
-      } else {
-        printf("usertrap(): addr is illegal\n");
-        p->killed = 1;
-      }
+      printf("usertrap(): page fault is illegal\n");
+      p->killed = 1;
     }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);

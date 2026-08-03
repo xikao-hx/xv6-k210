@@ -113,6 +113,10 @@ exec(char *path, char **argv)
 
   p->trapframe->a1 = sp;
 
+  // No operation below this point can fail. Release the old mappings before
+  // replacing the process page table so VMA teardown uses the old address space.
+  vma_destroy_all(p);
+
   // Save process state
   oldpagetable = p->pagetable;
   uint64 old_sz = p->sz;

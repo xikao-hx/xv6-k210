@@ -1,6 +1,7 @@
 #include "printf.h"
 #include "proc.h"
 #include "string.h"
+#include "vm.h"
 //
 // This file contains copyin_new() and copyinstr_new(), the
 // replacements for copyin and coyinstr in vm.c.
@@ -26,10 +27,37 @@ int
 copyin_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
   struct proc *p = myproc();
+  uint64 n;
+  uint64 va0;
+  uint64 pa0;
+  pte_t *pte;
 
-  if (srcva >= p->sz || srcva+len >= p->sz || srcva+len < srcva)
+  if(srcva + len < srcva)
     return -1;
-  memmove((void *) dst, (void *)srcva, len);
+  
+  while(len > 0){
+    if(srcva >= MAXVA)
+      return -1;
+    va0 = PGROUNDDOWN(srcva);
+    pte = walk(pagetable, va0, 0);
+    if((pte == 0 || !(*pte & PTE_V)) && pagetable == p->pagetable){
+      if(vm_fault(p, va0, VM_FAULT_READ) < 0)
+        return -1;
+      pte = walk(pagetable, va0, 0);
+    }
+    if(pte == 0 ||
+       (*pte & (PTE_V | PTE_U | PTE_R)) != (PTE_V | PTE_U | PTE_R))
+      return -1;
+    pa0 = PTE2PA(*pte);
+    n = PGSIZE - (srcva - va0);
+    if(n > len)
+      n = len;
+    memmove(dst, (void *)(pa0 + (srcva - va0)), n);
+    len -= n;
+    dst += n;
+    srcva = va0 + PGSIZE;
+  }
+
   stats.ncopyin++;   // XXX lock
   return 0;
 }
@@ -42,13 +70,40 @@ int
 copyinstr_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
   struct proc *p = myproc();
-  char *s = (char *) srcva;
+  uint64 va0;
+  uint64 pa0;
+  uint64 n;
+  pte_t *pte;
   
   stats.ncopyinstr++;   // XXX lock
-  for(int i = 0; i < max && srcva + i < p->sz; i++){
-    dst[i] = s[i];
-    if(s[i] == '\0')
-      return 0;
+  while(max > 0) {
+    if(srcva >= MAXVA)
+      return -1;
+    va0 = PGROUNDDOWN(srcva);
+    pte = walk(pagetable, va0, 0);
+    if((pte == 0 || !(*pte & PTE_V)) && pagetable == p->pagetable){
+      if(vm_fault(p, va0, VM_FAULT_READ) < 0)
+        return -1;
+      pte = walk(pagetable, va0, 0);
+    }
+    if(pte == 0 ||
+       (*pte & (PTE_V | PTE_U | PTE_R)) != (PTE_V | PTE_U | PTE_R))
+      return -1;
+    pa0 = PTE2PA(*pte);
+    n = PGSIZE - (srcva - va0);
+    if(n > max)
+      n = max;
+    char *src = (char *)(pa0 + (srcva - va0));
+    while(n > 0){
+      if(*src == '\0'){
+        *dst = '\0';
+        return 0;
+      }
+      *dst++ = *src++;
+      srcva++;
+      max--;
+      n--;
+    }
   }
   return -1;
 }

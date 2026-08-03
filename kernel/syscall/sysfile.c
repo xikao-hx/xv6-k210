@@ -11,6 +11,7 @@
 #include "string.h"
 #include "syscall.h"
 #include "vm.h"
+#include "mmap.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -491,44 +492,29 @@ sys_mmap(void)
   int length;
   int prot;
   int flags;
-  int vfd;
   struct file *vfile;
-  uint64 err = 0xffffffffffffffff;
-  struct proc *p = myproc();
-  int offset = 0;
+  int offset;
 
   if (argaddr(0, &addr) < 0 || argint(1, &length) < 0 || argint(2, &prot) < 0 ||
-      argint(3, &flags) < 0 || argfd(4, &vfd, &vfile) < 0 || argint(5, &offset) < 0) {
-    return err;
-  }
+      argint(3, &flags) < 0 || argfd(4, 0, &vfile) < 0 ||
+      argint(5, &offset) < 0)
+    return -1;
 
-  if (addr != 0 || offset != 0 || length < 0)
-    return err;
+  if(length <= 0 || offset < 0)
+    return -1;
 
-  if (vfile->writable == 0 && (prot & PROT_WRITE) != 0 && flags == MAP_SHARED)
-    return err;
+  return vma_map_file(myproc(), addr, length, prot, flags, vfile, offset);
+}
 
-  if (p->sz + length > MAXVA)
-    return err;
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  int length;
 
-  for (int i = 0; i < NVMA; i++) {
-    if (p->vmas[i].used == 0) {
-      p->vmas[i].used = 1;
-      p->vmas[i].addr = p->sz;
-      p->vmas[i].flags = flags;
-      p->vmas[i].length = length;
-      p->vmas[i].offset = offset;
-      p->vmas[i].prot = prot;
-      p->vmas[i].vfd = vfd;
-      p->vmas[i].vfile = vfile;
-      filedup(vfile);
-      p->sz += length;
-
-      return p->vmas[i].addr;
-    }
-  }
-
-  return err;
+  if(argaddr(0, &addr) < 0 || argint(1, &length) < 0 || length <= 0)
+    return -1;
+  return vma_unmap(myproc(), addr, length);
 }
 
 // FAT32 stubs for unsupported syscalls
@@ -552,119 +538,4 @@ sys_unlink(void)
 {
   // unlink is an alias for remove in FAT32
   return sys_remove();
-}
-
-// mmap page fault handler (FAT32 version using eread)
-int
-mmap_handler(uint64 va, uint64 scause)
-{
-  struct proc *p = myproc();
-  pagetable_t pagetable = p->pagetable;
-  int i = 0;
-  struct vma_area *vma;
-
-  for (; i < NVMA; i ++) {
-    vma = &p->vmas[i];
-    if (vma->used && vma->addr <= va && va <= (vma->addr + vma->length - 1)) {
-      break;
-    }
-  }
-
-  if (i == NVMA) {
-    return -1;
-  }
-
-  struct file *vfile = vma->vfile;
-  if (scause == 13 && vfile->readable == 0) return -1;
-  if (scause == 15 && vfile->writable == 0) return -1;
-
-  void * pa = kalloc_page();
-  if (pa == 0) {
-    printf("mmap_handler: kalloc err\n");
-    return -1;
-  }
-  memset(pa, 0, PGSIZE);
-
-  elock(vfile->ep);
-  int offset = vma->offset + PGROUNDDOWN(va - vma->addr);
-  int readbytes = eread(vfile->ep, 0, (uint64)pa, offset, PGSIZE);
-  if (readbytes == 0) {
-    eunlock(vfile->ep);
-    kfree_page(pa);
-    return -1;
-  }
-  eunlock(vfile->ep);
-
-  int pte_flags = PTE_U;
-  if (vma->prot & PROT_READ) pte_flags |= PTE_R;
-  if (vma->prot & PROT_WRITE) pte_flags |= PTE_W;
-  if (vma->prot & PROT_EXEC) pte_flags |= PTE_X;
-
-  if (mappages(pagetable, PGROUNDDOWN(va), (uint64)pa, PGSIZE, pte_flags) != 0) {
-    kfree_page(pa);
-    return -1;
-  }
-
-  upg2ukpg(pagetable, p->kpagetable, va, va + PGSIZE);
-  return 0;
-}
-
-uint64
-sys_munmap(void)
-{
-  uint64 addr;
-  int length;
-  struct proc *p = myproc();
-  struct vma_area *vma;
-  int i = 0;
-
-  if (argaddr(0, &addr) < 0 || argint(1, &length) < 0) {
-    return -1;
-  }
-
-  for (; i < NVMA; i ++) {
-    vma = &p->vmas[i];
-    if (vma->used && vma->length >= length) {
-      if (vma->addr == addr) {
-        vma->addr += length;
-        vma->length -= length;
-        break;
-      } else if ((vma->addr + vma->length) == (addr + length)) {
-        vma->length -= length;
-        break;
-      }
-    }
-  }
-
-  if (i == NVMA) {
-    return -1;
-  }
-
-  if (vma->vfile->writable && (vma->prot & PROT_WRITE) && vma->flags == MAP_SHARED) {
-    filewrite(vma->vfile, addr, length);
-  }
-
-  uvmunmap(p->pagetable, PGROUNDDOWN(addr), length / PGSIZE, 1);
-  // Note: ukvmdealloc not available, skip for now
-
-  if (vma->length == 0) {
-    fileclose(vma->vfile);
-    vma->used = 0;
-  }
-
-  return 0;
-}
-
-int
-find_vma(struct proc *p, uint64 va)
-{
-  for (int i = 0; i < NVMA; i ++) {
-    struct vma_area *vma = &p->vmas[i];
-    if (vma->used) {
-      if (vma->addr <= va && va <= (vma->addr + vma->length - 1)) {
-        return 0;
-      }
-    }
-  }
-  return -1;
 }

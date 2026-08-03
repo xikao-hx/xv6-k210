@@ -59,6 +59,7 @@ OBJS = \
   $K/vm/kalloc.o \
   $K/vm/vm.o \
   $K/vm/vmcopyin.o \
+  $K/vm/mmap.o \
   $K/proc/swtch.o \
   $K/trap/trap.o \
   $K/trap/trampoline.o \
@@ -179,6 +180,10 @@ $(UBUILD)/test/%.o: $U/test/%.c $(BUILD_CONFIG)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(UBUILD)/test/mmaptest.o: testcase/mmaptest.c $(BUILD_CONFIG)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(UBUILD)/libc/%.o: $U/libc/%.c $(BUILD_CONFIG)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -237,6 +242,7 @@ UPROGS=\
 	$(UBUILD)/sh/_sh\
 	$(UBUILD)/sh/_find\
 	$(UBUILD)/test/_devtest\
+	$(UBUILD)/test/_mmaptest\
 	$(UBUILD)/_init
 
 # Platform-specific objects
