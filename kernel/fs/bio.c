@@ -21,7 +21,7 @@
 #include "trap.h"
 
 #define NBUCKET 13
-#define HASH(blockno) (blockno % NBUCKET);
+#define HASH(blockno) (blockno % NBUCKET)
 
 struct hashbuf {
   struct spinlock lock;
