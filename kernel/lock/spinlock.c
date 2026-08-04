@@ -2,6 +2,7 @@
 
 #include "printf.h"
 #include "proc.h"
+#include "string.h"
 
 #ifdef LAB_LOCK
 #define NLOCK 500

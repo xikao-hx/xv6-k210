@@ -100,6 +100,10 @@ LD = $(TOOLPREFIX)ld
 OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
 
+# LAB_LOCK: xv6-lab lock-acquisition stats, so that /dev/stats (used by
+# kalloctest's ntas()) reports real contention.  Cost: one atomic add per
+# acquire + a per-lock entry in a global table.  Set LAB_LOCK=0 to disable.
+CFLAGS += -D LAB_LOCK
 CFLAGS = -Wall  -O -fno-omit-frame-pointer -ggdb -g
 CFLAGS += -MD
 # CFLAGS += -D TEST
@@ -180,7 +184,11 @@ $(UBUILD)/test/%.o: $U/test/%.c $(BUILD_CONFIG)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(UBUILD)/test/mmaptest.o: testcase/mmaptest.c $(BUILD_CONFIG)
+# Test cases in testcase/ - every testcase/<name>.c is compiled into
+# build/user/test/<name>.o automatically, so adding a new test needs no
+# per-test Makefile rule.  (Linking is handled by the $(UBUILD)/test/_%
+# rule below; the program is added to the FS image via TESTCASE_PROGS.)
+$(UBUILD)/test/%.o: testcase/%.c $(BUILD_CONFIG)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -242,8 +250,33 @@ UPROGS=\
 	$(UBUILD)/sh/_sh\
 	$(UBUILD)/sh/_find\
 	$(UBUILD)/test/_devtest\
-	$(UBUILD)/test/_mmaptest\
+	$(UBUILD)/test/_cpuburn\
+	$(UBUILD)/test/_iotest\
 	$(UBUILD)/_init
+
+# Test cases in testcase/.  Every testcase/<name>.c is built into
+# build/user/test/_<name> and added to the FS image automatically;
+# drop a new file in testcase/ and it is picked up with no Makefile
+# edits at all.
+#
+# TESTCASES selects which testcase files to build:
+#   (empty)                        -> build ALL testcases (default)
+#   'testcase/a.c testcase/b.c'    -> build only those listed
+#
+# TESTCASE_EXCLUDE lists files that are never treated as test programs:
+#   grind, usertests  -> call kill(), which this port does not implement
+#   statistics        -> library source (no main), collides with ulib.c
+TESTCASE_EXCLUDE = \
+  grind \
+  statistics \
+  usertests
+
+TESTCASES ?= testcase/bcachetest.c testcase/kalloctest.c testcase/mmaptest.c
+ifeq ($(strip $(TESTCASES)),)
+TESTCASES := $(filter-out $(addprefix testcase/,$(addsuffix .c,$(TESTCASE_EXCLUDE))),$(wildcard testcase/*.c))
+endif
+TESTCASE_PROGS = $(patsubst testcase/%.c,$(UBUILD)/test/_%,$(TESTCASES))
+UPROGS += $(TESTCASE_PROGS)
 
 # Platform-specific objects
 ifeq ($(platform), k210)
@@ -251,8 +284,6 @@ UPROGS += \
 	$(UBUILD)/app/_mpu6050\
 	$(UBUILD)/app/_w25q64\
 	$(UBUILD)/app/_burn\
-	$(UBUILD)/test/_cpuburn\
-	$(UBUILD)/test/_iotest\
 	$(UBUILD)/test/_consoletest\
 	$(UBUILD)/test/_sdtest\
 	$(UBUILD)/test/_spitest\
