@@ -170,15 +170,15 @@ static void spi_dw_init(spi_device_num_t spi_num)
 }
 
 void spi_init(void) {
+    static char names[SPI_DEVICE_MAX][10];
 
     for (int i = 0; i < SPI_DEVICE_MAX; i ++) {
-        char name[10];
         if (spi_ctrls[i] == 0)
             continue;
         
         spi_dw_init(i);
-        snprintf(name, sizeof(name), "spi_%d", i);
-        initsleeplock(&spi_ctrls[i]->lock, name);
+        snprintf(names[i], sizeof(names[i]), "spi_%d", i);
+        initsleeplock(&spi_ctrls[i]->lock, names[i]);
     }
 }
 

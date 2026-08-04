@@ -40,10 +40,10 @@ static uint slab_sizes[NSLAB_BUCKETS] = {
 void
 kminit(void)
 {
+  static char names[NSLAB_BUCKETS][16];
   for (int i = 0; i < NSLAB_BUCKETS; i ++) {
-    char name[16];
-    snprintf(name, sizeof(name), "kslab_%d", i);
-    initlock(&slab_buckets[i].lock, name);
+    snprintf(names[i], sizeof(names[i]), "kslab_%d", i);
+    initlock(&slab_buckets[i].lock, names[i]);
     slab_buckets[i].obj_size = slab_sizes[i];
     slab_buckets[i].slabs = 0;
   }

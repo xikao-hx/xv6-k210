@@ -117,15 +117,15 @@ void i2c_dw_init(i2c_device_number_t i2c_num) {
 }
 
 void i2c_init(void) {
+    static char names[I2C_DEVICE_MAX][10];
 
     for (int i = 0; i < I2C_DEVICE_MAX; i++) {
         if(i2c_ctrls[i] == 0)
             continue;
             
         i2c_dw_init(i);
-        char name[10];
-        snprintf(name, sizeof(name), "i2c_%d", i);
-        initsleeplock(&i2c_ctrls[i]->lock, name);
+        snprintf(names[i], sizeof(names[i]), "i2c_%d", i);
+        initsleeplock(&i2c_ctrls[i]->lock, names[i]);
     }
 }
 
