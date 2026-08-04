@@ -100,11 +100,11 @@ LD = $(TOOLPREFIX)ld
 OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
 
+CFLAGS = -Wall  -O -fno-omit-frame-pointer -ggdb -g
 # LAB_LOCK: xv6-lab lock-acquisition stats, so that /dev/stats (used by
 # kalloctest's ntas()) reports real contention.  Cost: one atomic add per
 # acquire + a per-lock entry in a global table.  Set LAB_LOCK=0 to disable.
 CFLAGS += -D LAB_LOCK
-CFLAGS = -Wall  -O -fno-omit-frame-pointer -ggdb -g
 CFLAGS += -MD
 # CFLAGS += -D TEST
 CFLAGS += -mcmodel=medany
