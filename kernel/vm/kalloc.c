@@ -10,6 +10,9 @@
 
 void freerange(void *pa_start, void *pa_end);
 
+// Put page pa on CPU id's freelist (used to spread initial free pages).
+static void kfree_page_to(int id, void *pa);
+
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
@@ -30,10 +33,11 @@ struct {
 void
 kinit()
 {
+  static char names[NCPU][10];
+
   for (int i = 0; i < NCPU; i ++) {
-    char name[10];
-    snprintf(name, sizeof(name), "kmem_%d", i); 
-    initlock(&kmem[i].lock, name);
+    snprintf(names[i], sizeof(names[i]), "kmem_%d", i);
+    initlock(&kmem[i].lock, names[i]);
   }
   initlock(&cow_map.lock, "cow_map");
   kminit();
@@ -44,10 +48,15 @@ void
 freerange(void *pa_start, void *pa_end)
 {
   char *p;
+  int id = 0;
+
   p = (char*)PGROUNDUP((uint64)pa_start);
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE) {
     cow_map.cow_quota[(uint64)p / PGSIZE] = 1;
-    kfree_page(p);
+    // Spread free pages round-robin across all CPUs' freelists so no
+    // single CPU holds everything and the others must steal from it.
+    kfree_page_to(id, p);
+    id = (id + 1) % NCPU;
   }
 }
 
@@ -77,17 +86,18 @@ int kgetquota(void *pa) {
 // which normally should have been returned by a
 // call to kalloc_page().  (The exception is when
 // initializing the allocator; see kinit above.)
-void
-kfree_page(void *pa)
+//
+// kfree_page_to() puts the page on CPU id's freelist; kfree_page()
+// uses the current CPU, freerange() uses it to spread the initial
+// free pages across all CPUs.
+static void
+kfree_page_to(int id, void *pa)
 {
   struct run *r;
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree_page");
 
-  push_off();
-  int id = cpuid();
-  
   acquire(&cow_map.lock);
   int cnt = --cow_map.cow_quota[(uint64)pa / PGSIZE];
 
@@ -107,11 +117,17 @@ kfree_page(void *pa)
     release(&cow_map.lock);
   }
 
-  pop_off();
-
   if (cnt < 0) {
     panic("kfree_page: negative quota");
   }
+}
+
+void
+kfree_page(void *pa)
+{
+  push_off();
+  kfree_page_to(cpuid(), pa);
+  pop_off();
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -125,24 +141,28 @@ kalloc_page(void)
   push_off();
   int id = cpuid();
 
+  // Try the local freelist first.
   acquire(&kmem[id].lock);
   r = kmem[id].freelist;
-  if(r) {
+  if (r)
     kmem[id].freelist = r->next;
-  } else {
+  release(&kmem[id].lock);
+
+  // Local freelist empty: steal from another CPU.  Hold at most one
+  // kmem lock at a time, so the per-CPU lock order can never form an
+  // ABBA cycle.
+  if (r == 0) {
     for (int n_id = 0; n_id < NCPU; n_id ++) {
       if (n_id == id) continue;
       acquire(&kmem[n_id].lock);
       r = kmem[n_id].freelist;
-      if (r) {
+      if (r)
         kmem[n_id].freelist = r->next;
-        release(&kmem[n_id].lock);
-        break;
-      }
       release(&kmem[n_id].lock);
+      if (r)
+        break;
     }
   }
-  release(&kmem[id].lock);
 
   pop_off();
 
