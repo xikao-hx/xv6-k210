@@ -43,24 +43,27 @@ void
 binit(void)
 {
   struct buf *b;
+  int bid = 0;
 
   // init linked list of buckets
+  static char names[NBUCKET][10];
   for (int i = 0; i < NBUCKET; i ++) {
-    char name[10];
-    snprintf(name, sizeof(name), "bcache_%d", i);
-    initlock(&bcache.buckets[i].lock, name);
+    snprintf(names[i], sizeof(names[i]), "bcache_%d", i);
+    initlock(&bcache.buckets[i].lock, names[i]);
 
     bcache.buckets[i].head.prev = &bcache.buckets[i].head;
     bcache.buckets[i].head.next = &bcache.buckets[i].head;
   }
-  
-  // Create linked list of bucket 0
+
+  // Spread buffers round-robin across buckets so no single bucket
+  // starts out holding all of them (same idea as kalloc's freerange).
   for(b = bcache.buf; b < bcache.buf+NBUF; b++){
-    b->next = bcache.buckets[0].head.next;
-    b->prev = &bcache.buckets[0].head;
+    b->next = bcache.buckets[bid].head.next;
+    b->prev = &bcache.buckets[bid].head;
     initsleeplock(&b->lock, "buffer");
-    bcache.buckets[0].head.next->prev = b;
-    bcache.buckets[0].head.next = b;
+    bcache.buckets[bid].head.next->prev = b;
+    bcache.buckets[bid].head.next = b;
+    bid = (bid + 1) % NBUCKET;
   }
 }
 
@@ -90,61 +93,58 @@ bget(uint dev, uint blockno)
     }
   }
 
+  // Not cached.  Drop the target bucket's lock and recycle the least
+  // recently used (LRU) unused buffer.  Scan buckets one at a time,
+  // holding at most one bucket lock, so the lock order can never form
+  // an ABBA cycle.
+  release(&bcache.buckets[bid].lock);
+
   b = 0;
   struct buf *tmp;
-  // Not cached.
-  // Recycle the least recently used (LRU) unused buffer.
-  for (int i = bid, cycle = 0; cycle != NBUCKET; i = (i + 1) % NBUCKET) {
-    cycle ++;
-    
-    if (i != bid) {
-      if (!holding(&bcache.buckets[i].lock)) {
-        acquire(&bcache.buckets[i].lock);
-      } else {
-        continue;
-      }
-    }
+  for (int i = 0; i < NBUCKET; i ++) {
+    int bucket = (bid + i) % NBUCKET;
 
-    for (tmp = bcache.buckets[i].head.prev; tmp != &bcache.buckets[i].head; tmp = tmp->prev) {
+    acquire(&bcache.buckets[bucket].lock);
+    for (tmp = bcache.buckets[bucket].head.prev; tmp != &bcache.buckets[bucket].head; tmp = tmp->prev) {
       if (tmp->refcnt == 0 && (b == 0 || tmp->timestamp < b->timestamp)) {
         b = tmp;
       }
     }
 
     if (b) {
-      if (i != bid) {
-        // 从原桶移除
-        b->next->prev = b->prev;
-        b->prev->next = b->next;
-        release(&bcache.buckets[i].lock);
-
-        // 插入到新桶中
-        b->next = bcache.buckets[bid].head.next;
-        b->prev = &bcache.buckets[bid].head;
-        bcache.buckets[bid].head.next->prev = b;
-        bcache.buckets[bid].head.next = b;
-      }
-      b->dev = dev;
-      b->blockno = blockno;
-      b->valid = 0;
-      b->refcnt = 1;
-      
-      acquire(&tickslock);
-      b->timestamp = ticks;
-      release(&tickslock);
-      
-      release(&bcache.buckets[bid].lock);
-      acquiresleep(&b->lock);
-
-      return b;
-    } else {
-      if (i != bid) {
-        release(&bcache.buckets[i].lock);
-      }
+      // Detach the victim from its bucket.  b is now on no list, so no
+      // other CPU can see it; it is inserted into the target bucket
+      // below under that bucket's lock.
+      b->next->prev = b->prev;
+      b->prev->next = b->next;
+      release(&bcache.buckets[bucket].lock);
+      break;
     }
-  } 
+    release(&bcache.buckets[bucket].lock);
+  }
 
-  panic("bget: no buffers");
+  if (b == 0)
+    panic("bget: no buffers");
+
+  acquire(&bcache.buckets[bid].lock);
+  // Insert the recycled buffer into the target bucket.
+  b->next = bcache.buckets[bid].head.next;
+  b->prev = &bcache.buckets[bid].head;
+  bcache.buckets[bid].head.next->prev = b;
+  bcache.buckets[bid].head.next = b;
+  b->dev = dev;
+  b->blockno = blockno;
+  b->valid = 0;
+  b->refcnt = 1;
+
+  acquire(&tickslock);
+  b->timestamp = ticks;
+  release(&tickslock);
+
+  release(&bcache.buckets[bid].lock);
+  acquiresleep(&b->lock);
+
+  return b;
   /*
   for(b = bcache.head.prev; b != &bcache.head; b = b->prev){
     if(b->refcnt == 0) {
