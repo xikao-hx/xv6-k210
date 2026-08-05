@@ -6,6 +6,7 @@
 #include "riscv.h"
 #include "spinlock.h"
 #include "mmap.h"
+#include "signal.h"
 
 // Saved registers for kernel context switches.
 struct context {
@@ -134,6 +135,13 @@ struct proc {
   uint io_wakeup_count;
   uint device_wakeup_count;
   int last_wakeup_reason;
+  uint32 sig_pending;          // Pending signal bitset
+  uint32 sig_mask;             // Internally blocked signals
+  uint64 sig_handlers[NSIG];   // SIG_DFL, SIG_IGN, or user handler
+  int sig_handling;            // Running a user signal handler
+  int sig_current;             // Signal currently being handled
+  int sig_term;                // Signal responsible for final termination
+  struct trapframe sig_saved_trapframe;
 };
 
 int             cpuid(void);

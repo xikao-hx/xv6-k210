@@ -5,6 +5,7 @@
 #include "sysinfo.h"
 #include "syscall.h"
 #include "vm.h"
+#include "signal.h"
 
 uint64
 sys_exit(void)
@@ -137,4 +138,33 @@ sys_sysinfo(void)
   }
 
   return 0;
+}
+
+
+uint64
+sys_signal(void)
+{
+  int signum;
+  uint64 handler;
+
+  if(argint(0, &signum) < 0 || argaddr(1, &handler) < 0)
+    return (uint64)SIG_ERR;
+  return signal_set_handler(myproc(), signum, handler);
+}
+
+uint64
+sys_sigsend(void)
+{
+  int target;
+  int signum;
+
+  if(argint(0, &target) < 0 || argint(1, &signum) < 0)
+    return -1;
+  return signal_send_pid(target, signum);
+}
+
+uint64
+sys_sigreturn(void)
+{
+  return signal_sigreturn(myproc());
 }

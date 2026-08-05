@@ -10,6 +10,7 @@
 #include "uarths.h"
 #include "vm.h"
 #include "mmap.h"
+#include "signal.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -65,7 +66,7 @@ usertrap(void)
     // system call
 
     if(p->killed)
-      exit(-1);
+      exit(signal_exit_status(p));
 
     // sepc points to the ecall instruction,
     // but we want to return to the next instruction.
@@ -117,13 +118,14 @@ usertrap(void)
     p->killed = 1;
   }
 
-  if(p->killed)
-    exit(-1);
-
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2)
     yield();
 
+  signal_deliver(p);
+  if(p->killed)
+    exit(signal_exit_status(p));
+    
   usertrapret();
 }
 

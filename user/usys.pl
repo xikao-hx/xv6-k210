@@ -44,3 +44,6 @@ entry("readdir");
 entry("getcwd");
 entry("remove");
 entry("ioctl");
+entry("signal");
+entry("sigsend");
+entry("sigreturn");

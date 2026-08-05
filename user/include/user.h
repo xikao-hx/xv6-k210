@@ -1,3 +1,5 @@
+#include "signal.h"
+
 struct stat;
 struct rtcdate;
 struct sysinfo;
@@ -33,6 +35,9 @@ int readdir(int, struct stat*);
 int getcwd(char*);
 int remove(const char*);
 int ioctl(int, int, uint64);
+sighandler_t signal(int, sighandler_t);
+int sigsend(int, int);
+int sigreturn(void);
 
 // ulib.c
 int stat(const char*, struct stat*);

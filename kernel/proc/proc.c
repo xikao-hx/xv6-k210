@@ -8,6 +8,7 @@
 #include "string.h"
 #include "trap.h"
 #include "vm.h"
+#include "signal.h"
 
 struct cpu cpus[NCPU];
 
@@ -33,6 +34,7 @@ static int rr_next;
 #endif
 
 extern char trampoline[]; // trampoline.S
+extern char sigtramp[];   // sigtramp.S
 
 // initialize the proc table at boot time.
 void
@@ -121,6 +123,7 @@ allocproc(void)
 
 found:
   p->pid = allocpid();
+  signal_proc_init(p);
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc_page()) == 0){
@@ -199,6 +202,7 @@ freeproc(struct proc *p)
   p->name[0] = 0;
   p->chan = 0;
   p->killed = 0;
+  signal_proc_init(p);
   p->xstate = 0;
   p->queue_level = MLFQ_TOP_LEVEL;
   p->sched_ticks = 0;
@@ -406,6 +410,15 @@ proc_pagetable(struct proc *p)
     return 0;
   }
 
+  // Map the user-only signal return stub below the trapframe.
+  if(mappages(pagetable, SIGTRAMP, PGSIZE,
+              (uint64)sigtramp, PTE_R | PTE_X | PTE_U) < 0){
+    uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+    uvmunmap(pagetable, TRAPFRAME, 1, 0);
+    uvmfree(pagetable, 0);
+    return 0;
+  }
+
   return pagetable;
 }
 
@@ -416,6 +429,7 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
+  uvmunmap(pagetable, SIGTRAMP, 1, 0);
   uvmfree(pagetable, sz);
 }
 
@@ -535,6 +549,7 @@ fork(void)
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   np->trace_mask = p->trace_mask;
+  signal_proc_fork(p, np);
   pid = np->pid;
 
   upg2ukpg(np->pagetable, np->kpagetable, 0, np->sz);

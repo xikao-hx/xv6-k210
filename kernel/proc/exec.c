@@ -8,6 +8,7 @@
 #include "proc.h"
 #include "string.h"
 #include "vm.h"
+#include "signal.h"
 
 static int
 loadseg(pagetable_t pagetable, uint64 va, struct dirent *ep, uint offset, uint sz)
@@ -137,7 +138,8 @@ exec(char *path, char **argv)
   upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz);
 
   proc_freepagetable(oldpagetable, old_sz);
-
+  signal_reset_on_exec(p);
+  
   eunlock(ep);
   eput(ep);
 

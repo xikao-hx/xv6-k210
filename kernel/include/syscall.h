@@ -28,6 +28,9 @@
 #define SYS_getcwd 28
 #define SYS_remove 29
 #define SYS_ioctl 30
+#define SYS_signal 31
+#define SYS_sigsend 32
+#define SYS_sigreturn 33
 
 #ifndef __ASSEMBLER__
 #include "types.h"
