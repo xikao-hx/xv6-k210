@@ -52,6 +52,7 @@ OBJS = \
   $K/lock/spinlock.o \
   $K/proc/exec.o \
   $K/proc/proc.o \
+  $K/proc/signal.o \
   $K/syscall/syscall.o \
   $K/syscall/sysfile.o \
   $K/syscall/sysproc.o \
@@ -63,7 +64,8 @@ OBJS = \
   $K/proc/swtch.o \
   $K/trap/trap.o \
   $K/trap/trampoline.o \
-  $K/trap/kernelvec.o
+  $K/trap/kernelvec.o \
+  $K/trap/sigtramp.o \
 
 # Platform-specific objects
 ifeq ($(platform), k210)
@@ -271,7 +273,7 @@ TESTCASE_EXCLUDE = \
   statistics \
   usertests
 
-TESTCASES ?= testcase/bcachetest.c testcase/kalloctest.c testcase/mmaptest.c
+TESTCASES ?= testcase/bcachetest.c testcase/kalloctest.c testcase/mmaptest.c testcase/signaltest.c testcase/cowtest.c testcase/lazytests.c
 ifeq ($(strip $(TESTCASES)),)
 TESTCASES := $(filter-out $(addprefix testcase/,$(addsuffix .c,$(TESTCASE_EXCLUDE))),$(wildcard testcase/*.c))
 endif
