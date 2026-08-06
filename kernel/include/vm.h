@@ -4,6 +4,7 @@
 #include "types.h"
 #include "riscv.h"
 
+struct proc;
 void            kvminit(void);
 void            kvminithart(void);
 uint64          kvmpa(uint64);
@@ -28,6 +29,7 @@ void            ukvminithart(pagetable_t pagetable);
 void            upg2ukpg(pagetable_t u_pagetable, pagetable_t k_pagetable, uint64 begin_addr, uint64 end_addr);
 uint64          ukvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int alloc);
 int             uvmlazymalloc(pagetable_t pagetable, uint64 va);
+int             faultin_page(struct proc *, pagetable_t, uint64, int);
 pte_t *         walk(pagetable_t pagetable, uint64 va, int alloc);
 void *          uvmcowmalloc(pagetable_t pagetable, uint64 va);
 int             uvmcowpage(pagetable_t pagetable, uint64 va);

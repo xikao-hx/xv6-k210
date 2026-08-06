@@ -151,6 +151,9 @@ signal_deliver(struct proc *p)
 
   acquire(&p->lock);
   pending = p->sig_pending & ~p->sig_mask;
+
+  // SIGKILL always overrides mask, and don't deliver new signals 
+  // while handling one, except SIGKILL
   if(p->sig_pending & signal_bit(SIGKILL))
     pending |= signal_bit(SIGKILL);
   if(p->sig_handling && !(pending & signal_bit(SIGKILL))) {

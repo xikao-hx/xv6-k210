@@ -41,7 +41,7 @@ copyin_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
     va0 = PGROUNDDOWN(srcva);
     pte = walk(pagetable, va0, 0);
     if((pte == 0 || !(*pte & PTE_V)) && pagetable == p->pagetable){
-      if(vm_fault(p, va0, VM_FAULT_READ) < 0)
+      if(faultin_page(p, pagetable, va0, VM_FAULT_READ) < 0)
         return -1;
       pte = walk(pagetable, va0, 0);
     }
@@ -82,7 +82,7 @@ copyinstr_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     va0 = PGROUNDDOWN(srcva);
     pte = walk(pagetable, va0, 0);
     if((pte == 0 || !(*pte & PTE_V)) && pagetable == p->pagetable){
-      if(vm_fault(p, va0, VM_FAULT_READ) < 0)
+      if(faultin_page(p, pagetable, va0, VM_FAULT_READ) < 0)
         return -1;
       pte = walk(pagetable, va0, 0);
     }

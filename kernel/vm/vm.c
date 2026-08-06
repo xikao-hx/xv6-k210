@@ -389,8 +389,23 @@ uvmlazymalloc(pagetable_t pagetable, uint64 va)
   return 0;
 }
 
-void *  
-uvmcowmalloc(pagetable_t pagetable, uint64 va) 
+// Resolve a fault on page-aligned va for the given access.
+// First tries mmap demand paging (vm_fault); if the page is not backed
+// by a VMA, falls back to lazy allocation of the anonymous heap/stack
+// region, mirroring the page-fault path in usertrap().
+// Returns 0 on success, -1 if the fault cannot be resolved.
+int
+faultin_page(struct proc *p, pagetable_t pagetable, uint64 va, int access)
+{
+  if(vm_fault(p, va, access) == 0)
+    return 0;
+  if(va < p->sz && PGROUNDUP(p->trapframe->sp) - 1 < va)
+    return uvmlazymalloc(pagetable, va);
+  return -1;
+}
+
+void *
+uvmcowmalloc(pagetable_t pagetable, uint64 va)
 {
   struct proc *p = myproc();
 
@@ -604,7 +619,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     va0 = PGROUNDDOWN(dstva);
     pte = walk(pagetable, va0, 0);
     if((pte == 0 || !(*pte & PTE_V)) && pagetable == p->pagetable){
-      if(vm_fault(p, va0, VM_FAULT_WRITE) < 0)
+      if(faultin_page(p, pagetable, va0, VM_FAULT_WRITE) < 0)
         return -1;
       pte = walk(pagetable, va0, 0);
     }
