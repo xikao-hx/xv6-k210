@@ -86,11 +86,10 @@ sys_sleep(void)
   acquire(&tickslock);
   ticks0 = ticks;
   while(ticks - ticks0 < n){
-    if(myproc()->killed){
+    if(sleep_interruptible(&ticks, &tickslock) < 0) {
       release(&tickslock);
       return -1;
     }
-    sleep(&ticks, &tickslock);
   }
   release(&tickslock);
   return 0;

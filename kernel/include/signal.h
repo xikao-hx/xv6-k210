@@ -29,6 +29,8 @@ void signal_proc_fork(struct proc *, struct proc *);
 void signal_reset_on_exec(struct proc *);
 uint64 signal_set_handler(struct proc *, int, uint64);
 int signal_send_pid(int, int);
+int signal_pending(struct proc *);
+int signal_pending_locked(struct proc *);
 void signal_deliver(struct proc *);
 uint64 signal_sigreturn(struct proc *);
 int signal_exit_status(struct proc *);

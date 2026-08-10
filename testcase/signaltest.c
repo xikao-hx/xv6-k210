@@ -151,6 +151,176 @@ test_exec_semantics(void)
   signal(SIGTERM, SIG_DFL);
 }
 
+static void
+test_interrupt_sleep(void)
+{
+  int ready[2];
+  int pid;
+  char byte;
+
+  if(pipe(ready) < 0) {
+    fail("sleep ready pipe");
+    return;
+  }
+  pid = fork();
+  if(pid == 0) {
+    close(ready[0]);
+    signal(SIGTERM, test_handler);
+    handler_seen = 0;
+    write(ready[1], "r", 1);
+    close(ready[1]);
+    int rc = sleep(1000);
+    exit(rc == -1 && handler_seen == SIGTERM ? 0 : 60);
+  }
+  close(ready[1]);
+  if(pid < 0 || read(ready[0], &byte, 1) != 1 ||
+     sigsend(pid, SIGTERM) < 0 || wait_status(pid) != 0)
+    fail("interrupt sleep");
+  close(ready[0]);
+}
+
+static void
+test_interrupt_pipe_read(void)
+{
+  int ready[2];
+  int data[2];
+  int pid;
+  char byte;
+
+  if(pipe(ready) < 0 || pipe(data) < 0) {
+    fail("pipe read setup");
+    return;
+  }
+  pid = fork();
+  if(pid == 0) {
+    close(ready[0]);
+    close(data[1]);
+    signal(SIGTERM, test_handler);
+    handler_seen = 0;
+    write(ready[1], "r", 1);
+    close(ready[1]);
+    int rc = read(data[0], &byte, 1);
+    exit(rc == -1 && handler_seen == SIGTERM ? 0 : 61);
+  }
+  close(ready[1]);
+  close(data[0]);
+  if(pid < 0 || read(ready[0], &byte, 1) != 1 ||
+     sigsend(pid, SIGTERM) < 0 || wait_status(pid) != 0)
+    fail("interrupt pipe read");
+  close(ready[0]);
+  close(data[1]);
+}
+
+static void
+test_interrupt_pipe_write(void)
+{
+  int ready[2];
+  int data[2];
+  int pid;
+  char byte;
+
+  if(pipe(ready) < 0 || pipe(data) < 0) {
+    fail("pipe write setup");
+    return;
+  }
+  pid = fork();
+  if(pid == 0) {
+    char buf[1024];
+    int rc;
+
+    close(ready[0]);
+    close(data[0]);
+    memset(buf, 'x', sizeof(buf));
+    signal(SIGTERM, test_handler);
+    handler_seen = 0;
+    write(ready[1], "r", 1);
+    close(ready[1]);
+    rc = write(data[1], buf, sizeof(buf));
+    exit(rc > 0 && rc < (int)sizeof(buf) && handler_seen == SIGTERM ? 0 : 62);
+  }
+  close(ready[1]);
+  close(data[1]);
+  if(pid < 0 || read(ready[0], &byte, 1) != 1) {
+    fail("interrupt pipe write ready");
+  } else {
+    sleep(5);
+    if(sigsend(pid, SIGTERM) < 0 || wait_status(pid) != 0)
+      fail("interrupt pipe write");
+  }
+  close(ready[0]);
+  close(data[0]);
+}
+
+static void
+test_interrupt_console_read(void)
+{
+  int ready[2];
+  int pid;
+  char byte;
+
+  if(pipe(ready) < 0) {
+    fail("console read setup");
+    return;
+  }
+  pid = fork();
+  if(pid == 0) {
+    close(ready[0]);
+    signal(SIGTERM, test_handler);
+    handler_seen = 0;
+    write(ready[1], "r", 1);
+    close(ready[1]);
+    int rc = read(0, &byte, 1);
+    exit(rc == -1 && handler_seen == SIGTERM ? 0 : 63);
+  }
+  close(ready[1]);
+  if(pid < 0 || read(ready[0], &byte, 1) != 1 ||
+     sigsend(pid, SIGTERM) < 0 || wait_status(pid) != 0)
+    fail("interrupt console read");
+  close(ready[0]);
+}
+
+static void
+test_interrupt_wait(void)
+{
+  int parent = getpid();
+  int pid;
+  int status;
+
+  handler_seen = 0;
+  signal(SIGINT, test_handler);
+  pid = fork();
+  if(pid == 0) {
+    sleep(2);
+    sigsend(parent, SIGINT);
+    sleep(2);
+    exit(25);
+  }
+  if(pid < 0) {
+    fail("interrupt wait fork");
+  } else {
+    if(wait(&status) != -1 || handler_seen != SIGINT)
+      fail("interrupt wait");
+    if(wait(&status) != pid || status != 25)
+      fail("wait retry");
+  }
+  signal(SIGINT, SIG_DFL);
+}
+
+static void
+run_sleep_tests(void)
+{
+  printf("signaltest sleep: starting\n");
+  test_interrupt_sleep();
+  test_interrupt_pipe_read();
+  test_interrupt_pipe_write();
+  test_interrupt_console_read();
+  test_interrupt_wait();
+  if(failures == 0)
+    printf("signaltest sleep: ALL PASSED\n");
+  else
+    printf("signaltest sleep: FAILED failures=%d\n", failures);
+}
+
 static int
 run_exec_mode(char *mode)
 {
@@ -174,6 +344,10 @@ main(int argc, char **argv)
     status = run_exec_mode(argv[1]);
     if(status >= 0)
       exit(status);
+    if(strcmp(argv[1], "sleep") == 0) {
+      run_sleep_tests();
+      exit(failures ? 1 : 0);
+    }
   }
 
   printf("signaltest basic: starting\n");
