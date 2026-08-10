@@ -10,6 +10,8 @@
 #include "sbi.h"
 #include "trap.h"
 #include "vm.h"
+#include "kbufdev.h"
+#include "eagerdev.h"
 #ifndef QEMU
 #include "dmac.h"
 #include "fpioa.h"
@@ -50,6 +52,8 @@ main(unsigned long hartid, unsigned long dtb_pa)
     binit();         // buffer cache
     fileinit();      // file table
     statsinit();     // register stats device
+    kbufdev_init();  // register page-backed mmap test device
+    eagerdev_init(); // register eager-mapped mmap test device
 #ifndef QEMU
     fpioa_pin_init(); // configure SPI0 pins for SD card
     dmac_init();      // initialize DMA controller

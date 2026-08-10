@@ -37,6 +37,8 @@ OBJS = \
   $K/devsw/device.o \
   $K/devsw/console.o \
   $K/devsw/stats.o \
+  $K/devsw/kbufdev.o \
+  $K/devsw/eagerdev.o \
   $K/driver/uarths.o \
   $K/driver/plic.o \
   $K/fs/disk.o \
@@ -61,6 +63,7 @@ OBJS = \
   $K/vm/vm.o \
   $K/vm/vmcopyin.o \
   $K/vm/mmap.o \
+  $K/vm/kbuf.o \
   $K/proc/swtch.o \
   $K/trap/trap.o \
   $K/trap/trampoline.o \
