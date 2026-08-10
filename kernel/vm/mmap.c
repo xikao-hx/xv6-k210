@@ -6,6 +6,7 @@
 #include "proc.h"
 #include "string.h"
 #include "vm.h"
+#include "kbuf.h"
 
 #define MAP_FAILED ((uint64)-1)
 
@@ -61,8 +62,170 @@ vma_find_address(struct proc *p, uint64 length)
   return 0;
 }
 
+static struct anon_object *
+anon_object_create(void)
+{
+  struct anon_object *anon = kmalloc(sizeof(*anon));
+
+  if(anon == 0)
+    return 0;
+  memset(anon, 0, sizeof(*anon));
+  initlock(&anon->lock, "anon_object");
+  return anon;
+}
+
+static void
+anon_object_destroy(struct anon_object *anon)
+{
+  struct anon_page *page;
+
+  acquire(&anon->lock);
+  page = anon->pages;
+  anon->pages = 0;
+  release(&anon->lock);
+
+  while(page){
+    struct anon_page *next = page->next;
+    kfree_page((void *)page->pa);
+    kfree(page);
+    page = next;
+  }
+  kfree(anon);
+}
+
+// Return a shared anonymous page with one reference owned by the caller's PTE.
+static void *
+anon_page_get(struct anon_object *anon, uint64 index)
+{
+  struct anon_page *page;
+  struct anon_page *candidate;
+  void *mem;
+
+  acquire(&anon->lock);
+  for(page = anon->pages; page; page = page->next){
+    if(page->index == index){
+      kaddquota((void *)page->pa);
+      release(&anon->lock);
+      return (void *)page->pa;
+    }
+  }
+  release(&anon->lock);
+
+  mem = kalloc_page();
+  if(mem == 0)
+    return 0;
+  memset(mem, 0, PGSIZE);
+  candidate = kmalloc(sizeof(*candidate));
+  if(candidate == 0){
+    kfree_page(mem);
+    return 0;
+  }
+  candidate->index = index;
+  candidate->pa = (uint64)mem;
+
+  // Why this second traversal?
+  // 1. Another thread may have created the same page during our allocation
+  // 2. We must prevent duplicate pages for the same index
+  // 3. We need to atomically insert our page if still missing
+  acquire(&anon->lock);
+  for(page = anon->pages; page; page = page->next){
+    if(page->index == index){
+      kaddquota((void *)page->pa);
+      release(&anon->lock);
+      kfree(candidate);
+      kfree_page(mem);
+      return (void *)page->pa;
+    }
+  }
+  candidate->next = anon->pages;
+  anon->pages = candidate;
+  // kalloc's initial reference belongs to the object; add the PTE reference.
+  kaddquota(mem);
+  release(&anon->lock);
+  return mem;
+}
+
+// Zero a fresh page, then read the file range intersecting the faulted page.
+// The core-mm file fault handler; used by MAP_PRIVATE/MAP_SHARED file VMAs.
+static int
+file_vma_fault(struct vma_area *vma, uint64 page, void **mem)
+{
+  uint64 read_length;
+  uint64 file_offset;
+  void *mem_page;
+
+  mem_page = kalloc_page();
+  if(mem_page == 0)
+    return -1;
+  memset(mem_page, 0, PGSIZE);
+
+  read_length = PGSIZE;
+  if(page + read_length > vma->valid_end)
+    read_length = vma->valid_end > page ? vma->valid_end - page : 0;
+  file_offset = vma->offset + (page - vma->start);
+  if(file_offset < vma->offset || file_offset > 0xffffffffUL){
+    kfree_page(mem_page);
+    return -1;
+  }
+  if(read_length > 0 &&
+     fileread_at(vma->object->file, (uint64)mem_page, file_offset,
+                 read_length) < 0){
+    kfree_page(mem_page);
+    return -1;
+  }
+  *mem = mem_page;
+  return 0;
+}
+
+// Anonymous fault: shared maps the anon object page, private allocates a
+// fresh zero page.  The core-mm anonymous fault handler.
+static int
+anon_vma_fault(struct vma_area *vma, uint64 page, void **mem)
+{
+  uint64 anon_index;
+  void *mem_page;
+
+  if(vma->flags & MAP_SHARED){
+    anon_index = (vma->offset + page - vma->start) / PGSIZE;
+    mem_page = anon_page_get(vma->object->anon, anon_index);
+  } else {
+    mem_page = kalloc_page();
+    if(mem_page)
+      memset(mem_page, 0, PGSIZE);
+  }
+  if(mem_page == 0)
+    return -1;
+  *mem = mem_page;
+  return 0;
+}
+
+static int
+kbufdev_vma_fault(struct vma_area *vma, uint64 page, void **mem)
+{
+  struct kbuf *kbuf = vma->data;
+  uint64 index;
+
+  if(kbuf == 0)
+    return -1;
+  index = (vma->offset + page - vma->start) / PGSIZE;
+  *mem = kbuf_page_get(kbuf, index);
+  return *mem ? 0 : -1;
+}
+
+static const struct vma_ops file_vma_ops = {
+  .fault = file_vma_fault,
+};
+
+static const struct vma_ops anon_vma_ops = {
+  .fault = anon_vma_fault,
+};
+
+static const struct vma_ops kbufdev_vma_ops = {
+  .fault = kbufdev_vma_fault,
+};
+
 static struct mmap_object *
-mmap_object_create(enum vma_type type, struct file *file)
+mmap_object_create(enum vma_type type, struct file *file, int flags)
 {
   struct mmap_object *object = kmalloc(sizeof(*object));
 
@@ -72,8 +235,17 @@ mmap_object_create(enum vma_type type, struct file *file)
   initlock(&object->lock, "mmap_object");
   object->refcnt = 1;
   object->type = type;
-  if(type == VMA_FILE)
+  // A device mapping holds the device file (not the kbuf) so the buffer
+  // stays alive for the object's lifetime via fileclose->device close.
+  if(type == VMA_FILE || type == VMA_KBUF)
     object->file = filedup(file);
+  if (type == VMA_ANON && (flags & MAP_SHARED)) {
+    object->anon = anon_object_create();
+    if (object->anon == 0) {
+      kfree(object);
+      return 0;
+    }
+  }
   return object;
 }
 
@@ -106,6 +278,8 @@ mmap_object_put(struct mmap_object *object)
   if(destroy) {
     if(file)
       fileclose(file);
+    if(object->anon)
+      anon_object_destroy(object->anon);
     kfree(object);
   }
 }
@@ -151,7 +325,7 @@ vma_map_create(struct proc *p, uint64 addr, uint64 length, int prot,
     return MAP_FAILED;
   if(start + length < start)
     return MAP_FAILED;
-  if((object = mmap_object_create(type, file)) == 0)
+  if((object = mmap_object_create(type, file, flags)) == 0)
     return MAP_FAILED;
 
   memset(vma, 0, sizeof(*vma));
@@ -164,6 +338,16 @@ vma_map_create(struct proc *p, uint64 addr, uint64 length, int prot,
   vma->prot = prot;
   vma->flags = flags;
   vma->object = object;
+  // File and anonymous faults are core-mm logic; a device VMA gets its
+  // ops from the device's mmap callback after this returns.
+  vma->ops = 0;
+  vma->data = 0;
+  if(type == VMA_FILE)
+    vma->ops = &file_vma_ops;
+  else if(type == VMA_ANON)
+    vma->ops = &anon_vma_ops;
+  else
+     vma->ops = &kbufdev_vma_ops;
   return start;
 }
 
@@ -187,9 +371,40 @@ uint64
 vma_map_anon(struct proc *p, uint64 addr, uint64 length, int prot,
              int flags)
 {
-  if(flags != (MAP_PRIVATE | MAP_ANONYMOUS))
+  if(flags != (MAP_PRIVATE | MAP_ANONYMOUS) &&
+      flags != (MAP_SHARED | MAP_ANONYMOUS))
     return MAP_FAILED;
   return vma_map_create(p, addr, length, prot, flags, VMA_ANON, 0, 0);
+}
+
+uint64
+vma_map_device(struct proc *p, uint64 addr, uint64 length, int prot,
+               int flags, struct file *file, uint64 offset)
+{
+  struct vma_area *vma;
+  uint64 start;
+
+  if(flags != MAP_SHARED || file == 0 || file->type != FD_DEVICE ||
+     file->ops == 0 || file->ops->mmap == 0)
+    return MAP_FAILED;
+  if((prot & PROT_READ) && !file->readable)
+    return MAP_FAILED;
+  if((prot & PROT_WRITE) && !file->writable)
+    return MAP_FAILED;
+  // Create the VMA/object first (Linux mmap_region shape), then let the
+  // device's mmap callback validate against the VMA and configure ops/data.
+  start = vma_map_create(p, addr, length, prot, flags, VMA_KBUF,
+                         file, offset);
+  if(start == MAP_FAILED)
+    return MAP_FAILED;
+  vma = vma_find(p, start);
+  if(vma == 0 || vma->ops == 0 || vma->ops->fault == 0 ||
+        file->ops->mmap(file, vma, offset) < 0){
+    vma_unmap(p, start, length);
+    return MAP_FAILED;
+  }
+
+  return start;
 }
 
 static int
@@ -211,8 +426,6 @@ vm_fault(struct proc *p, uint64 va, int access)
   uint64 page;
   pte_t *pte;
   void *mem;
-  uint64 read_length;
-  uint64 file_offset;
   int pte_flags = PTE_U;
 
   if(va >= MAXVA || (vma = vma_find(p, va)) == 0)
@@ -228,27 +441,14 @@ vm_fault(struct proc *p, uint64 va, int access)
     return 0;
   }
 
-  mem = kalloc_page();
+  // Unified dispatch: the backing type decides how the page is produced.
+  // File/anon use core-mm handlers; a device uses the ops its driver set.
+  if(vma->ops == 0 || vma->ops->fault == 0)
+    return -1;
+  if(vma->ops->fault(vma, page, &mem) < 0)
+    return -1;
   if(mem == 0)
     return -1;
-  memset(mem, 0, PGSIZE);
-
-  if(vma->type == VMA_FILE){
-    read_length = PGSIZE;
-    if(page + read_length > vma->valid_end)
-      read_length = vma->valid_end > page ? vma->valid_end - page : 0;
-    file_offset = vma->offset + (page - vma->start);
-    if(file_offset < vma->offset || file_offset > 0xffffffffUL){
-      kfree_page(mem);
-      return -1;
-    }
-    if(read_length > 0 &&
-       fileread_at(vma->object->file, (uint64)mem, file_offset,
-                   read_length) < 0){
-      kfree_page(mem);
-      return -1;
-    }
-  }
 
   if(vma->prot & PROT_READ)
     pte_flags |= PTE_R;
@@ -309,6 +509,50 @@ vma_unmap_pages(struct proc *p, uint64 start, uint64 end)
     uvmunmap(p->kpagetable, page, 1, 0);
     uvmunmap(p->pagetable, page, 1, 1);
   }
+}
+
+// Export page-table work to drivers, modeled after Linux remap_pfn_range:
+// a device driver calls this from its f_op->mmap to install every page of a
+// page-backed VMA up front, so the mapping is fully resident when mmap
+// returns.  On success the fault handler is dropped (vma->ops = 0); any
+// later fault on the range is a hard error.  On failure, already-installed
+// pages are rolled back and the driver should fail the mmap request.
+int
+vma_populate(struct proc *p, struct vma_area *vma)
+{
+  uint64 page;
+  pte_t *pte;
+  void *mem;
+  int pte_flags = PTE_U;
+
+  if(vma->ops == 0 || vma->ops->fault == 0)
+    return -1;
+  if(vma->prot & PROT_READ)
+    pte_flags |= PTE_R;
+  if(vma->prot & PROT_WRITE)
+    pte_flags |= PTE_W;
+  if(vma->prot & PROT_EXEC)
+    pte_flags |= PTE_X;
+
+  for(page = vma->start; page < vma->end; page += PGSIZE){
+    pte = walk(p->pagetable, page, 0);
+    if(pte && (*pte & PTE_V))
+      continue;  // already resident
+    if(vma->ops->fault(vma, page, &mem) < 0 || mem == 0)
+      goto rollback;
+    if(mappages(p->pagetable, page, PGSIZE, (uint64)mem, pte_flags) < 0){
+      kfree_page(mem);
+      goto rollback;
+    }
+    upg2ukpg(p->pagetable, p->kpagetable, page, page + PGSIZE);
+  }
+  sfence_vma();
+  vma->ops = 0;  // fully resident: no fault handler, faults are errors
+  return 0;
+
+rollback:
+  vma_unmap_pages(p, vma->start, page);
+  return -1;
 }
 
 int

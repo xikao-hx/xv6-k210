@@ -8,6 +8,8 @@ struct proc;
 struct pipe;
 struct dirent;
 struct file;
+struct vma_area;
+struct vma_ops;
 
 // map major device number to device functions.
 struct file_operations {
@@ -15,6 +17,9 @@ struct file_operations {
   int (*close)(struct file *);
   int (*read)(struct file *, uint64, int);
   int (*write)(struct file *, uint64, int);
+  // Configure a freshly created device VMA (set vma->ops and vma->data).
+  // Called by the mmap VM after the VMA/object exist; Linux f_op->mmap shape.
+  int (*mmap)(struct file *, struct vma_area *, uint64);
   int (*ioctl)(struct file *, uint64, uint64);
 };
 
