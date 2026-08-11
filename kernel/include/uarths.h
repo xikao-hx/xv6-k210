@@ -184,6 +184,10 @@ typedef enum _uarths_stopbit
 
 typedef int (*uart_rx_observer_t)(int);
 
+#define UART_RX_KEEP          0
+#define UART_RX_CONSUME       1
+#define UART_RX_CONSUME_CANCEL 2
+
 void            uartinit(void);
 void            uartintr(void);
 void            uartputc(int);

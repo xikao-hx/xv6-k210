@@ -589,6 +589,12 @@ fork(void)
   return pid;
 }
 
+/*
+ * Set process group ID.
+ * target PID, 0 means current process
+ * target PGID, 0 means use target's PID as PGID
+ * Permission: only self or child process can be modified
+ */
 int
 proc_setpgid(struct proc *caller, int pid, int pgid)
 {
