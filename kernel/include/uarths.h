@@ -182,6 +182,8 @@ typedef enum _uarths_stopbit
     UARTHS_STOP_2
 } uarths_stopbit_t;
 
+typedef int (*uart_rx_observer_t)(int);
+
 void            uartinit(void);
 void            uartintr(void);
 void            uartputc(int);
@@ -198,6 +200,7 @@ void            uartrx_enable(void);
 void            uart_set_baud(int);
 void            uart_wait_tx_idle(void);
 void            uart_get_baud_info(uint32*);
+void            uart_set_rx_observer(uart_rx_observer_t);
 
 #ifdef __cplusplus
 }

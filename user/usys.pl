@@ -47,3 +47,5 @@ entry("ioctl");
 entry("signal");
 entry("sigsend");
 entry("sigreturn");
+entry("setpgid");
+entry("getpgrp");

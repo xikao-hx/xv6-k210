@@ -11,6 +11,7 @@
 #include "vm.h"
 #include "mmap.h"
 #include "signal.h"
+#include "console.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -118,6 +119,8 @@ usertrap(void)
     p->killed = 1;
   }
 
+  console_dispatch_events();
+
   // Give up the CPU on a timer tick, or when a higher-priority process
   // has been woken and asked to preempt.
   if(p != 0 && p->state == RUNNING && (which_dev == 2 || mycpu()->need_resched))
@@ -195,6 +198,10 @@ kerneltrap()
     printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
     panic("kerneltrap");
   }
+
+  // The idle scheduler has no process lock or device lock held.
+  if(myproc() == 0)
+    console_dispatch_events();
 
   // Give up the CPU on a timer tick, or when a higher-priority process
   // has been woken and asked to preempt.

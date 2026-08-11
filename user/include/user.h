@@ -38,6 +38,8 @@ int ioctl(int, int, uint64);
 sighandler_t signal(int, sighandler_t);
 int sigsend(int, int);
 int sigreturn(void);
+int setpgid(int, int);
+int getpgrp(void);
 
 // ulib.c
 int stat(const char*, struct stat*);

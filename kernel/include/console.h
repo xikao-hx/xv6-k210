@@ -9,6 +9,8 @@
 #define CONSOLE_IOCTL_SET_BAUD       0x04
 #define CONSOLE_IOCTL_GET_BAUD_INFO  0x05
 #define CONSOLE_IOCTL_GET_RX_STATS   0x06
+#define CONSOLE_IOCTL_SET_FG_PGRP    0x07
+#define CONSOLE_IOCTL_GET_FG_PGRP    0x08
 
 #define CONSOLE_MODE_TTY 0
 #define CONSOLE_MODE_RAW 1
@@ -29,5 +31,6 @@ struct console_rx_stats {
 
 void consoleinit(void);
 void consputc(int);
+void console_dispatch_events(void);
 
 #endif
