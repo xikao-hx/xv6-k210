@@ -105,6 +105,7 @@ AS = $(TOOLPREFIX)gas
 LD = $(TOOLPREFIX)ld
 OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
+AR = $(TOOLPREFIX)ar
 
 CFLAGS = -Wall  -O -fno-omit-frame-pointer -ggdb -g
 # LAB_LOCK: xv6-lab lock-acquisition stats, so that /dev/stats (used by
@@ -210,7 +211,11 @@ $(UBUILD)/%.o: $U/%.c $(BUILD_CONFIG)
 ULIB = $(UBUILD)/libc/ulib.o $(UBUILD)/usys.o $(UBUILD)/libc/printf.o $(UBUILD)/libc/umalloc.o
 
 ifeq ($(platform), k210)
-ULIB += $(UBUILD)/libc/oled.o
+# reference: only programs that actually call OLED_* / reference sprites
+# (rendertest, DinoGame, ...) pull the members in.  
+$(UBUILD)/libc/libgame.a: $(UBUILD)/libc/oled.o $(UBUILD)/libc/game_render.o $(UBUILD)/libc/game_data.o
+	$(AR) crs $@ $^
+ULIB += $(UBUILD)/libc/libgame.a
 endif
 
 define LINK_USER
@@ -295,7 +300,8 @@ UPROGS += \
 	$(UBUILD)/test/_spitest\
 	$(UBUILD)/test/_i2ctest\
 	$(UBUILD)/test/_dmactest\
-	$(UBUILD)/test/_oledfbtest
+	$(UBUILD)/test/_oledfbtest\
+	$(UBUILD)/test/_rendertest
 endif
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
