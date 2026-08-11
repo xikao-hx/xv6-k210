@@ -7,6 +7,7 @@
 #include "vm.h"
 
 extern struct proc proc[NPROC];
+static int signal_default_ignored(int);
 
 // Check if signal number is valid (1 to NSIG-1). Signal 0 is invalid
 // as it's only used for process existence testing (kill(pid, 0)).
@@ -97,6 +98,9 @@ signal_set_handler(struct proc *p, int signum, uint64 handler)
   acquire(&p->lock);
   old = p->sig_handlers[signum];
   p->sig_handlers[signum] = handler;
+  if(handler == (uint64)SIG_IGN ||
+     (handler == (uint64)SIG_DFL && signal_default_ignored(signum)))
+    p->sig_pending &= ~signal_bit(signum);
   release(&p->lock);
   return old;
 }
@@ -104,6 +108,11 @@ signal_set_handler(struct proc *p, int signum, uint64 handler)
 static void
 signal_mark_locked(struct proc *p, int signum)
 {
+  uint64 handler = p->sig_handlers[signum];
+
+  if(handler == (uint64)SIG_IGN ||
+     (handler == (uint64)SIG_DFL && signal_default_ignored(signum)))
+    return;
   p->sig_pending |= signal_bit(signum);
   if(signum == SIGKILL) {
     p->sig_term = signum;
@@ -111,6 +120,15 @@ signal_mark_locked(struct proc *p, int signum)
   }
   if(p->state == SLEEPING && p->interruptible_sleep)
     p->state = RUNNABLE;
+}
+
+int
+signal_send_locked(struct proc *p, int signum)
+{
+  if(p->state == UNUSED || !signal_valid(signum))
+    return -1;
+  signal_mark_locked(p, signum);
+  return 0;
 }
 
 // update signal pending bit
