@@ -118,8 +118,9 @@ usertrap(void)
     p->killed = 1;
   }
 
-  // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  // Give up the CPU on a timer tick, or when a higher-priority process
+  // has been woken and asked to preempt.
+  if(p != 0 && p->state == RUNNING && (which_dev == 2 || mycpu()->need_resched))
     yield();
 
   signal_deliver(p);
@@ -195,8 +196,10 @@ kerneltrap()
     panic("kerneltrap");
   }
 
-  // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING)
+  // Give up the CPU on a timer tick, or when a higher-priority process
+  // has been woken and asked to preempt.
+  if(myproc() != 0 && myproc()->state == RUNNING &&
+     (which_dev == 2 || mycpu()->need_resched))
     yield();
 
   // the yield() may have caused some traps to occur,

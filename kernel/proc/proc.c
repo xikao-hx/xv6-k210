@@ -29,6 +29,7 @@ static void freeproc(struct proc *p);
 static int mlfq_rr_next[MLFQ_LEVELS];
 static uint mlfq_last_boost_tick;
 static int mlfq_time_slices[MLFQ_LEVELS] = { 1, 2, 4, 8 };
+static uint mlfq_preempt_count;  // how many times a high-priority wakeup asked for preemption
 #else
 static int rr_next;
 #endif
@@ -271,6 +272,10 @@ mlfq_boost_if_needed(void)
 static void
 mlfq_promote_on_wakeup(struct proc *p, int reason)
 {
+  struct cpu *c;
+  struct proc *cur;
+  int i;
+
   if(reason == WAKEUP_IO || reason == WAKEUP_DEVICE) {
     if(p->queue_level > MLFQ_TOP_LEVEL)
       p->queue_level--;
@@ -279,6 +284,20 @@ mlfq_promote_on_wakeup(struct proc *p, int reason)
       p->io_wakeup_count++;
     else
       p->device_wakeup_count++;
+
+    // High-priority preemption: after promotion, ask any CPU currently
+    // running a lower-priority process to reschedule at its next trap
+    // return. Reading c->proc without its lock is a best-effort race;
+    // a missed preemption just waits for the next timer tick, and a
+    // spurious flag costs at most one extra reschedule.
+    for(i = 0; i < NCPU; i++) {
+      c = &cpus[i];
+      cur = c->proc;
+      if(cur != 0 && cur->state == RUNNING && p->queue_level < cur->queue_level) {
+        c->need_resched = 1;
+        mlfq_preempt_count++;
+      }
+    }
   }
 }
 #endif
@@ -737,6 +756,10 @@ scheduler(void)
     account_runnable_wait();
     p = pick_next_proc();
     if(p) {
+      // The chosen process is the highest-priority runnable one, so
+      // consume any preemption request for this CPU. A fresh wakeup
+      // during the run will set the flag again.
+      c->need_resched = 0;
       // Switch to chosen process. It releases p->lock before user space.
       run_proc(c, p);
       release(&p->lock);
@@ -1063,4 +1086,7 @@ procdump(void)
 #endif
     printf("\n");
   }
+#ifdef SCHED_MLFQ
+  printf("mlfq: preempt_requests=%d\n", mlfq_preempt_count);
+#endif
 }
