@@ -22,6 +22,7 @@ main(void)
   mknod("/dev/w25q64", DEV_SPI, SPI_DEV_W25Q64);
   mknod("/dev/oled", DEV_I2C, I2C_DEV_OLED);
   mknod("/dev/mpu6050", DEV_I2C, I2C_DEV_MPU6050);
+  mknod("/dev/oledfb", DEV_OLEDFB, 0);
 #endif
 
   open("/dev/console", O_RDWR);

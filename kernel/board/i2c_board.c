@@ -14,10 +14,10 @@
 /*  Controller instances                                              */
 /* ------------------------------------------------------------------ */
 
-/* I2C0: 100 kHz, DMA channels 2 (TX) / 3 (RX) */
+/* I2C0: 400 kHz (fast mode; SSD1306 OLED + MPU6050 both support it) */
 static struct i2c_controller i2c_ctrl_0 = {
     .i2c_data = {
-        .speed_hz = 100000,
+        .speed_hz = 400000,
         .chan_tx = DMAC_CHANNEL2,
         .chan_rx = DMAC_CHANNEL3,
     },

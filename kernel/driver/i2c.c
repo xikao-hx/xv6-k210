@@ -20,8 +20,13 @@
 #include "i2c_board.h"
 
 #define I2C_WAIT_TIMEOUT  1000000UL
-#define DMAC_WAIT_TIMEOUT 10000UL
+// dmac_wait_done spins on a counter, ~40ns per iteration.  I2C is slow: a
+// 129-byte frame takes ~2.9ms at 400kHz (11.6ms at 100kHz)
+#define DMAC_WAIT_TIMEOUT 10000000UL
 #define DMA_THRESHOLD 16
+// i2c_send/recv_data_dma stage one 4096-byte page as 32-bit words: at most
+// 1024 words fit, so a longer message would overflow the page.  
+#define I2C_DMA_MAX_LEN 1024
 
 volatile i2c_t *const i2c[3] = {
     (volatile i2c_t *)I2C0_V,
@@ -396,12 +401,14 @@ int i2c_transfer(struct i2c_device *dev, struct i2c_msg *msgs, int num) {
 
         /* read/write */
         if (msgs[i].flags & I2C_M_RD) {
-            if (i2c_data->dma_enable && msgs[i].len >= DMA_THRESHOLD)
+            if (i2c_data->dma_enable && msgs[i].len >= DMA_THRESHOLD &&
+                msgs[i].len <= I2C_DMA_MAX_LEN)
                 ret = i2c_recv_data_dma(i2c_data, msgs[i].buf, msgs[i].len, need_restart, is_lastmsg);
             else
                 ret = i2c_recv_data(i2c_data, msgs[i].buf, msgs[i].len, need_restart, is_lastmsg);
         } else {
-            if (i2c_data->dma_enable && msgs[i].len >= DMA_THRESHOLD)
+            if (i2c_data->dma_enable && msgs[i].len >= DMA_THRESHOLD &&
+                msgs[i].len <= I2C_DMA_MAX_LEN)
                 ret = i2c_send_data_dma(i2c_data, msgs[i].buf, msgs[i].len, need_restart, is_lastmsg);
             else
                 ret = i2c_send_data(i2c_data, msgs[i].buf, msgs[i].len, need_restart, is_lastmsg);

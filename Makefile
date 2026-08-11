@@ -78,6 +78,7 @@ OBJS += \
   $K/devsw/spidev.o \
   $K/devsw/i2cdev.o \
   $K/devsw/sdcarddev.o \
+  $K/devsw/oledfb.o \
   $K/driver/gpiohs.o \
   $K/driver/fpioa.o \
   $K/driver/utils.o \
@@ -293,7 +294,8 @@ UPROGS += \
 	$(UBUILD)/test/_sdtest\
 	$(UBUILD)/test/_spitest\
 	$(UBUILD)/test/_i2ctest\
-	$(UBUILD)/test/_dmactest
+	$(UBUILD)/test/_dmactest\
+	$(UBUILD)/test/_oledfbtest
 endif
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
