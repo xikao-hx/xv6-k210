@@ -23,9 +23,18 @@ static struct i2c_controller i2c_ctrl_0 = {
     },
 };
 
+static struct i2c_controller i2c_ctrl_1 = {
+    .i2c_data = {
+        .speed_hz = 400000,
+        .chan_tx = DMAC_CHANNEL4,
+        .chan_rx = DMAC_CHANNEL5,
+    },
+};
+
 /* Public controller table — the generic driver indexes this by bus number */
 struct i2c_controller *i2c_ctrls[I2C_DEVICE_MAX] = {
     [I2C_DEVICE_0] = &i2c_ctrl_0,
+    [I2C_DEVICE_1] = &i2c_ctrl_1,
 };
 
 /* ------------------------------------------------------------------ */
@@ -41,7 +50,7 @@ static struct i2c_device i2c_oled_dev = {
 
 /* MPU6050 accelerometer / gyroscope on I2C0, address 0x68, 7-bit */
 static struct i2c_device i2c_mpu6050_dev = {
-    .bus_num = I2C_DEVICE_0,
+    .bus_num = I2C_DEVICE_1,
     .slave_address = 0x68,
     .address_width = 7,
 };

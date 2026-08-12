@@ -4940,6 +4940,8 @@ void fpioa_pin_init() {
     /* i2c pin */
     fpioa_set_function(30, FUNC_I2C0_SCLK);
     fpioa_set_function(31, FUNC_I2C0_SDA);
+    fpioa_set_function(32, FUNC_I2C1_SCLK);
+    fpioa_set_function(33, FUNC_I2C1_SDA);
 
     /* spi1 pin (W25Q64): adjust physical pins to match your wiring */
     fpioa_set_function(15, FUNC_SPI1_D0);    // MOSI
