@@ -89,7 +89,7 @@ sample_tilt(void)
   if (mpu_fd < 0)
     return;
   t = mpu6050_tilt(mpu_fd);
-  printf("tilt: %d", t);
+  // printf("tilt: %d\n", t);
   if (t < 0)
     return;
   *tilt_state = t;
