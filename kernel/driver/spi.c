@@ -62,6 +62,7 @@ static int spi_clk_init(uint8 spi_num)
     // if(spi_num == 3)
         // sysctl_clock_set_clock_select(SYSCTL_CLOCK_SELECT_SPI3, 1);
     sysctl_clock_enable(SYSCTL_CLOCK_SPI0 + spi_num);
+    // spi_clk = 390MHz
     sysctl_clock_set_threshold(SYSCTL_THRESHOLD_SPI0 + spi_num, 0);
     return 0;
 }
@@ -192,11 +193,11 @@ spi_set_clk_rate(spi_device_num_t spi_num, uint32 hz)
         return -1;
     /*
      * spi_clk_init() fixes the SPI0/SPI1 threshold at zero, so their input
-     * clock matches the CPU clock on this K210 configuration. Avoid reading
-     * the SPI threshold bitfield here: that read is unreliable on real K210
-     * hardware and can collapse the requested divider to its minimum value.
+     * clock is PLL0/2 = 390MHz. Read the SPI input clock directly like the
+     * official SDK (sysctl_clock_get_freq(SPI0 + spi_num)) — the threshold
+     * read is now whole-word and reliable on real K210 (see 外设时钟配置方案.md §3).
      */
-    input_hz = sysctl_clock_get_freq(SYSCTL_CLOCK_CPU);
+    input_hz = sysctl_clock_get_freq(SYSCTL_CLOCK_SPI0 + spi_num);
     if(input_hz == 0)
         return -1;
     divisor = (input_hz + hz - 1) / hz;

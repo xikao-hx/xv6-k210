@@ -63,12 +63,17 @@ static int i2c_wait_done(i2c_device_number_t i2c_num, volatile i2c_t *i2c_adapte
     }
 }
 
-// static void i2c_clk_init(i2c_device_number_t i2c_num)
-// {
-//     // configASSERT(i2c_num < I2C_MAX_NUM);
-//     sysctl_clock_enable(SYSCTL_CLOCK_I2C0 + i2c_num);
-//     sysctl_clock_set_threshold(SYSCTL_THRESHOLD_I2C0 + i2c_num, 3);  // I2C_clk = PLL0 / 8 ≈ 100MHz
-// }
+static void i2c_clk_init(i2c_device_number_t i2c_num)
+{
+    sysctl_clock_enable(SYSCTL_CLOCK_I2C0 + i2c_num);
+
+    // PLL0 = 390MHz
+    // i2c_clk = PLL0 / ((threshold+1) * 2) 
+    // i2c_clk = PLL0 / 8 = 97.5MHz 
+    sysctl_clock_set_threshold(SYSCTL_THRESHOLD_I2C0 + i2c_num, 3);
+    if (sysctl_clock_get_threshold(SYSCTL_THRESHOLD_I2C0 + i2c_num) != 3)
+        LOG_W("i2c%d clk_th5 write not reflected\n", i2c_num);
+}
 
 void i2c_write_slave_addr(i2c_device_number_t i2c_num, uint16 slave_address) {
     volatile i2c_t *i2c_adapter = i2c[i2c_num];
@@ -85,11 +90,11 @@ void i2c_dw_init(i2c_device_number_t i2c_num) {
     volatile i2c_t *i2c_adapter = i2c[i2c_num];
     struct i2c_controller *i2c_ctrl = i2c_ctrls[i2c_num];
 
+    /* 先配置外设输入时钟（enable + threshold=3），再算分频，与官方 SDK 顺序一致 */
+    i2c_clk_init(i2c_num);
+
     /* calculation divider value */
-    // NOTE: Both sysctl_clock_get_freq(I2C0) and sysctl_clock_get_threshold()
-    // return wrong values on real K210 (bitfield register reads are broken).
-    // Derive I2C clock from CPU frequency with the known threshold we set above:
-    uint32_t v_i2c_freq = sysctl_clock_get_freq(SYSCTL_CLOCK_CPU) / 4;
+    uint32_t v_i2c_freq = sysctl_clock_get_freq(SYSCTL_CLOCK_I2C0 + i2c_num);
     uint32_t i2c_clk = i2c_ctrl->i2c_data.speed_hz;
     uint16_t v_period_clk_cnt = v_i2c_freq / i2c_clk / 2;
 

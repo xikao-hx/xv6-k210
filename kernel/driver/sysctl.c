@@ -285,6 +285,19 @@ int sysctl_clock_enable(sysctl_clock_t clock)
     return 0;
 }
 
+/*
+ * K210 sysctl 总线不支持子字（字节/半字）访问（板上实测：lbu/lhu 读回 0xFF、sb/sh
+ * 写不生效，见 doc/重构文档/外设时钟配置方案.md §3）。8/16 位阈值字段的读写必须整字
+ * 进行：读用 CLK_TH_FIELD（lw + 移位掩码），写用 CLK_TH_SET_FIELD（lw→掩码→sw，
+ * 与 sysctl_clock_enable 同款可靠路径）。2/4 位字段编译器本就生成整字 RMW，不受影响。
+ */
+#define CLK_TH_FIELD(reg, shift, width) \
+    (int)(((*(volatile uint32 *)&sysctl->reg) >> (shift)) & ((1u << (width)) - 1))
+#define CLK_TH_SET_FIELD(reg, shift, width, val) do { \
+    volatile uint32 *r = (volatile uint32 *)&sysctl->reg; \
+    *r = (*r & ~(((1u << (width)) - 1) << (shift))) | ((uint32)(val) << (shift)); \
+} while(0)
+
 int sysctl_clock_set_threshold(sysctl_threshold_t which, int threshold)
 {
     int result = 0;
@@ -331,64 +344,66 @@ int sysctl_clock_set_threshold(sysctl_threshold_t which, int threshold)
 
         /*
          * These threshold is 8 bit width
+         * 字节写 sb 在本板不生效，改为整字 RMW 写（CLK_TH_SET_FIELD）
          */
         case SYSCTL_THRESHOLD_SPI0:
-            sysctl->clk_th1.spi0_clk_threshold = (uint8)threshold;
+            CLK_TH_SET_FIELD(clk_th1, 0, 8, (uint8)threshold);
             break;
         case SYSCTL_THRESHOLD_SPI1:
-            sysctl->clk_th1.spi1_clk_threshold = (uint8)threshold;
+            CLK_TH_SET_FIELD(clk_th1, 8, 8, (uint8)threshold);
             break;
         case SYSCTL_THRESHOLD_SPI2:
-            sysctl->clk_th1.spi2_clk_threshold = (uint8)threshold;
+            CLK_TH_SET_FIELD(clk_th1, 16, 8, (uint8)threshold);
             break;
         case SYSCTL_THRESHOLD_SPI3:
-            sysctl->clk_th1.spi3_clk_threshold = (uint8)threshold;
+            CLK_TH_SET_FIELD(clk_th1, 24, 8, (uint8)threshold);
             break;
         case SYSCTL_THRESHOLD_TIMER0:
-            sysctl->clk_th2.timer0_clk_threshold = (uint8)threshold;
+            CLK_TH_SET_FIELD(clk_th2, 0, 8, (uint8)threshold);
             break;
         case SYSCTL_THRESHOLD_TIMER1:
-            sysctl->clk_th2.timer1_clk_threshold = (uint8)threshold;
+            CLK_TH_SET_FIELD(clk_th2, 8, 8, (uint8)threshold);
             break;
         case SYSCTL_THRESHOLD_TIMER2:
-            sysctl->clk_th2.timer2_clk_threshold = (uint8)threshold;
+            CLK_TH_SET_FIELD(clk_th2, 16, 8, (uint8)threshold);
             break;
         case SYSCTL_THRESHOLD_I2S0_M:
-            sysctl->clk_th4.i2s0_mclk_threshold = (uint8)threshold;
+            CLK_TH_SET_FIELD(clk_th4, 16, 8, (uint8)threshold);
             break;
         case SYSCTL_THRESHOLD_I2S1_M:
-            sysctl->clk_th4.i2s1_mclk_threshold = (uint8)threshold;
+            CLK_TH_SET_FIELD(clk_th4, 24, 8, (uint8)threshold);
             break;
         case SYSCTL_THRESHOLD_I2S2_M:
-            sysctl->clk_th5.i2s2_mclk_threshold = (uint8)threshold;
+            CLK_TH_SET_FIELD(clk_th5, 0, 8, (uint8)threshold);
             break;
         case SYSCTL_THRESHOLD_I2C0:
-            sysctl->clk_th5.i2c0_clk_threshold = (uint8)threshold;
+            CLK_TH_SET_FIELD(clk_th5, 8, 8, (uint8)threshold);
             break;
         case SYSCTL_THRESHOLD_I2C1:
-            sysctl->clk_th5.i2c1_clk_threshold = (uint8)threshold;
+            CLK_TH_SET_FIELD(clk_th5, 16, 8, (uint8)threshold);
             break;
         case SYSCTL_THRESHOLD_I2C2:
-            sysctl->clk_th5.i2c2_clk_threshold = (uint8)threshold;
+            CLK_TH_SET_FIELD(clk_th5, 24, 8, (uint8)threshold);
             break;
         case SYSCTL_THRESHOLD_WDT0:
-            sysctl->clk_th6.wdt0_clk_threshold = (uint8)threshold;
+            CLK_TH_SET_FIELD(clk_th6, 0, 8, (uint8)threshold);
             break;
         case SYSCTL_THRESHOLD_WDT1:
-            sysctl->clk_th6.wdt1_clk_threshold = (uint8)threshold;
+            CLK_TH_SET_FIELD(clk_th6, 8, 8, (uint8)threshold);
             break;
 
         /*
          * These threshold is 16 bit width
+         * 半字写 sh 在本板不生效，改为整字 RMW 写（CLK_TH_SET_FIELD）
          */
         case SYSCTL_THRESHOLD_I2S0:
-            sysctl->clk_th3.i2s0_clk_threshold = (uint16)threshold;
+            CLK_TH_SET_FIELD(clk_th3, 0, 16, (uint16)threshold);
             break;
         case SYSCTL_THRESHOLD_I2S1:
-            sysctl->clk_th3.i2s1_clk_threshold = (uint16)threshold;
+            CLK_TH_SET_FIELD(clk_th3, 16, 16, (uint16)threshold);
             break;
         case SYSCTL_THRESHOLD_I2S2:
-            sysctl->clk_th4.i2s2_clk_threshold = (uint16)threshold;
+            CLK_TH_SET_FIELD(clk_th4, 0, 16, (uint16)threshold);
             break;
 
         default:
@@ -435,58 +450,58 @@ int sysctl_clock_get_threshold(sysctl_threshold_t which)
             threshold = (int)sysctl->clk_th0.rom_gclk_threshold;
             break;
         case SYSCTL_THRESHOLD_SPI0:
-            threshold = (int)sysctl->clk_th1.spi0_clk_threshold;
+            threshold = CLK_TH_FIELD(clk_th1, 0, 8);
             break;
         case SYSCTL_THRESHOLD_SPI1:
-            threshold = (int)sysctl->clk_th1.spi1_clk_threshold;
+            threshold = CLK_TH_FIELD(clk_th1, 8, 8);
             break;
         case SYSCTL_THRESHOLD_SPI2:
-            threshold = (int)sysctl->clk_th1.spi2_clk_threshold;
+            threshold = CLK_TH_FIELD(clk_th1, 16, 8);
             break;
         case SYSCTL_THRESHOLD_SPI3:
-            threshold = (int)sysctl->clk_th1.spi3_clk_threshold;
+            threshold = CLK_TH_FIELD(clk_th1, 24, 8);
             break;
         case SYSCTL_THRESHOLD_TIMER0:
-            threshold = (int)sysctl->clk_th2.timer0_clk_threshold;
+            threshold = CLK_TH_FIELD(clk_th2, 0, 8);
             break;
         case SYSCTL_THRESHOLD_TIMER1:
-            threshold = (int)sysctl->clk_th2.timer1_clk_threshold;
+            threshold = CLK_TH_FIELD(clk_th2, 8, 8);
             break;
         case SYSCTL_THRESHOLD_TIMER2:
-            threshold = (int)sysctl->clk_th2.timer2_clk_threshold;
+            threshold = CLK_TH_FIELD(clk_th2, 16, 8);
             break;
         case SYSCTL_THRESHOLD_I2S0:
-            threshold = (int)sysctl->clk_th3.i2s0_clk_threshold;
+            threshold = CLK_TH_FIELD(clk_th3, 0, 16);
             break;
         case SYSCTL_THRESHOLD_I2S1:
-            threshold = (int)sysctl->clk_th3.i2s1_clk_threshold;
+            threshold = CLK_TH_FIELD(clk_th3, 16, 16);
             break;
         case SYSCTL_THRESHOLD_I2S2:
-            threshold = (int)sysctl->clk_th4.i2s2_clk_threshold;
+            threshold = CLK_TH_FIELD(clk_th4, 0, 16);
             break;
         case SYSCTL_THRESHOLD_I2S0_M:
-            threshold = (int)sysctl->clk_th4.i2s0_mclk_threshold;
+            threshold = CLK_TH_FIELD(clk_th4, 16, 8);
             break;
         case SYSCTL_THRESHOLD_I2S1_M:
-            threshold = (int)sysctl->clk_th4.i2s1_mclk_threshold;
+            threshold = CLK_TH_FIELD(clk_th4, 24, 8);
             break;
         case SYSCTL_THRESHOLD_I2S2_M:
-            threshold = (int)sysctl->clk_th5.i2s2_mclk_threshold;
+            threshold = CLK_TH_FIELD(clk_th5, 0, 8);
             break;
         case SYSCTL_THRESHOLD_I2C0:
-            threshold = (int)sysctl->clk_th5.i2c0_clk_threshold;
+            threshold = CLK_TH_FIELD(clk_th5, 8, 8);
             break;
         case SYSCTL_THRESHOLD_I2C1:
-            threshold = (int)sysctl->clk_th5.i2c1_clk_threshold;
+            threshold = CLK_TH_FIELD(clk_th5, 16, 8);
             break;
         case SYSCTL_THRESHOLD_I2C2:
-            threshold = (int)sysctl->clk_th5.i2c2_clk_threshold;
+            threshold = CLK_TH_FIELD(clk_th5, 24, 8);
             break;
         case SYSCTL_THRESHOLD_WDT0:
-            threshold = (int)sysctl->clk_th6.wdt0_clk_threshold;
+            threshold = CLK_TH_FIELD(clk_th6, 0, 8);
             break;
         case SYSCTL_THRESHOLD_WDT1:
-            threshold = (int)sysctl->clk_th6.wdt1_clk_threshold;
+            threshold = CLK_TH_FIELD(clk_th6, 8, 8);
             break;
 
         default:
