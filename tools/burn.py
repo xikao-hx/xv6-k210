@@ -245,11 +245,32 @@ def send_msg(ser, seq, type_, payload=b''):
     ser.flush()
 
 
+# Handshake pacing.  The K210 UARTHS hardware RX FIFO holds only 8 bytes, and
+# the shell echoes each character synchronously (interrupts are disabled while
+# uartputc_sync() waits on TX), so a burst of shell-command bytes can overflow
+# the FIFO and drop characters (observed as '/brn' instead of '/burn', often
+# losing the trailing '\n' that triggers execution).  Spacing the bytes well
+# beyond the shell's per-byte processing keeps the FIFO from ever accumulating.
+# The settle after Ctrl-U lets the board finish printing the erase backspaces
+# of a previous partial line before the command bytes start arriving.
+SHELL_BYTE_DELAY = 0.010   # seconds between command bytes
+SHELL_CTRL_U_SETTLE = 0.05  # seconds to wait after Ctrl-U
+
+
 def send_shell_command(ser, cmd):
-    """Clear the current shell input line and send one command."""
+    """Clear the current shell input line and send one command.
+
+    Each byte is sent with a delay so the board's 8-byte UARTHS RX FIFO never
+    fills while the shell is busy echoing or erasing.
+    """
     ser.write(b"\x15")
-    ser.write(cmd.encode("ascii") + b"\n")
     ser.flush()
+    time.sleep(SHELL_CTRL_U_SETTLE)
+    data = cmd.encode("ascii") + b"\n"
+    for byte in data:
+        ser.write(bytes((byte,)))
+        ser.flush()
+        time.sleep(SHELL_BYTE_DELAY)
 
 
 def recv_msg(ser, timeout=5, context="recv"):
@@ -305,6 +326,7 @@ def recv_msg(ser, timeout=5, context="recv"):
 
 
 def main():
+    global SHELL_BYTE_DELAY, SHELL_CTRL_U_SETTLE
     parser = argparse.ArgumentParser(
         description="Burn a filesystem image to xv6-k210 SD card via UART")
     parser.add_argument("port", help="Serial port (e.g. /dev/ttyUSB2)")
@@ -318,6 +340,12 @@ def main():
                         help="Shell handshake baud (default: 115200)")
     parser.add_argument("--burn-cmd", default="/burn",
                         help="Command used to start the board burn program (default: /burn)")
+    parser.add_argument("--shell-byte-delay", type=float, default=SHELL_BYTE_DELAY,
+                        help="Delay in seconds between shell-command bytes "
+                             "(default: %(default)s)")
+    parser.add_argument("--shell-ctrl-u-settle", type=float, default=SHELL_CTRL_U_SETTLE,
+                        help="Seconds to wait after Ctrl-U before sending the "
+                             "command (default: %(default)s)")
     parser.add_argument("--full-image", action="store_true",
                         help="Send the whole image file instead of trimming FAT32 free space")
     parser.add_argument("--dry-run", action="store_true",
@@ -325,6 +353,9 @@ def main():
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Print every DATA/ACK exchange, not just startup and failures")
     args = parser.parse_args()
+
+    SHELL_BYTE_DELAY = args.shell_byte_delay
+    SHELL_CTRL_U_SETTLE = args.shell_ctrl_u_settle
 
     port = args.port
     img_path = args.image
