@@ -16,9 +16,11 @@
 #include "file.h"
 #include "console.h"
 #include "sdcarddev.h"
+#include "oledfb.h"
 #include "oled.h"
 #include "user.h"
 #include "fcntl.h"
+#include <stdarg.h>
 
 #define MAX_RETRY    5
 #define CONSOLE_BAUD 115200
@@ -40,6 +42,62 @@
 #define ACK_BAUD     0x04
 
 #define BURN_PROGRESS_TITLE "WRITING FS V2"
+
+static int
+oled_init(void)
+{
+  OLED_init();   /* opens /dev/oledfb + mmap; exits on failure */
+  OLED_Clear();
+  return 0;
+}
+
+static void
+oled_write_row(uint8 row, const char *str)
+{
+  if (row > 3)
+    return;
+  OLED_ClearArea(0, row * 16, OLEDFB_W, 16);  /* clear row */
+  OLED_ShowString(0, row * 16, str, OLED_8X16);
+  OLED_Flush();
+}
+
+int vsnprintf(char *buf, int n, const char *fmt, va_list ap);
+
+static void
+oled_printf(uint8 row, uint8 col, const char *fmt, ...)
+{
+  char buf[17];
+  va_list ap;
+
+  va_start(ap, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  OLED_ClearArea(0, row * 16, OLEDFB_W, 16);  /* clear row */
+  OLED_ShowString(col * 8, row * 16, buf, OLED_8X16);
+  OLED_Flush();
+}
+
+static void
+oled_show_hex_num(uint8 row, uint8 col, uint32 num, uint8 len)
+{
+  OLED_ShowHexNum(col * 8, row * 16, num, len, OLED_8X16);
+  OLED_Flush();
+}
+
+static void
+oled_show_hex32(uint8 row, uint8 col, uint32 val)
+{
+  OLED_ShowHex32(col * 8, row * 16, val, OLED_8X16);
+  OLED_Flush();
+}
+
+static void
+oled_write_hexrow(uint8 row, const char *label, const uint8 *data, int n)
+{
+  OLED_ClearArea(0, row * 16, OLEDFB_W, 16);  /* clear row */
+  OLED_ShowHexRow(0, row * 16, label, data, n, OLED_8X16);
+  OLED_Flush();
+}
 
 static void
 put32le(uint8 *p, uint32 v)

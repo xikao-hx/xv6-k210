@@ -211,9 +211,9 @@ $(UBUILD)/%.o: $U/%.c $(BUILD_CONFIG)
 ULIB = $(UBUILD)/libc/ulib.o $(UBUILD)/usys.o $(UBUILD)/libc/printf.o $(UBUILD)/libc/umalloc.o
 
 ifeq ($(platform), k210)
-# reference: only programs that actually call OLED_* / reference sprites
-# (rendertest, DinoGame, ...) pull the members in.  
-$(UBUILD)/libc/libgame.a: $(UBUILD)/libc/oled.o $(UBUILD)/libc/game_render.o $(UBUILD)/libc/game_data.o
+# reference: only programs that actually call OLED_* / reference sprites /
+# MPU6050_* (rendertest, DinoGame, mpu6050, i2ctest, ...) pull the members in.
+$(UBUILD)/libc/libgame.a: $(UBUILD)/libc/oled.o $(UBUILD)/libc/game_data.o $(UBUILD)/libc/mpu6050.o
 	$(AR) crs $@ $^
 ULIB += $(UBUILD)/libc/libgame.a
 endif
@@ -292,7 +292,6 @@ UPROGS += $(TESTCASE_PROGS)
 # Platform-specific objects
 ifeq ($(platform), k210)
 UPROGS += \
-	$(UBUILD)/app/_mpu6050\
 	$(UBUILD)/app/_w25q64\
 	$(UBUILD)/app/_burn\
 	$(UBUILD)/test/_consoletest\
@@ -301,7 +300,8 @@ UPROGS += \
 	$(UBUILD)/test/_i2ctest\
 	$(UBUILD)/test/_dmactest\
 	$(UBUILD)/test/_oledfbtest\
-	$(UBUILD)/test/_rendertest
+	$(UBUILD)/test/_rendertest\
+	$(UBUILD)/app/_dino
 endif
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
@@ -387,4 +387,5 @@ sdcard: fs
 
 # BUG: The baud rate of K210 must be increased.
 download: fs
+	@sudo chmod 777 $(k210-serialport)
 	@python3 tools/burn.py --baud 460800 --board-baud 500000 $(k210-serialport) target/fs.img

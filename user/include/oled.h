@@ -1,25 +1,29 @@
-#ifndef __USER_OLED_H
-#define __USER_OLED_H
+#ifndef __OLED_H
+#define __OLED_H
 
-#include "types.h"
+#include "oledfb.h"
 
-// OLED display functions for user space
-// Uses I2C device interface (/dev/i2c-0)
+#define OLED_8X16   8
+#define OLED_6X8    6
 
-int  oled_init(void);                           // init I2C & OLED, returns 0 or -1
-int  oled_ready(void);
-void oled_clear(void);
-void oled_show_char(uint8 row, uint8 col, char ch);
-void oled_show_string(uint8 row, uint8 col, const char *str);
-void oled_show_num(uint8 row, uint8 col, uint32 num, uint8 len);
-void oled_show_signed_num(uint8 row, uint8 col, int num, uint8 len);
-void oled_show_hex_num(uint8 row, uint8 col, uint32 num, uint8 len);
-void oled_show_bin_num(uint8 row, uint8 col, uint32 num, uint8 len);
-void oled_show_hex32(uint8 row, uint8 col, uint32 val);
-void oled_printf(uint8 row, uint8 col, const char *fmt, ...);
+// Fill selectors for DrawRectangle / DrawCircle.
+#define OLED_UNFILLED  0
+#define OLED_FILLED    1
 
-// Convenience: write + clear + set cursor
-void oled_write_row(uint8 row, const char *str);
-void oled_write_hexrow(uint8 row, const char *label, const uint8 *data, int n);
+void OLED_init(void);
+void OLED_Clear(void);
+void OLED_ClearArea(int X, int Y, int W, int H);
+void OLED_ShowImage(int X, int Y, int w, int h, const unsigned char *Image);
+void OLED_ShowChar(int X, int Y, char Char, unsigned char FontSize);
+void OLED_ShowString(int X, int Y, const char *String, unsigned char FontSize);
+void OLED_ShowNum(int X, int Y, unsigned int Number, unsigned char Length, unsigned char FontSize);
+void OLED_ShowHexNum(int X, int Y, unsigned int Number, unsigned char Length, unsigned char FontSize);
+void OLED_ShowHex32(int X, int Y, unsigned int val, unsigned char FontSize);
+void OLED_ShowHexRow(int X, int Y, const char *label, const unsigned char *data, int n, unsigned char FontSize);
+void OLED_DrawPoint(int X, int Y);
+void OLED_DrawLine(int X0, int Y0, int X1, int Y1);
+void OLED_DrawRectangle(int X, int Y, int Width, int Height, int IsFilled);
+void OLED_DrawCircle(int X, int Y, int Radius, int IsFilled);
+int OLED_Flush(void);
 
-#endif
+#endif /* __OLED_H */

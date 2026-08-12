@@ -1,27 +1,13 @@
-// Step 1 acceptance test for /dev/oledfb.
-//
-//   oledfbtest        open+mmap, render text into the fb, verify roundtrip
-//   oledfbtest segv   open+mmap, then write past the VMA -> expect SEGV
-//
-// Text rendering: OLED_F6x8 (6x8, one byte per column) and OLED_F8x16 both
-// use the SSD1306 page convention, bit k = page row k (bit0 = the page's
-// top row), so glyph columns copy straight into a page row.  F6x8 fills one
-// page per character; F8x16 spans two pages (first 8 bytes = upper 8 rows,
-// second 8 bytes = lower 8 rows).  Neither needs a bit flip.
 #include "oledfb.h"
 #include "fcntl.h"
 #include "user.h"
 
-// Both fonts are defined in oled_font.h, which is only included by oled.c;
-// referencing them here as externs links against the ulib copy.
 extern const unsigned char OLED_F8x16[][16];
 extern const unsigned char OLED_F6x8[][6];
 
 #define MAP_FAILED ((void *)-1)
 
 // 6x8 font, page-format copy: fb[page*128 + x + col] = glyph[col].
-// OLED_F6x8 is already in the SSD1306 page convention (bit0 = top row of
-// the page), so glyph columns go in as-is - no bit flip.
 static void
 draw_char6(char *fb, int page, int x, char c)
 {
@@ -73,10 +59,8 @@ main(int argc, char *argv[])
 
   /* clear the fb, then render two lines of text.
    * ORDER SWAPPED (I2C diagnostic): "xv6 DINO" (6x8) first at page 0,
-   * "OLED" (8x16) second at pages 4-5.  If the SSD1306 corrupts later
-   * bytes of the 1024-byte burst, the SECOND line garbles no matter which
-   * text it holds; if the F6x8 rendering itself is wrong, the FIRST line
-   * garbles. */
+   * "OLED" (8x16) second at pages 4-5. 
+   *  */
   for(int i = 0; i < OLEDFB_FB_SIZE; i++)
     fb[i] = 0x00;
 

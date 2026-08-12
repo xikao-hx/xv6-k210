@@ -9,17 +9,15 @@
 // independent Python reference implementation of the same algorithm.
 
 #include "oledfb.h"
-#include "game_render.h"
+#include "oled.h"
 #include "game_data.h"
 #include "user.h"
 
 int
 main(void)
 {
-  int fd = 0;
-
   /* 1. init */
-  fd = OLED_init();
+  OLED_init();
   /* 2. clear */
   OLED_Clear();
 
@@ -75,7 +73,7 @@ main(void)
   OLED_ShowString(10, 28, "render OK", OLED_6X8);
   OLED_ShowNum(10, 36, 12345, 5, OLED_6X8);
 
-  if (ioctl(fd, OLEDFB_IOCTL_FLUSH, 0) < 0)
+  if (OLED_Flush() < 0)
     printf("rendertest: FLUSH failed (I2C?) - display may be blank\n");
   else
     printf("rendertest: FLUSH OK\n");

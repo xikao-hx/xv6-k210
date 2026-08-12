@@ -1,7 +1,4 @@
-// 1bpp SSD1306 sprite/font bitmap data (page format: byte (row/8)*w + col,
-// bit k = pixel of the (row/8)*8+k'th row).  Definitions live in this single
-// .o so every program links them exactly once; other files use the extern
-// declarations in game_data.h.  Mirrors game/OLED.c.
+#include "oled_font.h"
 
 const unsigned char GROUND[] =
 {
