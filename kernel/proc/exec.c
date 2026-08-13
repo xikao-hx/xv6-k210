@@ -136,6 +136,15 @@ exec(char *path, char **argv)
   // Unmap old user mappings, then copy new ones from the new pagetable.
   uvmunmap(p->kpagetable, 0, PGROUNDUP(old_sz) / PGSIZE, 0);
   upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz);
+  // K210: flush the TLB (and the instruction cache via fence.i) BEFORE the
+  // old page table is freed -- otherwise a stale mapping for the newly loaded
+  // program's VA (e.g. its code at 0x0-0xN) can still resolve to an old page
+  // that proc_freepagetable just kfree'd (0x01-filled), so the CPU fetches
+  // garbage and RustSBI panics on a "legal" instruction.  The plain sfence.vma
+  // in trampoline.S only flushes the data TLB on K210; see the fix in
+  // doc/调试文档/2.rustsbi适配os调试记录.md 问题三.  This call was dropped in a
+  // refactor and the panic returned intermittently.
+  sfence_vma();
 
   proc_freepagetable(oldpagetable, old_sz);
   signal_reset_on_exec(p);
