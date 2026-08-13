@@ -8,6 +8,9 @@
 #include "syscall.h"
 #include "trap.h"
 #include "uarths.h"
+#ifndef QEMU
+#include "uart.h"
+#endif
 #include "vm.h"
 #include "mmap.h"
 #include "signal.h"
@@ -110,7 +113,8 @@ usertrap(void)
         p->killed = 1;
       }
     } else {
-      printf("usertrap(): page fault is illegal\n");
+      printf("usertrap(): page fault is illegal pid=%d sepc=%p stval=%p\n",
+             p->pid, r_sepc(), r_stval());
       p->killed = 1;
     }
   } else {
@@ -256,7 +260,11 @@ devintr()
     // ===============================
 
     if(irq == UART0_IRQ){
+      uarthsintr();
+#ifndef QEMU
+    } else if(irq == UART_IRQ){
       uartintr();
+#endif
     } else if(irq == DISK_IRQ){
       disk_intr();
     } else if(irq){

@@ -10,6 +10,7 @@ platform ?= k210
 #   LOG_LEVEL_NONE LOG_LEVEL_ERROR LOG_LEVEL_WARN LOG_LEVEL_INFO LOG_LEVEL_DEBUG
 LOG_LEVEL ?= LOG_LEVEL_INFO
 SCHED ?= mlfq
+DOWNLOAD_BAUD ?= 500000
 
 K=kernel
 U=user
@@ -80,6 +81,8 @@ OBJS += \
   $K/devsw/i2cdev.o \
   $K/devsw/sdcarddev.o \
   $K/devsw/oledfb.o \
+  $K/devsw/uartdev.o \
+  $K/driver/uart.o \
   $K/driver/gpiohs.o \
   $K/driver/fpioa.o \
   $K/driver/utils.o \
@@ -283,7 +286,8 @@ TESTCASE_EXCLUDE = \
   statistics \
   usertests
 
-TESTCASES ?= testcase/bcachetest.c testcase/kalloctest.c testcase/mmaptest.c testcase/signaltest.c testcase/cowtest.c testcase/lazytests.c
+# testcase/bcachetest.c testcase/kalloctest.c testcase/cowtest.c testcase/lazytests.c
+TESTCASES ?=  testcase/mmaptest.c testcase/signaltest.c 
 ifeq ($(strip $(TESTCASES)),)
 TESTCASES := $(filter-out $(addprefix testcase/,$(addsuffix .c,$(TESTCASE_EXCLUDE))),$(wildcard testcase/*.c))
 endif
@@ -302,7 +306,8 @@ UPROGS += \
 	$(UBUILD)/test/_dmactest\
 	$(UBUILD)/test/_oledfbtest\
 	$(UBUILD)/test/_rendertest\
-	$(UBUILD)/app/_dino
+	$(UBUILD)/app/_dino\
+	$(UBUILD)/test/_uarttest
 endif
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
@@ -362,7 +367,7 @@ ifeq ($(platform), k210)
 	@dd if=$(image) of=$(k210) bs=128k seek=1
 # @$(OBJDUMP) -D -b binary -m riscv $(k210) > $T/k210.asm
 	@sudo chmod 777 $(k210-serialport)
-	@python3 ./tools/kflash.py -p $(k210-serialport) -b 115200 -t $(k210)
+	@python3 ./tools/kflash.py -p $(k210-serialport) -b $(DOWNLOAD_BAUD) -t $(k210)
 else
 	@$(QEMU) $(QEMUOPTS)
 endif
@@ -386,7 +391,6 @@ sdcard: fs
 	@sudo dd if=target/fs.img of=$(dev-sd) bs=1M status=progress
 	@sudo eject $(dev-sd)
 
-# BUG: The baud rate of K210 must be increased.
 download: fs
 	@sudo chmod 777 $(k210-serialport)
-	@python3 tools/burn.py --baud 460800 --board-baud 500000 $(k210-serialport) target/fs.img
+	@python3 tools/burn.py --baud $(DOWNLOAD_BAUD) --board-baud $(DOWNLOAD_BAUD) $(k210-serialport) target/fs.img

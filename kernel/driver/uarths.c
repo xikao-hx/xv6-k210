@@ -34,31 +34,31 @@ volatile uarths_t *const uarths = (volatile uarths_t *)UART0_V;
 
 #endif
 
-#define UART_RX_BUF_SIZE 32768
-#define UART_TX_BUF_SIZE 4096
+#define UARTHS_RX_BUF_SIZE 32768
+#define UARTHS_TX_BUF_SIZE 4096
 
 // RX/TX state, split so rx control flags and tx state stay independent.
 // Each backing array is one byte longer than its size because a ringbuffer
 // reserves one slot to tell "empty" apart from "full"; ringbuffer_capacity()
 // reports the real usable size (32768 / 4096).
-struct uart_rx {
+struct uarths_rx {
   struct spinlock lock;
-  char buf[UART_RX_BUF_SIZE + 1];
+  char buf[UARTHS_RX_BUF_SIZE + 1];
   struct ringbuffer ring;
   uint dropped;        // bytes discarded because the ring was full
-  uint epoch;          // bumped by uart_flush_rx to wake blocked readers
+  uint epoch;          // bumped by uarths_flush_rx to wake blocked readers
   int cancel_pending;  // observer (Ctrl-C) asked to abort the current read
-  uart_rx_observer_t observer;
+  uarths_rx_observer_t observer;
 };
 
-struct uart_tx {
+struct uarths_tx {
   struct spinlock lock;
-  char buf[UART_TX_BUF_SIZE + 1];
+  char buf[UARTHS_TX_BUF_SIZE + 1];
   struct ringbuffer ring;
 };
 
-static struct uart_rx uart_rx;
-static struct uart_tx uart_tx;
+static struct uarths_rx uarths_rx;
+static struct uarths_tx uarths_tx;
 static uint32 requested_baud;
 extern volatile int panicked;
 
@@ -67,7 +67,7 @@ extern volatile int panicked;
 // the two directions read side by side.
 
 static int
-uart_hw_getc(void)
+uarths_hw_getc(void)
 {
 #ifdef QEMU
   if ((ReadReg(LSR) & LSR_RX_READY) == 0)
@@ -85,7 +85,7 @@ uart_hw_getc(void)
 // RX-enable is driver-internal state: it is toggled around a baud switch and
 // at init, never by higher layers.
 static void
-uart_rxenable(int enabled)
+uarths_rxenable(int enabled)
 {
 #ifdef QEMU
   unsigned char ier = ReadReg(IER);
@@ -103,14 +103,14 @@ uart_rxenable(int enabled)
 // Discard whatever sits in the hardware RX FIFO.  Used on flush and baud
 // switch; the soft ring is untouched here.
 static void
-uart_hw_drain_fifo(void)
+uarths_hw_drain_fifo(void)
 {
-  while (uart_hw_getc() != -1)
+  while (uarths_hw_getc() != -1)
     ;
 }
 
 static int
-uart_hw_tx_ready(void)
+uarths_hw_tx_ready(void)
 {
 #ifdef QEMU
   return (ReadReg(LSR) & LSR_TX_IDLE) != 0;
@@ -120,7 +120,7 @@ uart_hw_tx_ready(void)
 }
 
 static void
-uart_hw_putc(int c)
+uarths_hw_putc(int c)
 {
 #ifdef QEMU
   WriteReg(THR, c);
@@ -130,7 +130,7 @@ uart_hw_putc(int c)
 }
 
 static void
-uart_txenable(int enabled)
+uarths_txenable(int enabled)
 {
 #ifdef QEMU
   unsigned char ier = ReadReg(IER);
@@ -148,7 +148,7 @@ uart_txenable(int enabled)
 // ---------- UART Init ----------
 
 void
-uartinit(void)
+uarthsinit(void)
 {
 #ifdef QEMU
   WriteReg(IER, 0);
@@ -172,82 +172,82 @@ uartinit(void)
   uarths->ip.rxwm = 1;
 #endif
 
-  initlock(&uart_rx.lock, "uartrx");
-  initlock(&uart_tx.lock, "uarttx");
-  ringbuffer_init(&uart_rx.ring, (uint8 *)uart_rx.buf, UART_RX_BUF_SIZE);
-  ringbuffer_init(&uart_tx.ring, (uint8 *)uart_tx.buf, UART_TX_BUF_SIZE);
+  initlock(&uarths_rx.lock, "uarthsrx");
+  initlock(&uarths_tx.lock, "uarthstx");
+  ringbuffer_init(&uarths_rx.ring, (uint8 *)uarths_rx.buf, UARTHS_RX_BUF_SIZE);
+  ringbuffer_init(&uarths_tx.ring, (uint8 *)uarths_tx.buf, UARTHS_TX_BUF_SIZE);
   requested_baud = 115200;
-  uart_txenable(0);
-  uart_rxenable(1);
+  uarths_txenable(0);
+  uarths_rxenable(1);
 }
 
 // ---------- UART RX ----------
 
 // Drain the hardware FIFO through the observer into the rx ring, count
 // bytes dropped when the ring is full, and wake readers if anything landed.
-// Caller must hold uart_rx.lock.
+// Caller must hold uarths_rx.lock.
 static void
-uart_rx_service(void)
+uarths_rx_service(void)
 {
   int received = 0;
   int cancelled = 0;
   int c;
 
-  while ((c = uart_hw_getc()) != -1) {
-    if (uart_rx.observer) {
-      int action = uart_rx.observer(c);
+  while ((c = uarths_hw_getc()) != -1) {
+    if (uarths_rx.observer) {
+      int action = uarths_rx.observer(c);
 
-      if (action == UART_RX_CONSUME_CANCEL) {
-        ringbuffer_reset(&uart_rx.ring);
-        uart_rx.cancel_pending = 1;
+      if (action == UARTHS_RX_CONSUME_CANCEL) {
+        ringbuffer_reset(&uarths_rx.ring);
+        uarths_rx.cancel_pending = 1;
         cancelled = 1;
         received = 0;
         continue;
       }
-      if (action == UART_RX_CONSUME)
+      if (action == UARTHS_RX_CONSUME)
         continue;
     }
 
-    if (ringbuffer_push(&uart_rx.ring, (uint8)c))
+    if (ringbuffer_push(&uarths_rx.ring, (uint8)c))
       received = 1;
     else
-      uart_rx.dropped++;
+      uarths_rx.dropped++;
   }
 
   if (received || cancelled)
-    wakeup_reason(&uart_rx.ring, WAKEUP_DEVICE);
+    wakeup_reason(&uarths_rx.ring, WAKEUP_DEVICE);
 }
 
 // Block until rx data is available.
 static int
-uart_rx_wait_data(uint epoch)
+uarths_rx_wait_data(uint epoch)
 {
   struct proc *p = myproc();
 
   // A pending cancel wins over buffered data: the observer raises it by
   // emptying the ring, so any later byte only arrived before the flag.
-  if (uart_rx.cancel_pending) {
-    uart_rx.cancel_pending = 0;
+  if (uarths_rx.cancel_pending) {
+    uarths_rx.cancel_pending = 0;
     return -1;
   }
   for (;;) {
-    if (!ringbuffer_empty(&uart_rx.ring))
+    if (!ringbuffer_empty(&uarths_rx.ring))
       return 1;
-    if (p && sleep_interruptible(&uart_rx.ring, &uart_rx.lock) < 0)
+    if (p && sleep_interruptible(&uarths_rx.ring, &uarths_rx.lock) < 0)
       return -1;
     if (!p)
-      sleep(&uart_rx.ring, &uart_rx.lock);
-    if (uart_rx.cancel_pending) {
-      uart_rx.cancel_pending = 0;
+      sleep(&uarths_rx.ring, &uarths_rx.lock);
+    if (uarths_rx.cancel_pending) {
+      uarths_rx.cancel_pending = 0;
       return -1;
     }
-    if (epoch != uart_rx.epoch)
+    if (epoch != uarths_rx.epoch)
       return 0;
   }
 }
 
 int
-uart_read(char *dst, int n)
+uarths_read(char *dst, int n)
 {
   int i = 0;
   int reason;
@@ -256,140 +256,140 @@ uart_read(char *dst, int n)
   if (n <= 0)
     return 0;
 
-  acquire(&uart_rx.lock);
-  epoch = uart_rx.epoch;
-  reason = uart_rx_wait_data(epoch);
+  acquire(&uarths_rx.lock);
+  epoch = uarths_rx.epoch;
+  reason = uarths_rx_wait_data(epoch);
   if (reason != 1) {
-    release(&uart_rx.lock);
+    release(&uarths_rx.lock);
     return reason;
   }
-  while (i < n && ringbuffer_pop(&uart_rx.ring, (uint8 *)&dst[i]))
+  while (i < n && ringbuffer_pop(&uarths_rx.ring, (uint8 *)&dst[i]))
     i++;
-  release(&uart_rx.lock);
+  release(&uarths_rx.lock);
   return i;
 }
 
 // Non-blocking poll read of one byte straight from the hardware, bypassing
 // the ring.  Returns -1 when no byte is available.
 int
-uartgetc(void)
+uarthsgetc(void)
 {
-  return uart_hw_getc();
+  return uarths_hw_getc();
 }
 
 // Discard the hardware FIFO and the soft ring, reset the rx state, then
-// wake blocked readers so uart_read returns 0 instead of waiting forever.
+// wake blocked readers so uarths_read returns 0 instead of waiting forever.
 void
-uart_flush_rx(void)
+uarths_flush_rx(void)
 {
-  acquire(&uart_rx.lock);
-  uart_hw_drain_fifo();
-  ringbuffer_reset(&uart_rx.ring);
-  uart_rx.dropped = 0;
-  uart_rx.cancel_pending = 0;
-  uart_rx.epoch++;
-  wakeup_reason(&uart_rx.ring, WAKEUP_DEVICE);
-  release(&uart_rx.lock);
+  acquire(&uarths_rx.lock);
+  uarths_hw_drain_fifo();
+  ringbuffer_reset(&uarths_rx.ring);
+  uarths_rx.dropped = 0;
+  uarths_rx.cancel_pending = 0;
+  uarths_rx.epoch++;
+  wakeup_reason(&uarths_rx.ring, WAKEUP_DEVICE);
+  release(&uarths_rx.lock);
 }
 
 // info[0] bytes dropped, info[1] bytes buffered, info[2] ring capacity.
 void
-uart_get_rx_stats(uint32 *info)
+uarths_get_rx_stats(uint32 *info)
 {
-  acquire(&uart_rx.lock);
-  info[0] = uart_rx.dropped;
-  info[1] = ringbuffer_used(&uart_rx.ring);
-  info[2] = ringbuffer_capacity(&uart_rx.ring);
-  release(&uart_rx.lock);
+  acquire(&uarths_rx.lock);
+  info[0] = uarths_rx.dropped;
+  info[1] = ringbuffer_used(&uarths_rx.ring);
+  info[2] = ringbuffer_capacity(&uarths_rx.ring);
+  release(&uarths_rx.lock);
 }
 
 void
-uart_set_rx_observer(uart_rx_observer_t observer)
+uarths_set_rx_observer(uarths_rx_observer_t observer)
 {
-  uart_rx.observer = observer;
+  uarths_rx.observer = observer;
 }
 
 // ---------- UART TX ----------
 
 // Drain the tx ring into the hardware, leave the TX interrupt enabled only
 // while there is still work to do, and wake writers.  Caller must hold
-// uart_tx.lock.
+// uarths_tx.lock.
 static void
-uart_tx_service(void)
+uarths_tx_service(void)
 {
   uint8 c;
 
-  while (!ringbuffer_empty(&uart_tx.ring) && uart_hw_tx_ready()) {
-    ringbuffer_pop(&uart_tx.ring, &c);
-    uart_hw_putc(c);
+  while (!ringbuffer_empty(&uarths_tx.ring) && uarths_hw_tx_ready()) {
+    ringbuffer_pop(&uarths_tx.ring, &c);
+    uarths_hw_putc(c);
   }
 
-  wakeup_reason(&uart_tx.ring, WAKEUP_DEVICE);
-  uart_txenable(!ringbuffer_empty(&uart_tx.ring));
+  wakeup_reason(&uarths_tx.ring, WAKEUP_DEVICE);
+  uarths_txenable(!ringbuffer_empty(&uarths_tx.ring));
 }
 
 // Block until the tx ring has room.  Returns 0 when a slot appeared; -1 if
 // the kernel panicked or an interruptible sleep was interrupted, in which
-// case the caller should stop writing.  Caller must hold uart_tx.lock.
+// case the caller should stop writing.  Caller must hold uarths_tx.lock.
 static int
-uart_tx_wait_room(void)
+uarths_tx_wait_room(void)
 {
   struct proc *p = myproc();
 
-  while (ringbuffer_full(&uart_tx.ring)) {
+  while (ringbuffer_full(&uarths_tx.ring)) {
     if (panicked)
       return -1;
-    if (p && sleep_interruptible(&uart_tx.ring, &uart_tx.lock) < 0)
+    if (p && sleep_interruptible(&uarths_tx.ring, &uarths_tx.lock) < 0)
       return -1;
     if (!p)
-      sleep(&uart_tx.ring, &uart_tx.lock);
+      sleep(&uarths_tx.ring, &uarths_tx.lock);
   }
   return 0;
 }
 
 int
-uart_write(const char *src, int n)
+uarths_write(const char *src, int n)
 {
   int i;
 
-  acquire(&uart_tx.lock);
+  acquire(&uarths_tx.lock);
   for (i = 0; i < n; i++) {
-    if (uart_tx_wait_room() < 0) {
-      release(&uart_tx.lock);
+    if (uarths_tx_wait_room() < 0) {
+      release(&uarths_tx.lock);
       return i > 0 ? i : -1;
     }
-    ringbuffer_push(&uart_tx.ring, (uint8)src[i]);
-    uart_tx_service();
+    ringbuffer_push(&uarths_tx.ring, (uint8)src[i]);
+    uarths_tx_service();
   }
-  release(&uart_tx.lock);
+  release(&uarths_tx.lock);
   return i;
 }
 
 void
-uartputc(int c)
+uarthsputc(int c)
 {
   char ch = c;
-  uart_write(&ch, 1);
+  uarths_write(&ch, 1);
 }
 
 void
-uartputc_sync(int c)
+uarthsputc_sync(int c)
 {
   push_off();
   if (panicked)
     for (;;)
       ;
-  while (!uart_hw_tx_ready())
+  while (!uarths_hw_tx_ready())
     ;
-  uart_hw_putc(c);
+  uarths_hw_putc(c);
   pop_off();
 }
 
 void
-uart_wait_tx_idle(void)
+uarths_wait_tx_idle(void)
 {
 #ifdef QEMU
-  while (!uart_hw_tx_ready())
+  while (!uarths_hw_tx_ready())
     ;
 #else
   uint32 old_txcnt = uarths->txctrl.txcnt;
@@ -413,21 +413,21 @@ uart_wait_tx_idle(void)
 }
 
 void
-uart_flush_tx(void)
+uarths_flush_tx(void)
 {
-  acquire(&uart_tx.lock);
-  while (!ringbuffer_empty(&uart_tx.ring)) {
-    uart_tx_service();
-    if (!ringbuffer_empty(&uart_tx.ring))
-      sleep(&uart_tx.ring, &uart_tx.lock);
+  acquire(&uarths_tx.lock);
+  while (!ringbuffer_empty(&uarths_tx.ring)) {
+    uarths_tx_service();
+    if (!ringbuffer_empty(&uarths_tx.ring))
+      sleep(&uarths_tx.ring, &uarths_tx.lock);
   }
-  release(&uart_tx.lock);
-  uart_wait_tx_idle();
+  release(&uarths_tx.lock);
+  uarths_wait_tx_idle();
 }
 
 // ---------- baudrate setup ----------
 void
-uart_set_baud(int baud)
+uarths_set_baud(int baud)
 {
 #ifndef QEMU
   uint32 freq;
@@ -436,27 +436,27 @@ uart_set_baud(int baud)
   if (baud <= 0)
     return;
 
-  uart_flush_tx();
-  uart_rxenable(0);
-  acquire(&uart_rx.lock);
+  uarths_flush_tx();
+  uarths_rxenable(0);
+  acquire(&uarths_rx.lock);
   // Only drain the hardware FIFO: bytes already read into the soft ring
   // belong to the application and must survive the baud switch.
-  uart_hw_drain_fifo();
-  release(&uart_rx.lock);
+  uarths_hw_drain_fifo();
+  release(&uarths_rx.lock);
   freq = sysctl_clock_get_freq(SYSCTL_CLOCK_CPU);
   div = freq / (uint32)baud;
   if (div == 0)
     div = 1;
   uarths->div.div = div - 1;
   requested_baud = (uint32)baud;
-  uart_rxenable(1);
+  uarths_rxenable(1);
 #else
   (void)baud;
 #endif
 }
 
 void
-uart_get_baud_info(uint32 *info)
+uarths_get_baud_info(uint32 *info)
 {
 #ifdef QEMU
   info[0] = requested_baud;
@@ -477,13 +477,13 @@ uart_get_baud_info(uint32 *info)
 // ---------- handler ----------
 
 void
-uartintr(void)
+uarthsintr(void)
 {
-  acquire(&uart_rx.lock);
-  uart_rx_service();
-  release(&uart_rx.lock);
+  acquire(&uarths_rx.lock);
+  uarths_rx_service();
+  release(&uarths_rx.lock);
 
-  acquire(&uart_tx.lock);
-  uart_tx_service();
-  release(&uart_tx.lock);
+  acquire(&uarths_tx.lock);
+  uarths_tx_service();
+  release(&uarths_tx.lock);
 }

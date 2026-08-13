@@ -32,6 +32,8 @@ kvminit()
 #else
   // K210: GPIOHS
   kvmmap(GPIOHS_V, GPIOHS, PGSIZE, PTE_R | PTE_W);
+  // K210: UART
+  kvmmap(UART_V, UART, PGSIZE, PTE_R | PTE_W);
   // K210: DMAC
   kvmmap(DMAC_V, DMAC, PGSIZE, PTE_R | PTE_W);
   // K210: GPIO
@@ -81,6 +83,7 @@ ukvminit(void)
 #else
   ukvmmap(pagetable, UART0_V, UART0, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, GPIOHS_V, GPIOHS, PGSIZE, PTE_R | PTE_W);
+  ukvmmap(pagetable, UART_V, UART, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, DMAC_V, DMAC, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, GPIO_V, GPIO, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, SPI_SLAVE_V, SPI_SLAVE, PGSIZE, PTE_R | PTE_W);
@@ -275,6 +278,7 @@ ukvmunmap(pagetable_t pagetable)
   uvmunmap(pagetable, VIRTIO0, PGSIZE / PGSIZE, 0);
 #else
   uvmunmap(pagetable, GPIOHS_V, PGSIZE / PGSIZE, 0);
+  uvmunmap(pagetable, UART_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, DMAC_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, GPIO_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, SPI_SLAVE_V, PGSIZE / PGSIZE, 0);

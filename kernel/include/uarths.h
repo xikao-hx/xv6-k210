@@ -182,27 +182,27 @@ typedef enum _uarths_stopbit
     UARTHS_STOP_2
 } uarths_stopbit_t;
 
-typedef int (*uart_rx_observer_t)(int);
+typedef int (*uarths_rx_observer_t)(int);
 
-#define UART_RX_KEEP          0
-#define UART_RX_CONSUME       1
-#define UART_RX_CONSUME_CANCEL 2
+#define UARTHS_RX_KEEP          0
+#define UARTHS_RX_CONSUME       1
+#define UARTHS_RX_CONSUME_CANCEL 2
 
-void            uartinit(void);
-void            uartintr(void);
-void            uartputc(int);
-void            uartputc_sync(int);
-int             uart_write(const char*, int);
-void            uart_flush_tx(void);
-int             uartgetc(void);
-int             uart_read(char*, int);
-int             uart_try_read(char*, int);
-void            uart_flush_rx(void);
-void            uart_get_rx_stats(uint32*);
-void            uart_set_baud(int);
-void            uart_wait_tx_idle(void);
-void            uart_get_baud_info(uint32*);
-void            uart_set_rx_observer(uart_rx_observer_t);
+void            uarthsinit(void);
+void            uarthsintr(void);
+void            uarthsputc(int);
+void            uarthsputc_sync(int);
+int             uarths_write(const char*, int);
+void            uarths_flush_tx(void);
+int             uarthsgetc(void);
+int             uarths_read(char*, int);
+int             uarths_try_read(char*, int);
+void            uarths_flush_rx(void);
+void            uarths_get_rx_stats(uint32*);
+void            uarths_set_baud(int);
+void            uarths_wait_tx_idle(void);
+void            uarths_get_baud_info(uint32*);
+void            uarths_set_rx_observer(uarths_rx_observer_t);
 
 #ifdef __cplusplus
 }

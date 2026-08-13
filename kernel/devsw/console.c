@@ -35,21 +35,21 @@ console_rx_observer(int c)
   if(mode == CONSOLE_MODE_TTY && foreground_pgid > 0 && c == C('C')) {
     cons.tty_events |= TTY_EVENT_SIGINT;
     release(&cons.lock);
-    return UART_RX_CONSUME_CANCEL;
+    return UARTHS_RX_CONSUME_CANCEL;
   }
   release(&cons.lock);
-  return UART_RX_KEEP;
+  return UARTHS_RX_KEEP;
 }
 
 void
 consputc(int c)
 {
   if (c == BACKSPACE) {
-    uartputc_sync('\b');
-    uartputc_sync(' ');
-    uartputc_sync('\b');
+    uarthsputc_sync('\b');
+    uarthsputc_sync(' ');
+    uarthsputc_sync('\b');
   } else {
-    uartputc_sync(c);
+    uarthsputc_sync(c);
   }
 }
 
@@ -68,7 +68,7 @@ consolewrite(struct file *f, uint64 src, int n)
       count = sizeof(buf);
     if (either_copyin(buf, 1, src + done, count) < 0)
       break;
-    written = uart_write(buf, count);
+    written = uarths_write(buf, count);
     if (written <= 0)
       break;
     done += written;
@@ -99,7 +99,7 @@ console_set_mode(int mode)
   cons.eof_pending = 0;
   cons.tty_events = 0;
   release(&cons.lock);
-  uart_flush_rx();
+  uarths_flush_rx();
 }
 
 // Set foreground process group 
@@ -154,7 +154,7 @@ consoleioctl(struct file *f, uint64 cmd, uint64 arg)
   (void)f;
   switch (cmd) {
   case CONSOLE_IOCTL_FLUSH_INPUT:
-    uart_flush_rx();
+    uarths_flush_rx();
     acquire(&cons.lock);
     cons.esc = 0;
     cons.drop_lf_after_cr = 0;
@@ -171,13 +171,13 @@ consoleioctl(struct file *f, uint64 cmd, uint64 arg)
   case CONSOLE_IOCTL_SET_BAUD:
     if (arg == 0 || arg > 5000000)
       return -1;
-    uart_set_baud((int)arg);
+    uarths_set_baud((int)arg);
     return 0;
   case CONSOLE_IOCTL_GET_BAUD_INFO:
-    uart_get_baud_info(info);
+    uarths_get_baud_info(info);
     return either_copyout(1, arg, info, sizeof(info));
   case CONSOLE_IOCTL_GET_RX_STATS:
-    uart_get_rx_stats(info);
+    uarths_get_rx_stats(info);
     info[3] = console_mode_get();
     return either_copyout(1, arg, info, sizeof(info));
   case CONSOLE_IOCTL_SET_FG_PGRP:
@@ -228,7 +228,7 @@ console_raw_read(int user_dst, uint64 dst, int n)
 
   if (count > sizeof(buf))
     count = sizeof(buf);
-  got = uart_read(buf, count);
+  got = uarths_read(buf, count);
   if (got <= 0)
     return got;
   if (either_copyout(user_dst, dst, buf, got) < 0)
@@ -309,7 +309,7 @@ console_tty_read(int user_dst, uint64 dst, int n)
   while (done < n) {
     char input;
     char output;
-    int got = uart_read(&input, 1);
+    int got = uarths_read(&input, 1);
 
     if (got <= 0)
       return done > 0 ? done : got;
@@ -364,8 +364,8 @@ consoleinit(void)
   cons.foreground_pgid = 0;
   cons.foreground_owner_pgid = 0;
   cons.tty_events = 0;
-  uart_set_rx_observer(console_rx_observer);
-  uartinit();
+  uarths_set_rx_observer(console_rx_observer);
+  uarthsinit();
   if(device_register(DEV_CONSOLE, "console", &console_ops) < 0)
     panic("console device register");
 }
