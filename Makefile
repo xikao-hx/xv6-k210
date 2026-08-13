@@ -40,6 +40,7 @@ OBJS = \
   $K/devsw/kbufdev.o \
   $K/devsw/eagerdev.o \
   $K/driver/uarths.o \
+  $K/driver/ringbuffer.o \
   $K/driver/plic.o \
   $K/fs/disk.o \
   $K/fs/bio.o \

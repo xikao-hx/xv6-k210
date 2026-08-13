@@ -21,21 +21,23 @@ struct {
   int eof_pending;
   int foreground_pgid;
   int foreground_owner_pgid;
+  uint tty_events;
 } cons;
-
-static volatile uint tty_events;
 
 static int
 console_rx_observer(int c)
 {
-  int mode = __atomic_load_n(&cons.mode, __ATOMIC_RELAXED);
-  int foreground_pgid =
-      __atomic_load_n(&cons.foreground_pgid, __ATOMIC_RELAXED);
+  int mode, foreground_pgid;
 
+  acquire(&cons.lock);
+  mode = cons.mode;
+  foreground_pgid = cons.foreground_pgid;
   if(mode == CONSOLE_MODE_TTY && foreground_pgid > 0 && c == C('C')) {
-    __atomic_fetch_or(&tty_events, TTY_EVENT_SIGINT, __ATOMIC_RELAXED);
+    cons.tty_events |= TTY_EVENT_SIGINT;
+    release(&cons.lock);
     return UART_RX_CONSUME_CANCEL;
   }
+  release(&cons.lock);
   return UART_RX_KEEP;
 }
 
@@ -90,18 +92,14 @@ console_mode_get(void)
 static void
 console_set_mode(int mode)
 {
-  // IRQ is paused before the ring is cleared, so no boundary byte can be
-  // classified using the old mode after the transition completes.
-  uartrx_disable();
-  uart_flush_rx();
   acquire(&cons.lock);
-  __atomic_store_n(&cons.mode, mode, __ATOMIC_RELAXED);
+  cons.mode = mode;
   cons.esc = 0;
   cons.drop_lf_after_cr = 0;
   cons.eof_pending = 0;
+  cons.tty_events = 0;
   release(&cons.lock);
-  __atomic_store_n(&tty_events, 0, __ATOMIC_RELAXED);
-  uartrx_enable();
+  uart_flush_rx();
 }
 
 // Set foreground process group 
@@ -126,7 +124,7 @@ console_set_foreground_pgrp(int pgid)
   // clear deal owner
   if(cons.foreground_owner_pgid == owner_pgid && !owner_exists) {
     cons.foreground_owner_pgid = 0;
-    __atomic_store_n(&cons.foreground_pgid, 0, __ATOMIC_RELAXED);
+    cons.foreground_pgid = 0;
   }
   // first setup
   if(cons.foreground_owner_pgid == 0 && cons.foreground_pgid == 0)
@@ -139,7 +137,7 @@ console_set_foreground_pgrp(int pgid)
     release(&cons.lock);
     return -1;
   }
-  __atomic_store_n(&cons.foreground_pgid, pgid, __ATOMIC_RELAXED);
+  cons.foreground_pgid = pgid;
 
   // release owner
   if(pgid == 0 && cons.foreground_owner_pgid == caller_pgid)
@@ -156,14 +154,12 @@ consoleioctl(struct file *f, uint64 cmd, uint64 arg)
   (void)f;
   switch (cmd) {
   case CONSOLE_IOCTL_FLUSH_INPUT:
-    uartrx_disable();
     uart_flush_rx();
     acquire(&cons.lock);
     cons.esc = 0;
     cons.drop_lf_after_cr = 0;
     cons.eof_pending = 0;
     release(&cons.lock);
-    uartrx_enable();
     return 0;
   case CONSOLE_IOCTL_SET_MODE:
     if (arg != CONSOLE_MODE_TTY && arg != CONSOLE_MODE_RAW)
@@ -188,8 +184,14 @@ consoleioctl(struct file *f, uint64 cmd, uint64 arg)
     if(arg > 0x7fffffffUL)
       return -1;
     return console_set_foreground_pgrp((int)arg);
-  case CONSOLE_IOCTL_GET_FG_PGRP:
-    return __atomic_load_n(&cons.foreground_pgid, __ATOMIC_RELAXED);
+  case CONSOLE_IOCTL_GET_FG_PGRP: {
+    int pgid;
+
+    acquire(&cons.lock);
+    pgid = cons.foreground_pgid;
+    release(&cons.lock);
+    return pgid;
+  }
   default:
     return -1;
   }
@@ -198,14 +200,17 @@ consoleioctl(struct file *f, uint64 cmd, uint64 arg)
 void
 console_dispatch_events(void)
 {
-  uint events = __atomic_exchange_n(&tty_events, 0, __ATOMIC_ACQ_REL);
+  uint events;
   int foreground_pgid;
+
+  acquire(&cons.lock);
+  events = cons.tty_events;
+  cons.tty_events = 0;
+  foreground_pgid = cons.foreground_pgid;
+  release(&cons.lock);
 
   if(!(events & TTY_EVENT_SIGINT))
     return;
-  acquire(&cons.lock);
-  foreground_pgid = cons.foreground_pgid;
-  release(&cons.lock);
   if(foreground_pgid <= 0)
     return;
   consputc('^');
@@ -355,10 +360,10 @@ void
 consoleinit(void)
 {
   initlock(&cons.lock, "cons");
-  __atomic_store_n(&cons.mode, CONSOLE_MODE_TTY, __ATOMIC_RELAXED);
-  __atomic_store_n(&cons.foreground_pgid, 0, __ATOMIC_RELAXED);
+  cons.mode = CONSOLE_MODE_TTY;
+  cons.foreground_pgid = 0;
   cons.foreground_owner_pgid = 0;
-  __atomic_store_n(&tty_events, 0, __ATOMIC_RELAXED);
+  cons.tty_events = 0;
   uart_set_rx_observer(console_rx_observer);
   uartinit();
   if(device_register(DEV_CONSOLE, "console", &console_ops) < 0)

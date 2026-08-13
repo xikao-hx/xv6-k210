@@ -199,8 +199,6 @@ int             uart_read(char*, int);
 int             uart_try_read(char*, int);
 void            uart_flush_rx(void);
 void            uart_get_rx_stats(uint32*);
-void            uartrx_disable(void);
-void            uartrx_enable(void);
 void            uart_set_baud(int);
 void            uart_wait_tx_idle(void);
 void            uart_get_baud_info(uint32*);
