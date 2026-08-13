@@ -14,7 +14,6 @@
 
 #define CONSOLE_MODE_TTY 0
 #define CONSOLE_MODE_RAW 1
-#define CONSOLE_MODE_POLL 2
 
 struct console_baud_info {
   uint32 requested;

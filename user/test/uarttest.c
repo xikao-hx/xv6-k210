@@ -1,6 +1,6 @@
 // u1test: exercise /dev/uart1 in either direction.
 //
-//   u1test [read|write|loop] [poll] [baud]
+//   u1test [read|write|loop] [dmarx] [dmatx] [baud]
 //
 //   write (default)  send an incrementing test-pattern burst on UART1 TX.
 //   read             dump whatever arrives on UART1 RX as hex.
@@ -8,13 +8,16 @@
 //                    to the UART1 RX pin, then write a pattern and read it
 //                    back.  PASS = the UART1 TX/RX hardware path is good and
 //                    any "no data" on the PC side is external wiring; FAIL =
-//                    the UART isn't transmitting at all.  Runs in POLL mode.
-//   poll             use device mode POLL (direct hardware, interrupts off)
-//                    instead of the interrupt-driven RAW stream.  If the ISR
-//                    path is suspect this is the decisive experiment: a poll
-//                    success isolates the hardware, a poll failure points at
-//                    pins / clock / baud.
+//                    the UART isn't transmitting at all.
+//   dmarx            run the RX path through DMA CH5 (boundary-event-driven)
+//                    instead of the interrupt-driven FIFO drain.
+//   dmatx            run the TX path through a blocking DMA CH4 transfer
+//                    instead of the interrupt-driven ring pump.
 //   baud             line rate (default 115200).
+//
+// Modes are per-direction and orthogonal, so the four loop/PC combinations
+// (neither, dmarx, dmatx, both) exercise every path pair.  GET_RX_STATS
+// reports the active RX mode and dropped count.
 //
 // On the PC side, attach a USB-TTL to the UART1 TX pin and watch at the same
 // baud.  If nothing appears, check the pin wiring first: uart.h
@@ -27,6 +30,7 @@
 #include "fcntl.h"
 #include "console.h"
 #include "dev.h"
+#include "uart.h"
 
 #define TX_BURST_INTERVAL_TICKS 100   // ~500ms at K210's 5ms tick
 #define RX_CHUNK 64
@@ -46,18 +50,11 @@ main(int argc, char *argv[])
 {
   int do_read = 0;
   int do_loop = 0;
-  int do_poll = 0;
+  int do_dmarx = 0;
+  int do_dmatx = 0;
   int baud = 115200;
   int fd;
   int burst = 0;
-
-  // TEMP-DIAG: print the argc/argv this process actually received.  "u1test
-  // read poll" kept reporting RAW(irq) though source and binary provably set
-  // do_poll for a "poll" arg -- this settles whether argv really contains it.
-  printf("u1test: argc=%d", argc);
-  for (int i = 0; i < argc; i++)
-    printf(" [%s]", argv[i]);
-  printf("\n");
 
   for (int i = 1; i < argc; i++) {
     if (is_arg(argv[i], "read"))
@@ -66,13 +63,13 @@ main(int argc, char *argv[])
       do_loop = 1;
     else if (is_arg(argv[i], "write"))
       do_read = 0;
-    else if (is_arg(argv[i], "poll"))
-      do_poll = 1;
+    else if (is_arg(argv[i], "dmarx"))
+      do_dmarx = 1;
+    else if (is_arg(argv[i], "dmatx"))
+      do_dmatx = 1;
     else
       baud = atoi(argv[i]);
   }
-  if (do_loop)
-    do_poll = 1;   // loopback exercises raw hardware, no ISR involved
   if (baud < 9600 || baud > 5000000)
     baud = 115200;
 
@@ -81,12 +78,12 @@ main(int argc, char *argv[])
     printf("u1test: open /dev/uart1 failed\n");
     exit(1);
   }
-  ioctl(fd, CONSOLE_IOCTL_SET_MODE, do_poll ? CONSOLE_MODE_POLL : CONSOLE_MODE_RAW);
+  ioctl(fd, UART_IOCTL_SET_RX_MODE, do_dmarx ? UART_MODE_DMA : UART_MODE_INT);
+  ioctl(fd, UART_IOCTL_SET_TX_MODE, do_dmatx ? UART_MODE_DMA : UART_MODE_INT);
   ioctl(fd, CONSOLE_IOCTL_SET_BAUD, baud);
 
-  printf("u1test: mode=%s /dev/uart1 @ %d baud%s\n",
-         do_read ? "read" : "write", baud,
-         do_poll ? "  POLL(direct,no-irq)" : "  RAW(irq)");
+  printf("u1test: rx=%s tx=%s /dev/uart1 @ %d baud\n",
+         do_dmarx ? "DMA" : "INT", do_dmatx ? "DMA" : "INT", baud);
 
   struct console_baud_info bi;
   if (ioctl(fd, CONSOLE_IOCTL_GET_BAUD_INFO, (uint64)&bi) == 0)
@@ -101,15 +98,19 @@ main(int argc, char *argv[])
   if (do_loop) {
     // Board-side self test.  Physically short the UART1 TX pin to the RX pin
     // first (IO7 <-> IO8 with the current uart.h routing), then this writes a
-    // pattern straight to the THR and polls it back off the RBR -- no ISR, no
-    // ring buffers.  PASS proves the UART1 silicon + pin path is alive, so a
-    // silent PC means the adapter simply isn't on the pin the driver drives.
+    // pattern and reads it back through the selected RX/TX paths.  PASS
+    // proves the UART1 silicon + pin path is alive, so a silent PC means the
+    // adapter simply isn't on the pin the driver drives.
     static const char pat[] = "0123456789abcdef";
     char rbuf[sizeof(pat)];
     int n = sizeof(pat) - 1;
     int w, got, i, ok = 1;
 
     printf("u1test: loopback (short UART1_TX to UART1_RX first)\n");
+    // A mode/baud reconfiguration can leave a single spurious frame in the RX
+    // (DMA arm in particular: real-hardware loopback showed buffered=1 before
+    // the write).  Clear it so the read below starts from a clean ring.
+    ioctl(fd, CONSOLE_IOCTL_FLUSH_INPUT, 0);
     w = write(fd, pat, n);
     printf("u1test: wrote %d bytes\n", w);
     got = read(fd, rbuf, n);
@@ -138,11 +139,8 @@ main(int argc, char *argv[])
         printf("u1test: read error\n");
         break;
       }
-      if (got == 0) {
-        if (do_poll)
-          break;   // POLL read gives up after its per-byte budget
-        continue;
-      }
+      if (got == 0)
+        continue;   // only a flush bumps the epoch; otherwise block
       for (int i = 0; i < got; i++) {
         uint8 b = (uint8)rbuf[i];
         printf("%x%x ", b >> 4, b & 0xf);

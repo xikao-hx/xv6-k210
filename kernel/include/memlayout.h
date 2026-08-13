@@ -31,6 +31,10 @@
 #define UART0_IRQ   33
 #define UART_IRQ    11
 #define DISK_IRQ    27
+// DMAC channel 5 (UART RX DMA) completes -> PLIC source 32 (SDK plic.h:
+// DMA0=27 .. DMA5=32).  CH4 (UART TX DMA) is used with a blocking wait, so
+// its completion IRQ is not dispatched.
+#define DMAC_CH5_IRQ 32
 #endif
 
 // local interrupt controller, which contains the timer.

@@ -14,6 +14,7 @@ plicinit(void)
   *(uint32*)(PLIC + DISK_IRQ * sizeof(uint32)) = 1;
 #ifndef QEMU
   *(uint32*)(PLIC + UART_IRQ * sizeof(uint32)) = 1;
+  *(uint32*)(PLIC + DMAC_CH5_IRQ * sizeof(uint32)) = 1;
 #endif
 }
 
@@ -30,12 +31,13 @@ plicinithart(void)
   // K210: PLIC runs in M-mode. Overwrite the enable words authoritatively
   // (assignment, not OR) so enable bits left over from the previous boot
   // stage (RustSBI/bootloader, e.g. GPIOHS0 = IRQ 34) are cleared instead
-  // of left asserting forever. Only UART (33), UART (11) and DISK (27)
-  // get enabled.
+  // of left asserting forever. UARTHS (33), UART (11), DISK (27) and the
+  // RX-DMA completion DMA5 (32) get enabled; the high enable word carries
+  // both 32 (DMA5) and 33 (UARTHS).
   uint32 *hart_m_enable = (uint32*)PLIC_MENABLE(hart);
   *hart_m_enable = (1 << DISK_IRQ) | (1 << UART_IRQ);
   uint32 *hart_m_enable_hi = hart_m_enable + 1;
-  *hart_m_enable_hi = (1 << (UARTHS_IRQ % 32));
+  *hart_m_enable_hi = (1 << (UARTHS_IRQ % 32)) | (1 << (DMAC_CH5_IRQ % 32));
   // zero this hart's M-mode priority threshold (forward all enabled IRQs).
   *(uint32*)PLIC_MPRIORITY(hart) = 0;
 #endif

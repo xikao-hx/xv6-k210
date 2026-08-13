@@ -264,6 +264,10 @@ devintr()
 #ifndef QEMU
     } else if(irq == UART_IRQ){
       uartintr();
+    } else if(irq == DMAC_CH5_IRQ){
+      // DMA CH5 completed a full RX block: harvest + re-arm.  RDA/CTI
+      // boundaries still come through the UART IRQ 11 path above.
+      uart_dma_rx_intr();
 #endif
     } else if(irq == DISK_IRQ){
       disk_intr();
