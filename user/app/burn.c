@@ -1,4 +1,9 @@
-// Burn a FAT filesystem image through /dev/console in RAW mode.
+// Burn a FAT filesystem image over UART in framed RAW-mode messages.
+//
+// The burn UART is chosen at compile time (Makefile BURN_UART):
+//   console (default)  -> /dev/console (UARTHS, interrupt-fed RX ring)
+//   uart1              -> /dev/uart1 (DW UART1, DMA RX CH5 / TX CH4)
+// Protocol logic is identical either way; only the device entry branches.
 //
 // Host flow:
 //   1. Send "/burn\n" to the shell, which starts this program.
@@ -21,6 +26,9 @@
 #include "user.h"
 #include "fcntl.h"
 #include <stdarg.h>
+#ifdef BURN_UART_UART1
+#include "uart.h"
+#endif
 
 #define MAX_RETRY    5
 #define CONSOLE_BAUD 115200
@@ -409,11 +417,24 @@ main(void)
 
   // Open all devices before RAW mode. After SET_MODE, stdout is no
   // longer a safe debug channel because the host owns the UART stream.
+#ifdef BURN_UART_UART1
+  uart_fd = open("/dev/uart1", O_RDWR);
+  if (uart_fd < 0) {
+    log_open_failed("uart1");
+    exit(1);
+  }
+  // The burn data path is the DW UART1 DMA channel (CH4 TX / CH5 RX).
+  // Starting straight in DMA mode avoids an INT->DMA mode switch, so no
+  // switch-induced spurious RX frame needs flushing (Step 2 issue 3).
+  ioctl(uart_fd, UART_IOCTL_SET_RX_MODE, UART_MODE_DMA);
+  ioctl(uart_fd, UART_IOCTL_SET_TX_MODE, UART_MODE_DMA);
+#else
   uart_fd = open("/dev/console", O_RDWR);
   if (uart_fd < 0) {
     log_open_failed("uart");
     exit(1);
   }
+#endif
 
   sdcard_fd = open("/dev/sdcard", O_RDWR);
   if (sdcard_fd < 0) {

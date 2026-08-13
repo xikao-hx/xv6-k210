@@ -7,3 +7,4 @@ maix*
 .vscode
 AGENTS.md
 CLAUDE.md
+tools/__pycache__

@@ -10,7 +10,11 @@ platform ?= k210
 #   LOG_LEVEL_NONE LOG_LEVEL_ERROR LOG_LEVEL_WARN LOG_LEVEL_INFO LOG_LEVEL_DEBUG
 LOG_LEVEL ?= LOG_LEVEL_INFO
 SCHED ?= mlfq
-DOWNLOAD_BAUD ?= 500000
+DOWNLOAD_BAUD ?= 2000000
+# Which UART the burn program receives the image over.  console (UARTHS,
+# default) keeps the interrupt-driven path; uart1 switches burn to the DW
+# UART1 DMA path (burn.c branches on BURN_UART_UART1).
+BURN_UART ?= console
 
 K=kernel
 U=user
@@ -127,6 +131,7 @@ CFLAGS += $(if $(filter mlfq,$(SCHED)),-D SCHED_MLFQ,-D SCHED_RR)
 CFLAGS += -I$K/include
 CFLAGS += -I$U/include
 CFLAGS += $(if $(filter qemu,$(platform)),-D QEMU,)
+CFLAGS += $(if $(filter uart1,$(BURN_UART)),-DBURN_UART_UART1,)
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 
 # Disable PIE when possible (for Ubuntu 16.10 toolchain)
@@ -393,4 +398,8 @@ sdcard: fs
 
 download: fs
 	@sudo chmod 777 $(k210-serialport)
+ifeq ($(BURN_PORT),)
 	@python3 tools/burn.py --baud $(DOWNLOAD_BAUD) --board-baud $(DOWNLOAD_BAUD) $(k210-serialport) target/fs.img
+else
+	@python3 tools/burn.py --no-shell --baud $(DOWNLOAD_BAUD) --board-baud $(DOWNLOAD_BAUD) $(BURN_PORT) target/fs.img
+endif

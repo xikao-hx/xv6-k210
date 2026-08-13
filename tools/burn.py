@@ -9,8 +9,16 @@ the board switches to the board-side baud setting for DATA/DONE.  On the
 current K210 UARTHS path the board-side baud needs a small compensation
 for the host to decode board replies correctly at the default fast baud.
 
+The burn data path can run over either board UART:
+  * UARTHS console (default) -- the shell that starts /burn and the burn
+    data both share this port, so one serial port drives everything.
+  * DW UART1 (BURN_UART=uart1, DMA RX/TX) -- the shell lives on the
+    console port, so point this script at the UART1 port with --no-shell
+    and start /burn manually on the console first.
+
 Usage:
     python3 tools/burn.py [--baud RATE] <serial_port> [image_file]
+    python3 tools/burn.py --no-shell [--baud RATE] <uart1_port> [image_file]
 
 Protocol:
   Phase 1:
@@ -340,6 +348,11 @@ def main():
                         help="Shell handshake baud (default: 115200)")
     parser.add_argument("--burn-cmd", default="/burn",
                         help="Command used to start the board burn program (default: /burn)")
+    parser.add_argument("--no-shell", action="store_true",
+                        help="Skip the shell handshake and just wait for the "
+                             "board's BURN announcement.  Use when the burn data "
+                             "path is a second UART (BURN_UART=uart1), so /burn "
+                             "was started manually on the console")
     parser.add_argument("--shell-byte-delay", type=float, default=SHELL_BYTE_DELAY,
                         help="Delay in seconds between shell-command bytes "
                              "(default: %(default)s)")
@@ -419,8 +432,15 @@ def main():
     burn_idx = 0
     burn_cmd = burn_candidates[burn_idx]
 
-    print(f"Sending '{burn_cmd}' command to board at {args.console_baud} baud...")
-    send_shell_command(ser, burn_cmd)
+    if not args.no_shell:
+        print(f"Sending '{burn_cmd}' command to board at {args.console_baud} baud...")
+        send_shell_command(ser, burn_cmd)
+    else:
+        # The burn data path runs over a second UART (BURN_UART=uart1): the
+        # shell that starts /burn lives on the console UART, so this port only
+        # sees the program's own BURN announcement.
+        print("No-shell: waiting for BURN "
+              "(start /burn on the console manually)...")
 
     print("Waiting for BURN signal...")
     buf = b""
@@ -432,7 +452,8 @@ def main():
             print(
                 "Timeout waiting for BURN, retrying "
                 f"'{burn_cmd}' ({retries}); last serial='{printable_serial(buf[-96:])}'")
-            send_shell_command(ser, burn_cmd)
+            if not args.no_shell:
+                send_shell_command(ser, burn_cmd)
             continue
         buf += c
         if buf.endswith(b"BURN\n"):
