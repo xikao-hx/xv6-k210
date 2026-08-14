@@ -5,20 +5,20 @@ Burn a filesystem image to xv6-k210 SD card via UART.
 Uses CRC32-protected framed messages (inspired by kflash.py) for
 reliable data transfer.  The shell handshake starts at 115200 baud;
 after INFO is acknowledged, the host switches to the transfer baud and
-the board switches to the board-side baud setting for DATA/DONE.  On the
-current K210 UARTHS path the board-side baud needs a small compensation
-for the host to decode board replies correctly at the default fast baud.
+the board switches to the same baud for DATA/DONE (the board-side baud
+is always identical to --baud, no compensation).
 
-The burn data path can run over either board UART:
-  * UARTHS console (default) -- the shell that starts /burn and the burn
-    data both share this port, so one serial port drives everything.
-  * DW UART1 (BURN_UART=uart1, DMA RX/TX) -- the shell lives on the
-    console port, so point this script at the UART1 port with --no-shell
-    and start /burn manually on the console first.
+The burn data path can run over either board UART, chosen at runtime by the
+host in the INFO packet (data_port byte):
+  * UARTHS console (default, data_port=0) -- the shell that starts /burn and
+    the burn data both share the console port, so one serial port drives
+    everything.
+  * DW UART1 (--data-port, data_port=1, DMA RX/TX) -- the shell handshake
+    stays on the console port; the DATA phase moves to this second port.
 
 Usage:
     python3 tools/burn.py [--baud RATE] <serial_port> [image_file]
-    python3 tools/burn.py --no-shell [--baud RATE] <uart1_port> [image_file]
+    python3 tools/burn.py --data-port <uart1_port> [--baud RATE] <serial_port> [image_file]
 
 Protocol:
   Phase 1:
@@ -65,8 +65,6 @@ ACK_BAUD = 0x04
 MAGIC = b'\x55\xAA\x55\xAA'
 MAX_RETRY = 5
 CONSOLE_BAUD = 115200
-BOARD_BAUD_COMP_NUM = 11
-BOARD_BAUD_COMP_DEN = 10
 SECTOR_SIZE = 512
 
 
@@ -76,14 +74,6 @@ def le16(data, off):
 
 def le32(data, off):
     return struct.unpack_from('<I', data, off)[0]
-
-
-def default_board_baud(host_baud, console_baud):
-    if host_baud == console_baud:
-        return host_baud
-    return (
-        host_baud * BOARD_BAUD_COMP_NUM + BOARD_BAUD_COMP_DEN // 2
-    ) // BOARD_BAUD_COMP_DEN
 
 
 def hexdump(data):
@@ -341,18 +331,17 @@ def main():
     parser.add_argument("image", nargs="?", default="target/fs.img",
                         help="Filesystem image file (default: target/fs.img)")
     parser.add_argument("--baud", "-b", type=int, default=230400,
-                        help="UART transfer baud after handshake (default: 230400)")
-    parser.add_argument("--board-baud", type=int, default=0,
-                        help="Baud value sent to the board (default: compensated from --baud)")
+                        help="UART transfer baud after handshake; host and board "
+                             "use the same value (default: 230400)")
     parser.add_argument("--console-baud", type=int, default=CONSOLE_BAUD,
                         help="Shell handshake baud (default: 115200)")
     parser.add_argument("--burn-cmd", default="/burn",
                         help="Command used to start the board burn program (default: /burn)")
-    parser.add_argument("--no-shell", action="store_true",
-                        help="Skip the shell handshake and just wait for the "
-                             "board's BURN announcement.  Use when the burn data "
-                             "path is a second UART (BURN_UART=uart1), so /burn "
-                             "was started manually on the console")
+    parser.add_argument("--data-port", metavar="UART1_PORT",
+                        help="Run the DATA phase over a second UART (DW UART1, "
+                             "DMA) instead of the console.  Requires the new "
+                             "runtime-selection burn.c; the shell handshake "
+                             "always stays on the console port")
     parser.add_argument("--shell-byte-delay", type=float, default=SHELL_BYTE_DELAY,
                         help="Delay in seconds between shell-command bytes "
                              "(default: %(default)s)")
@@ -370,17 +359,28 @@ def main():
     SHELL_BYTE_DELAY = args.shell_byte_delay
     SHELL_CTRL_U_SETTLE = args.shell_ctrl_u_settle
 
+    # Ports are opened below; die() closes whatever is already open so no
+    # exit path leaks a serial handle.
+    ser = None
+    data_ser = None
+
+    def die(msg, code=1):
+        print(msg)
+        for s in (data_ser, ser):
+            if s is not None:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+        sys.exit(code)
+
     port = args.port
     img_path = args.image
 
-    board_baud = args.board_baud
-    if board_baud == 0:
-        board_baud = default_board_baud(args.baud, args.console_baud)
+    board_baud = args.baud
 
-    if args.baud < 9600 or args.baud > 5000000 or board_baud < 9600 or board_baud > 5000000:
+    if args.baud < 9600 or args.baud > 5000000:
         print("Transfer baud must be between 9600 and 5000000")
-        if args.board_baud == 0 and board_baud > 5000000:
-            print("The compensated board baud is too high; pass --board-baud explicitly.")
         sys.exit(1)
 
     # Read the image file
@@ -414,12 +414,23 @@ def main():
             f"last_cluster={fat_info['last_cluster']}")
     elif args.full_image:
         print("FAT32 trim: disabled by --full-image")
-    print(f"Baud: host={args.baud}, board={board_baud}, console={args.console_baud}")
+    print(f"Baud: {args.baud}, console={args.console_baud}")
+    if args.data_port:
+        print(f"Data port: {args.data_port} (DW UART1, DMA)")
 
     if args.dry_run:
         return
 
     ser = serial.Serial(port, args.console_baud, timeout=5)
+    if args.data_port:
+        # Open the DATA port up front, before the shell handshake, so the
+        # board's INFO ACK (sent on the data port after it switches) never
+        # races the open.  The reset is safe here: uart1 has sent nothing yet.
+        data_ser = serial.Serial(args.data_port, args.console_baud, timeout=5)
+        data_ser.reset_input_buffer()
+        data_ser.reset_output_buffer()
+    # Protocol runs on the data port when one is given, else on the console.
+    proto = data_ser if data_ser is not None else ser
     time.sleep(0.5)
     ser.reset_input_buffer()
     ser.reset_output_buffer()
@@ -432,15 +443,8 @@ def main():
     burn_idx = 0
     burn_cmd = burn_candidates[burn_idx]
 
-    if not args.no_shell:
-        print(f"Sending '{burn_cmd}' command to board at {args.console_baud} baud...")
-        send_shell_command(ser, burn_cmd)
-    else:
-        # The burn data path runs over a second UART (BURN_UART=uart1): the
-        # shell that starts /burn lives on the console UART, so this port only
-        # sees the program's own BURN announcement.
-        print("No-shell: waiting for BURN "
-              "(start /burn on the console manually)...")
+    print(f"Sending '{burn_cmd}' command to board at {args.console_baud} baud...")
+    send_shell_command(ser, burn_cmd)
 
     print("Waiting for BURN signal...")
     buf = b""
@@ -452,8 +456,7 @@ def main():
             print(
                 "Timeout waiting for BURN, retrying "
                 f"'{burn_cmd}' ({retries}); last serial='{printable_serial(buf[-96:])}'")
-            if not args.no_shell:
-                send_shell_command(ser, burn_cmd)
+            send_shell_command(ser, burn_cmd)
             continue
         buf += c
         if buf.endswith(b"BURN\n"):
@@ -461,11 +464,9 @@ def main():
         failed = f"exec {burn_cmd} failed".encode("ascii")
         if failed in buf:
             if burn_idx + 1 >= len(burn_candidates):
-                print(
+                die(
                     "Board shell could not exec burn program; "
                     f"last serial='{printable_serial(buf[-160:])}'")
-                ser.close()
-                sys.exit(1)
             burn_idx += 1
             burn_cmd = burn_candidates[burn_idx]
             print(f"Board could not exec previous command, trying '{burn_cmd}'...")
@@ -475,16 +476,35 @@ def main():
         if len(buf) > 256:
             buf = buf[-256:]
 
+    preamble = printable_serial(buf)
+    if preamble:
+        print(f"Board preamble: {preamble}")
     print("Board ready, sending image info...")
 
-    # Send INFO message: total image size and board-side baud setting.
-    send_msg(ser, 0, PKT_INFO, struct.pack('<II', img_size, board_baud))
+    # Send INFO on the console: total image size, board-side baud setting, and
+    # the runtime data-port selection (0=console, 1=uart1).  The board switches
+    # to the data port before replying, so the ACK is read from proto.
+    send_msg(ser, 0, PKT_INFO,
+             struct.pack('<IIB', img_size, board_baud, 1 if args.data_port else 0))
 
-    seq, type_, payload = recv_msg(ser, context="INFO ACK")
+    try:
+        seq, type_, payload = recv_msg(proto, context="INFO ACK")
+    except (TimeoutError, ValueError) as e:
+        if args.data_port:
+            tail = read_console_tail(ser)
+            if tail:
+                print("Board console tail (usually the old /burn's reply):")
+                print(printable_serial(tail))
+            die(
+                "INFO ACK failed on the data port.\n"
+                "  The board's running /burn is probably the OLD binary (no data_port "
+                "support), so it ACKs on the console where this dual-port run is not "
+                "listening.\n"
+                "  Fix: run `make download` (console single-port) first to install the "
+                "new /burn onto the SD, then retry `make download DATA_PORT=...`.")
+        die(f"INFO ACK failed: {e}")
     if type_ != PKT_ACK:
-        print(f"Expected ACK, got type 0x{type_:02X}")
-        ser.close()
-        sys.exit(1)
+        die(f"Expected ACK, got type 0x{type_:02X}")
     reason, ticks = ack_info(payload)
     print(f"INFO ACK seq={seq} reason={reason} ticks={ticks}")
     print("Handshake confirmed success!!!")
@@ -492,10 +512,10 @@ def main():
     if args.baud != args.console_baud:
         print(f"Switching host to {args.baud} baud (board setting {board_baud})...")
         print(f"  baud step 1: send switch request at {args.console_baud} baud")
-        send_msg(ser, 0, PKT_BAUD, struct.pack('<I', board_baud))
-        ser.flush()
+        send_msg(proto, 0, PKT_BAUD, struct.pack('<I', board_baud))
+        proto.flush()
         try:
-            seq, type_, payload = recv_msg(ser, timeout=2, context="BAUD READY")
+            seq, type_, payload = recv_msg(proto, timeout=2, context="BAUD READY")
             if type_ == PKT_ACK:
                 reason, ticks = ack_info(payload)
                 print(f"  BAUD READY seq={seq} reason={reason} target={ticks}")
@@ -506,16 +526,16 @@ def main():
 
         print(f"  baud step 2: switch host port to {args.baud} baud")
         time.sleep(0.05)
-        ser.baudrate = args.baud
+        proto.baudrate = args.baud
         time.sleep(0.10)
-        ser.reset_input_buffer()
+        proto.reset_input_buffer()
         baud_synced = False
         for sync_try in range(3):
             print(f"  baud step 3.{sync_try + 1}: send sync at {args.baud} baud")
-            send_msg(ser, 0, PKT_BAUD, struct.pack('<I', board_baud))
+            send_msg(proto, 0, PKT_BAUD, struct.pack('<I', board_baud))
             try:
                 seq, type_, payload = recv_msg(
-                    ser, timeout=1,
+                    proto, timeout=1,
                     context=f"BAUD ACK attempt={sync_try + 1}")
             except (TimeoutError, ValueError) as e:
                 if sync_try == 2:
@@ -532,17 +552,11 @@ def main():
             break
 
         if not baud_synced:
-            print("Baud switch failed before DATA phase.")
-            print(
-                "This means the board did not receive the new-baud sync, or the host "
-                "could not decode the board's BAUD ACK.")
-            print(
-                "Reset the board and calibrate this rate first, for example: "
-                f"python3 tools/uartbaud.py {port} --baud {args.baud} "
-                f"--board-baud {board_baud}")
-            print("Use --baud 230400 for the currently verified fast path.")
-            ser.close()
-            sys.exit(1)
+            die(
+                "Baud switch failed before DATA phase.\n"
+                "  This means the board did not receive the new-baud sync, or the "
+                "host could not decode the board's BAUD ACK.\n"
+                "  Reset the board; use --baud 230400 for the verified fast path.")
 
     # Phase 2: data transfer at the negotiated baud.
     data_start = time.monotonic()
@@ -566,28 +580,24 @@ def main():
             trace = args.verbose or attempt > 0
             if trace:
                 print(f"\n  sec={sec} attempt={attempt + 1}: send DATA len={len(chunk)}")
-            send_msg(ser, sec, PKT_DATA, chunk)
+            send_msg(proto, sec, PKT_DATA, chunk)
 
             try:
                 seq, type_, payload = recv_msg(
-                    ser, timeout=10,
+                    proto, timeout=3,
                     context=f"sec={sec} attempt={attempt + 1}")
             except TimeoutError as e:
                 timeout_errors += 1
                 print(f"\n  sec={sec} attempt={attempt + 1} failed: {e}")
                 if attempt < MAX_RETRY:
                     continue
-                print("  Max retries reached, aborting")
-                ser.close()
-                sys.exit(1)
+                die("  Max retries reached, aborting")
             except ValueError as e:
                 crc_errors += 1
                 print(f"\n  sec={sec} attempt={attempt + 1} failed: {e}")
                 if attempt < MAX_RETRY:
                     continue
-                print("  Max retries reached, aborting")
-                ser.close()
-                sys.exit(1)
+                die("  Max retries reached, aborting")
 
             if trace:
                 if type_ == PKT_ACK:
@@ -600,8 +610,7 @@ def main():
                 stale_count += 1
                 print(f"\n  Stale response (seq={seq}, want={sec}, type=0x{type_:02X}), retry {attempt + 1}/{MAX_RETRY}")
                 if attempt >= MAX_RETRY:
-                    ser.close()
-                    sys.exit(1)
+                    die("  Max retries reached, aborting")
                 continue
 
             if type_ == PKT_ACK:
@@ -618,14 +627,11 @@ def main():
                 err_name = {ERR_CRC: "CRC", ERR_WRITE: "WRITE"}.get(err_code, f"0x{err_code:02X}")
                 print(f"\n  NAK (seq={seq}, error={err_name}), retry {attempt + 1}/{MAX_RETRY}")
                 if attempt >= MAX_RETRY:
-                    print("  Max retries reached, aborting")
-                    ser.close()
-                    sys.exit(1)
+                    die("  Max retries reached, aborting")
             else:
                 print(f"\n  Unexpected type 0x{type_:02X}, retry {attempt + 1}/{MAX_RETRY}")
                 if attempt >= MAX_RETRY:
-                    ser.close()
-                    sys.exit(1)
+                    die("  Max retries reached, aborting")
 
         # Progress
         pct = (sec + 1) * 100 // nsectors
@@ -637,9 +643,9 @@ def main():
     kib_per_sec = (img_size / 1024.0) / data_elapsed if data_elapsed > 0 else 0.0
 
     # Signal completion
-    send_msg(ser, nsectors, PKT_DONE)
+    send_msg(proto, nsectors, PKT_DONE)
     try:
-        seq, type_, payload = recv_msg(ser, timeout=5)
+        seq, type_, payload = recv_msg(proto, timeout=5)
         if type_ == PKT_ACK:
             reason, ticks = ack_info(payload)
             print(f"Transfer completed successfully! ACK reason={reason} ticks={ticks}")
@@ -657,7 +663,7 @@ def main():
         f"sd_ticks_max={sd_ticks_max}")
 
     if args.baud != args.console_baud:
-        ser.baudrate = args.console_baud
+        proto.baudrate = args.console_baud
         time.sleep(0.05)
 
     tail = read_console_tail(ser)
@@ -665,6 +671,8 @@ def main():
         print("Board console tail:")
         print(printable_serial(tail))
 
+    if data_ser is not None:
+        data_ser.close()
     ser.close()
 
 

@@ -87,9 +87,11 @@ uartdev_ioctl(struct file *f, uint64 cmd, uint64 arg)
   case CONSOLE_IOCTL_GET_BAUD_INFO:
     uart_get_baud_info(info);
     return either_copyout(1, arg, info, sizeof(info));
-  case CONSOLE_IOCTL_GET_RX_STATS:
-    uart_get_rx_stats(info);   // info[3] = active RX mode (INT/DMA)
-    return either_copyout(1, arg, info, sizeof(info));
+  case CONSOLE_IOCTL_GET_RX_STATS: {
+    uint32 st[5];              // dropped/buffered/capacity/mode/overrun
+    uart_get_rx_stats(st);
+    return either_copyout(1, arg, st, sizeof(st));
+  }
   case UART_IOCTL_SET_RX_MODE:
     uart_set_rx_mode((int)arg);
     return 0;

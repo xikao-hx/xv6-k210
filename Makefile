@@ -10,11 +10,9 @@ platform ?= k210
 #   LOG_LEVEL_NONE LOG_LEVEL_ERROR LOG_LEVEL_WARN LOG_LEVEL_INFO LOG_LEVEL_DEBUG
 LOG_LEVEL ?= LOG_LEVEL_INFO
 SCHED ?= mlfq
-DOWNLOAD_BAUD ?= 1500000
-# Which UART the burn program receives the image over.  console (UARTHS,
-# default) keeps the interrupt-driven path; uart1 switches burn to the DW
-# UART1 DMA path (burn.c branches on BURN_UART_UART1).
-BURN_UART ?= uart1
+DOWNLOAD_BAUD ?= 2000000
+DATA_PORT ?= /dev/ttyUSB0
+CONSOLE_PORT ?= /dev/ttyUSB1
 
 K=kernel
 U=user
@@ -131,7 +129,6 @@ CFLAGS += $(if $(filter mlfq,$(SCHED)),-D SCHED_MLFQ,-D SCHED_RR)
 CFLAGS += -I$K/include
 CFLAGS += -I$U/include
 CFLAGS += $(if $(filter qemu,$(platform)),-D QEMU,)
-CFLAGS += $(if $(filter uart1,$(BURN_UART)),-DBURN_UART_UART1,)
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 
 # Disable PIE when possible (for Ubuntu 16.10 toolchain)
@@ -304,7 +301,8 @@ ifeq ($(platform), k210)
 UPROGS += \
 	$(UBUILD)/app/_dino\
 	$(UBUILD)/app/_burn\
-	$(UBUILD)/test/_uarttest
+	$(UBUILD)/test/_uarttest\
+	$(UBUILD)/test/_timerfreq
 endif
 
 # $(UBUILD)/app/_w25q64\
@@ -360,11 +358,10 @@ QEMUOPTS += -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 # k210
 image = $T/kernel.bin
 k210 = $T/k210.bin
-k210-serialport := /dev/ttyUSB1
 
 boot:
-	@sudo chmod 777 $(k210-serialport)
-	@python3 -m serial.tools.miniterm --raw --dtr 0 --rts 0 $(k210-serialport) 115200
+	@sudo chmod 777 $(CONSOLE_PORT)
+	@python3 -m serial.tools.miniterm --raw --dtr 0 --rts 0 $(CONSOLE_PORT) 115200
 	
 run: build fs
 ifeq ($(platform), k210)
@@ -372,8 +369,8 @@ ifeq ($(platform), k210)
 	@$(OBJCOPY) $(RUSTSBI) --strip-all -O binary $(k210)
 	@dd if=$(image) of=$(k210) bs=128k seek=1
 # @$(OBJDUMP) -D -b binary -m riscv $(k210) > $T/k210.asm
-	@sudo chmod 777 $(k210-serialport)
-	@python3 ./tools/kflash.py -p $(k210-serialport) -b 500000 -t $(k210)
+	@sudo chmod 777 $(CONSOLE_PORT)
+	@python3 ./tools/kflash.py -p $(CONSOLE_PORT) -b 500000 -t $(k210)
 else
 	@$(QEMU) $(QEMUOPTS)
 endif
@@ -397,11 +394,12 @@ sdcard: fs
 	@sudo dd if=target/fs.img of=$(dev-sd) bs=1M status=progress
 	@sudo eject $(dev-sd)
 
+
 download: fs
-	@sudo chmod 777 $(k210-serialport)
-ifeq ($(BURN_PORT),)
-	@python3 tools/burn.py --baud $(DOWNLOAD_BAUD) --board-baud $(DOWNLOAD_BAUD) $(k210-serialport) target/fs.img
+	@sudo chmod 777 $(CONSOLE_PORT)
+ifeq ($(DATA_PORT),)
+	@python3 tools/burn.py --baud $(DOWNLOAD_BAUD) $(CONSOLE_PORT) target/fs.img
 else
-	@sudo chmod 777 $(BURN_PORT)
-	@python3 tools/burn.py --no-shell --baud $(DOWNLOAD_BAUD) --board-baud $(DOWNLOAD_BAUD) $(BURN_PORT) target/fs.img
+	@sudo chmod 777 $(DATA_PORT)
+	@python3 tools/burn.py --baud $(DOWNLOAD_BAUD) --data-port $(DATA_PORT) $(CONSOLE_PORT) target/fs.img
 endif

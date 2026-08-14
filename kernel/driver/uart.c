@@ -11,6 +11,7 @@
 static volatile uart_t *const uart = (volatile uart_t *)UART;
 
 #define UART_LSR_DR      (1u << 0)
+#define UART_LSR_OE      (1u << 1)  // overrun error (FIFO overflowed)
 #define UART_LSR_TX_BUSY (1u << 5)
 #define UART_LSR_TEMT    (1u << 6)
 
@@ -29,6 +30,12 @@ static volatile uart_t *const uart = (volatile uart_t *)UART;
 
 // DMA per-transfer chunk (32-bit words, 1 byte/word, as the SDK).  RX re-arms
 // RXDMA_SIZE on each boundary; TX writes > TXDMA_SIZE split into blocks.
+// RXDMA_SIZE 1024 was tried: it made 1.5M RX errors worse.  A 527-byte burn
+// frame never fills a 1024-byte block, so every frame was harvested by
+// high-frequency RDA interrupts (dar mid-transfer, racing the DMA-done ISR)
+// instead of one clean done.  Back at 512: one done (512 bytes) + one CTI
+// (the 15-byte frame tail) per frame, and RDA harvesting is disabled in
+// DMA mode (see uartintr) so RDA and done never race.
 #define UART_RXDMA_SIZE 512
 #define UART_TXDMA_SIZE 256
 // dmac_wait_done(CH4) spin budget; ~1s at 400MHz, only guards a wedged line.
@@ -41,6 +48,7 @@ struct uart_rx {
   char buf[UART_RX_BUF_SIZE + 1];
   struct ringbuffer ring;
   uint dropped;        // bytes discarded because the ring was full
+  uint overrun;        // hardware FIFO overruns (LSR OE), counted on LSERR
   uint epoch;          // bumped by uart_flush_rx to wake blocked readers
 };
 
@@ -314,6 +322,7 @@ uart_flush_rx(void)
   }
   ringbuffer_reset(&uart_rx.ring);
   uart_rx.dropped = 0;
+  uart_rx.overrun = 0;
   uart_rx.epoch++;
   wakeup_reason(&uart_rx.ring, WAKEUP_DEVICE);
   if (rx_mode == UART_MODE_DMA && rx_dma_active)
@@ -321,7 +330,8 @@ uart_flush_rx(void)
   release(&uart_rx.lock);
 }
 
-// info[0]=dropped, [1]=buffered, [2]=ring capacity, [3]=RX mode (INT/DMA).
+// info[0]=dropped, [1]=buffered, [2]=ring capacity, [3]=RX mode (INT/DMA),
+// [4]=hardware overruns (LSR OE).
 void
 uart_get_rx_stats(uint32 *info)
 {
@@ -330,6 +340,7 @@ uart_get_rx_stats(uint32 *info)
   info[1] = ringbuffer_used(&uart_rx.ring);
   info[2] = ringbuffer_capacity(&uart_rx.ring);
   info[3] = (uint32)rx_mode;
+  info[4] = uart_rx.overrun;
   release(&uart_rx.lock);
 }
 
@@ -550,9 +561,17 @@ uartintr(void)
     release(&uart_tx.lock);
     break;
   case UART_IIR_RDA:
-  case UART_IIR_TIMEOUT:
+    if (rx_mode == UART_MODE_DMA)
+      break;   // DMA drains the FIFO; done/CTI harvest.  Harvesting on RDA
+               // disables CH5 with dar mid-transfer and races the DMA-done
+               // ISR, corrupting frames (seen as 1.5M burn CRC errors).
+    acquire(&uart_rx.lock);
+    uart_rx_service();
+    release(&uart_rx.lock);
+    break;
+  case UART_IIR_TIMEOUT:   // CTI: FIFO idle with bytes left
     if (rx_mode == UART_MODE_DMA) {
-      // RDA fires on K210 even with FCR[3]=1; both are frame boundaries.
+      // A frame tail too short to fill a DMA block closes via CTI.
       uart_dma_rx_intr();
     } else {
       acquire(&uart_rx.lock);
@@ -562,7 +581,13 @@ uartintr(void)
     break;
   case UART_IIR_LSERR:
     // Line-status error (overrun/parity/framing): reading LSR clears it.
-    (void)uart->LSR;
+    // Count FIFO overruns so a saturated RX path is observable instead of
+    // silently dropping bytes (the RX ring's own dropped counter never sees
+    // bytes the FIFO lost before the DMA/interrupt got to them).
+    acquire(&uart_rx.lock);
+    if (uart->LSR & UART_LSR_OE)
+      uart_rx.overrun++;
+    release(&uart_rx.lock);
     break;
   default:
     break;  // 0x01 = no interrupt pending

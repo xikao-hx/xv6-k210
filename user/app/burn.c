@@ -1,14 +1,17 @@
 // Burn a FAT filesystem image over UART in framed RAW-mode messages.
 //
-// The burn UART is chosen at compile time (Makefile BURN_UART):
-//   console (default)  -> /dev/console (UARTHS, interrupt-fed RX ring)
-//   uart1              -> /dev/uart1 (DW UART1, DMA RX CH5 / TX CH4)
-// Protocol logic is identical either way; only the device entry branches.
+// The burn data UART is chosen at runtime by the host: the INFO packet's
+// optional 9th payload byte selects the data port.
+//   data_port == 0 (default) -> /dev/console (UARTHS, interrupt-fed RX ring)
+//   data_port == 1           -> /dev/uart1 (DW UART1, DMA RX CH5 / TX CH4)
+// The shell handshake (BURN announcement + INFO) always runs on the console;
+// only the DATA phase moves to uart1 when data_port==1.  Protocol logic is
+// identical either way; only the device entry branches.
 //
 // Host flow:
 //   1. Send "/burn\n" to the shell, which starts this program.
 //   2. Wait for "BURN\n".
-//   3. Send INFO with image size and optional transfer baud.
+//   3. Send INFO with image size, optional transfer baud, and data_port.
 //   4. Optionally switch UART baud with a BAUD/ACK sync.
 //   5. Send one 512-byte DATA packet per sector.
 //   6. Send DONE after all sectors are acknowledged.
@@ -26,12 +29,14 @@
 #include "user.h"
 #include "fcntl.h"
 #include <stdarg.h>
-#ifdef BURN_UART_UART1
 #include "uart.h"
-#endif
 
 #define MAX_RETRY    5
 #define CONSOLE_BAUD 115200
+// Mid-frame wire silence (ticks) before the board NAKs early instead of waiting
+// out the host's 3s recv timeout.  0.5s at 5ms/tick = 100.  Only armed in the
+// DATA phase; handshake messages keep the blocking read.
+#define RX_STALL_NAK_TICKS 100
 
 #define PKT_INFO   0x01  // Host to board: payload is total image size.
 #define PKT_DATA   0x02  // Host to board: payload is one 512-byte sector.
@@ -50,6 +55,23 @@
 #define ACK_BAUD     0x04
 
 #define BURN_PROGRESS_TITLE "WRITING FS V2"
+
+// ---- RX stall-timing diagnostics (frame-truncation signature) ----
+// If the host drops the tail of a 1.5M frame, the board blocks in read_bytes
+// waiting for bytes that never arrive; after the host's retry timeout the retry
+// bytes complete a garbage frame and the CRC fails.  The signature is a long
+// inter-read gap INSIDE the failing frame (a normal frame at 1.5M has gaps of a
+// few ticks at most).  These counters are passive -- no sleep, no abort -- so
+// the protocol timing is untouched.  Per-frame prints are gated on the DATA
+// port being uart1 (console then free); in console mode the stream must stay
+// printf-free, so the information lands only in the final stats line.
+static uint diag_stall_ticks;     // worst inter-read gap (ticks) in the current recv_msg
+static uint diag_stall_at;        // byte offset within that recv_msg where the gap occurred
+static uint diag_crc_stall_max;   // worst such gap among all CRC-failing frames
+static uint diag_crc_stall_max_sec;
+static uint diag_long_stalls;     // CRC failures whose frame showed a nonzero stall
+
+static void get_uart_rx_stats(int fd, struct console_rx_stats *stats);
 
 static int
 oled_init(void)
@@ -208,17 +230,90 @@ crc32(const uint8 *data, int len, uint32 crc)
   return ~crc;
 }
 
-// Read exactly n bytes from the interrupt-fed raw UART ring.
+// Read exactly n bytes from the interrupt-fed raw UART ring.  The gap between
+// consecutive read() returns is tracked: a long gap means the wire went silent
+// mid-frame (host TX tail-drop), which is exactly the truncation signature.
+// read() blocks until data arrives, so the gap includes the blocking wait.
 static int
 read_bytes(int fd, uint8 *buf, int n)
 {
   int off = 0;
+  uint t_prev = uptime();
 
   while (off < n) {
     int r = read(fd, buf + off, n - off);
     if (r <= 0)
       return -1;
+    uint t_now = uptime();
+    uint gap = t_now - t_prev;
+    if (gap > diag_stall_ticks) {
+      diag_stall_ticks = gap;
+      diag_stall_at = off;
+    }
+    t_prev = t_now;
     off += r;
+  }
+
+  return 0;
+}
+
+// Read exactly n bytes, giving up if the wire goes silent mid-read for more
+// than max_gap_ticks (a truncated frame: the host's TX dropped the frame, and
+// without this the board would block for the full host retry timeout).  The
+// ring depth is polled via ioctl; read() is only called when bytes are known
+// buffered, so a mid-frame stall is observable instead of blocking forever.
+// max_gap_ticks == 0 disables the timeout and falls back to a blocking read
+// (handshake messages).  Returns 0 on success, -1 on I/O error, -2 on stall.
+static int
+read_bytes_timeout(int fd, uint8 *buf, int n, uint max_gap_ticks)
+{
+  int off = 0;
+  uint t_last = uptime();
+
+  while (off < n) {
+    struct console_rx_stats st;
+    get_uart_rx_stats(fd, &st);
+
+    if (st.buffered > 0) {
+      int want = n - off;
+      if (want > (int)st.buffered)
+        want = st.buffered;
+      int r = read(fd, buf + off, want);
+      if (r <= 0)
+        return -1;
+      uint t_now = uptime();
+      uint gap = t_now - t_last;
+      if (gap > diag_stall_ticks) {
+        diag_stall_ticks = gap;
+        diag_stall_at = off;
+      }
+      t_last = t_now;
+      off += r;
+      continue;
+    }
+
+    if (max_gap_ticks == 0) {
+      // No timeout: block for data (original behavior).
+      int r = read(fd, buf + off, n - off);
+      if (r <= 0)
+        return -1;
+      uint t_now = uptime();
+      uint gap = t_now - t_last;
+      if (gap > diag_stall_ticks) {
+        diag_stall_ticks = gap;
+        diag_stall_at = off;
+      }
+      t_last = t_now;
+      off += r;
+      continue;
+    }
+
+    // Ring empty and a timeout is armed: the frame was truncated on the wire.
+    if (uptime() - t_last > max_gap_ticks) {
+      diag_stall_ticks = uptime() - t_last;
+      diag_stall_at = off;
+      return -2;
+    }
   }
 
   return 0;
@@ -250,13 +345,21 @@ send_msg(int fd, uint32 seq, uint8 type, const uint8 *payload, uint16 plen)
   write(fd, crc_buf, 4);
 }
 
-// Return the packet type, -1 on I/O/protocol error, or -2 on CRC mismatch.
-// The stream is self-synchronizing: stray bytes are skipped until magic.
+// Return the packet type, -1 on I/O/protocol error, -2 on CRC mismatch, or
+// -3 if the wire went silent mid-frame for more than stall_nak_ticks (a
+// truncated frame; the host's TX dropped it).  The stream is
+// self-synchronizing: stray bytes are skipped until magic.  stall_nak_ticks
+// == 0 keeps the old blocking reads (handshake messages, where the host
+// paces the stream and silence is not an error).
 static int
-recv_msg(int fd, uint32 *seq_out, uint8 *payload_buf, uint16 *plen_out)
+recv_msg(int fd, uint32 *seq_out, uint8 *payload_buf, uint16 *plen_out,
+         uint stall_nak_ticks)
 {
   uint8 sync[4];
   int   si = 0;
+
+  diag_stall_ticks = 0;   // capture the worst inter-read gap of THIS message
+  diag_stall_at = 0;
 
 resync:
   while (1) {
@@ -274,7 +377,10 @@ resync:
   }
 
   uint8 hdr[7];
-  if (read_bytes(fd, hdr, 7) < 0) {
+  int rr = read_bytes_timeout(fd, hdr, 7, stall_nak_ticks);
+  if (rr < 0) {
+    if (rr == -2)
+      return -3;  // mid-frame silence: truncated frame, NAK early
     show_phase("RECV FAIL");
     oled_write_row(2, "HDR");
     return -1;
@@ -309,14 +415,22 @@ resync:
     return -1;
   }
 
-  if (plen > 0 && read_bytes(fd, payload_buf, plen) < 0) {
-    show_phase("RECV FAIL");
-    oled_write_row(2, "PAYLOAD");
-    return -1;
+  if (plen > 0) {
+    rr = read_bytes_timeout(fd, payload_buf, plen, stall_nak_ticks);
+    if (rr < 0) {
+      if (rr == -2)
+        return -3;
+      show_phase("RECV FAIL");
+      oled_write_row(2, "PAYLOAD");
+      return -1;
+    }
   }
 
   uint8 crc_raw[4];
-  if (read_bytes(fd, crc_raw, 4) < 0) {
+  rr = read_bytes_timeout(fd, crc_raw, 4, stall_nak_ticks);
+  if (rr < 0) {
+    if (rr == -2)
+      return -3;
     show_phase("RECV FAIL");
     oled_write_row(2, "CRC BYTES");
     return -1;
@@ -389,7 +503,7 @@ log_open_failed(const char *name)
 int
 main(void)
 {
-  int uart_fd, sdcard_fd;
+  int console_fd, uart_fd, sdcard_fd;
   int type;
   int success = 0;
   int cache_rc = -1;
@@ -399,6 +513,7 @@ main(void)
   uint32 pkt_errors = 0;
   uint32 sd_errors = 0;
   uint32 dup_packets = 0;
+  uint32 stall_errors = 0;   // frames NAK'd early on mid-frame silence (>0.5s)
   uint32 sd_ticks_total = 0;
   uint32 sd_ticks_max = 0;
   uint32 transfer_start = 0;
@@ -413,28 +528,18 @@ main(void)
 
   crc32_init();
 
-  printf("burn: init\n");
+  printf("burn: init v2\n");
 
   // Open all devices before RAW mode. After SET_MODE, stdout is no
   // longer a safe debug channel because the host owns the UART stream.
-#ifdef BURN_UART_UART1
-  uart_fd = open("/dev/uart1", O_RDWR);
-  if (uart_fd < 0) {
-    log_open_failed("uart1");
+  // The console is always the handshake port (shell + BURN + INFO); the
+  // data port may later move to uart1, selected at runtime from INFO.
+  console_fd = open("/dev/console", O_RDWR);
+  if (console_fd < 0) {
+    log_open_failed("console");
     exit(1);
   }
-  // The burn data path is the DW UART1 DMA channel (CH4 TX / CH5 RX).
-  // Starting straight in DMA mode avoids an INT->DMA mode switch, so no
-  // switch-induced spurious RX frame needs flushing (Step 2 issue 3).
-  ioctl(uart_fd, UART_IOCTL_SET_RX_MODE, UART_MODE_DMA);
-  ioctl(uart_fd, UART_IOCTL_SET_TX_MODE, UART_MODE_DMA);
-#else
-  uart_fd = open("/dev/console", O_RDWR);
-  if (uart_fd < 0) {
-    log_open_failed("uart");
-    exit(1);
-  }
-#endif
+  uart_fd = console_fd;
 
   sdcard_fd = open("/dev/sdcard", O_RDWR);
   if (sdcard_fd < 0) {
@@ -444,25 +549,29 @@ main(void)
 
   int oled_rc = oled_init();
   printf("burn: ready uart=%d sd=%d oled=%d\n",
-         uart_fd, sdcard_fd, oled_rc);
+         console_fd, sdcard_fd, oled_rc);
 
-  if (ioctl(uart_fd, CONSOLE_IOCTL_SET_MODE, CONSOLE_MODE_RAW) < 0) {
+  if (ioctl(console_fd, CONSOLE_IOCTL_SET_MODE, CONSOLE_MODE_RAW) < 0) {
     show_error("RAW MODE", 0);
     close(sdcard_fd);
-    close(uart_fd);
+    close(console_fd);
     exit(1);
   }
 
-  // Until TTY mode is restored, host communication must use uart_fd.
-  // OLED updates are kept sparse because I2C is slow and the UART RX FIFO
-  // is tiny; after ACK, return to recv_msg() as quickly as possible.
+  // Until TTY mode is restored, host communication must use uart_fd.  When
+  // uart_fd is the console (single-port mode), console printf would interleave
+  // with the frame stream -- keep the data path printf-free.  OLED updates are
+  // kept sparse because I2C is slow and the UART RX FIFO is tiny; after ACK,
+  // return to recv_msg() as quickly as possible.
 
   show_phase("WAIT INFO");
-  write(uart_fd, "BURN\n", 5);
+  write(console_fd, "BURN\n", 5);
 
   // INFO defines the exact number of image bytes the host will send.  The
   // host may trim unused FAT32 space, so this can be much smaller than fs.img.
-  type = recv_msg(uart_fd, &seq, payload, &plen);
+  // The shell handshake always runs on the console; this packet also carries
+  // the runtime data-port selection (payload[8], optional).
+  type = recv_msg(console_fd, &seq, payload, &plen, 0);
   if (type != PKT_INFO || plen < 4) {
     show_error("NO INFO", 0);
     goto fail;
@@ -475,6 +584,32 @@ main(void)
                   | ((uint32)payload[6] << 16) | ((uint32)payload[7] << 24);
     if (transfer_baud < 9600 || transfer_baud > 5000000)
       transfer_baud = CONSOLE_BAUD;
+  }
+
+  // Runtime data-port selection: payload[8]==1 moves the DATA path to the DW
+  // UART1 (DMA RX CH5 / TX CH4).  uart1 boots in DMA mode, so the SET_*_MODE
+  // calls are no-ops that document the intended path; the FLUSH discards any
+  // RX residue (adapter-connect noise, a previous crash's garbage) before the
+  // first real frame arrives.
+  if (plen >= 9 && payload[8] == 1) {
+    // Console-side diagnostics: the DATA path is on uart1, so printing to the
+    // console is a safe side-channel captured by burn.py's read_console_tail.
+    printf("burn: dp=1\n");
+    int u1 = open("/dev/uart1", O_RDWR);
+    if (u1 < 0) {
+      printf("burn: open uart1 fail\n");
+      show_error("OPEN UART1", 0);
+      goto fail;
+    }
+    uart_fd = u1;
+
+    // Pin the UART1 line rate back to console baud: a previous burn session
+    // that crashed mid-transfer leaves the divisor at transfer_baud.
+    ioctl(uart_fd, CONSOLE_IOCTL_SET_BAUD, CONSOLE_BAUD);
+    ioctl(uart_fd, UART_IOCTL_SET_RX_MODE, UART_MODE_DMA);
+    ioctl(uart_fd, UART_IOCTL_SET_TX_MODE, UART_MODE_DMA);
+    ioctl(uart_fd, CONSOLE_IOCTL_FLUSH_INPUT, 0);
+    printf("burn: uart1 ready\n");
   }
   nsectors  = (total_size + 511) / 512;
   progress_step = nsectors / 20;
@@ -503,7 +638,7 @@ main(void)
     show_hex_value(2, "BAUD ", transfer_baud);
     show_phase("BAUD WAIT");
 
-    type = recv_msg(uart_fd, &seq, payload, &plen);
+    type = recv_msg(uart_fd, &seq, payload, &plen, 0);
     if (type != PKT_BAUD) {
       show_error("BAUD REQ", nsectors);
       goto fail;
@@ -520,7 +655,7 @@ main(void)
       show_hex_value(3, "DIV ", div);
     }
 
-    type = recv_msg(uart_fd, &seq, payload, &plen);
+    type = recv_msg(uart_fd, &seq, payload, &plen, 0);
     if (type != PKT_BAUD) {
       show_error("BAUD SYNC", nsectors);
       goto fail;
@@ -537,11 +672,39 @@ main(void)
     int sector_ok = 0;
 
     while (retries <= MAX_RETRY) {
-      type = recv_msg(uart_fd, &seq, payload, &plen);
+      type = recv_msg(uart_fd, &seq, payload, &plen, RX_STALL_NAK_TICKS);
 
       if (type == -2) {
         crc_errors++;
+        // A stall inside this frame means the wire went silent mid-frame and the
+        // retry's bytes completed a garbage frame: host TX dropped the tail.
+        // Large stall (>> few ticks) => truncation; ~0 => bytes corrupted in place.
+        if (diag_stall_ticks > diag_crc_stall_max) {
+          diag_crc_stall_max = diag_stall_ticks;
+          diag_crc_stall_max_sec = sec;
+        }
+        if (diag_stall_ticks > 0)
+          diag_long_stalls++;
+        if (uart_fd != console_fd)   // DATA on uart1: console is a free side-channel
+          printf("burn: crc sec=%u stall=%u ticks atbyte=%u\n",
+                 sec, diag_stall_ticks, diag_stall_at);
         show_retry("CRC", sec, retries);
+        send_nak(uart_fd, sec, ERR_CRC);
+        retries++;
+        continue;
+      }
+
+      if (type == -3) {
+        stall_errors++;
+        // Host TX truncated this frame: the wire went silent mid-frame for
+        // RX_STALL_NAK_TICKS and read_bytes_timeout gave up.  NAK right away
+        // instead of sitting through the host's full retry timeout (which was
+        // ~3s, i.e. ~50x the transfer rate of this early-NAK path).  The
+        // measured gap is the silence we actually waited for.
+        if (uart_fd != console_fd)
+          printf("burn: stall sec=%u gap=%u ticks atbyte=%u\n",
+                 sec, diag_stall_ticks, diag_stall_at);
+        show_retry("STALL", sec, retries);
         send_nak(uart_fd, sec, ERR_CRC);
         retries++;
         continue;
@@ -549,6 +712,8 @@ main(void)
 
       if (type < 0) {
         io_errors++;
+        if (uart_fd != console_fd)
+          printf("burn: io sec=%u stall=%u ticks\n", sec, diag_stall_ticks);
         show_retry("IO", sec, retries);
         send_nak(uart_fd, sec, ERR_CRC);
         retries++;
@@ -605,7 +770,7 @@ main(void)
   // DONE lets the host distinguish "all sectors ACKed" from a clean protocol
   // close.  Restore the console before printing the final text summary.
   show_phase("WAIT DONE");
-  type = recv_msg(uart_fd, &seq, payload, &plen);
+  type = recv_msg(uart_fd, &seq, payload, &plen, RX_STALL_NAK_TICKS);
   if (type == PKT_DONE)
     send_ack_payload(uart_fd, seq, ACK_DONE, 0);
   else {
@@ -624,13 +789,18 @@ finish:
   if (transfer_baud != CONSOLE_BAUD)
     ioctl(uart_fd, CONSOLE_IOCTL_SET_BAUD, CONSOLE_BAUD);
   get_uart_rx_stats(uart_fd, &rx_stats);
+  // uart1 rejects SET_MODE(TTY) (-1, ignored).  The console must be restored
+  // before the final printf so the summary is readable and the shell resumes.
   ioctl(uart_fd, CONSOLE_IOCTL_SET_MODE, CONSOLE_MODE_TTY);
+  if (uart_fd != console_fd)
+    ioctl(console_fd, CONSOLE_IOCTL_SET_MODE, CONSOLE_MODE_TTY);
 
   if (!success) {
     show_phase("BURN FAILED!");
-    printf("burn: failed dup=%u crc=%u io=%u pkt=%u sd=%u raw_drop=%u raw_buf=%u/%u\n",
-           dup_packets, crc_errors, io_errors, pkt_errors, sd_errors,
-           rx_stats.dropped, rx_stats.buffered, rx_stats.capacity);
+    printf("burn: failed dup=%u crc=%u io=%u pkt=%u sd=%u stallnak=%u raw_drop=%u raw_buf=%u/%u ovr=%u stall=%u longstall=%u\n",
+           dup_packets, crc_errors, io_errors, pkt_errors, sd_errors, stall_errors,
+           rx_stats.dropped, rx_stats.buffered, rx_stats.capacity, rx_stats.overrun,
+           diag_crc_stall_max, diag_long_stalls);
     exit(1);
   }
 
@@ -640,9 +810,10 @@ finish:
   oled_write_hexrow(3, "DONE", 0, 0);
   printf("burn: done sectors=%u bytes=%u cache=%d\n",
          nsectors, total_size, cache_rc);
-  printf("burn: stats ticks=%u sd_total=%u sd_max=%u dup=%u crc=%u io=%u pkt=%u sd=%u raw_drop=%u raw_buf=%u/%u\n",
+  printf("burn: stats ticks=%u sd_total=%u sd_max=%u dup=%u crc=%u io=%u pkt=%u sd=%u stallnak=%u raw_drop=%u raw_buf=%u/%u ovr=%u stall=%u sec=%u longstall=%u\n",
          transfer_ticks, sd_ticks_total, sd_ticks_max, dup_packets,
-         crc_errors, io_errors, pkt_errors, sd_errors,
-         rx_stats.dropped, rx_stats.buffered, rx_stats.capacity);
+         crc_errors, io_errors, pkt_errors, sd_errors, stall_errors,
+         rx_stats.dropped, rx_stats.buffered, rx_stats.capacity, rx_stats.overrun,
+         diag_crc_stall_max, diag_crc_stall_max_sec, diag_long_stalls);
   exit(0);
 }

@@ -176,10 +176,13 @@ consoleioctl(struct file *f, uint64 cmd, uint64 arg)
   case CONSOLE_IOCTL_GET_BAUD_INFO:
     uarths_get_baud_info(info);
     return either_copyout(1, arg, info, sizeof(info));
-  case CONSOLE_IOCTL_GET_RX_STATS:
-    uarths_get_rx_stats(info);
-    info[3] = console_mode_get();
-    return either_copyout(1, arg, info, sizeof(info));
+  case CONSOLE_IOCTL_GET_RX_STATS: {
+    uint32 st[5];              // dropped/buffered/capacity/mode/overrun
+    uarths_get_rx_stats(st);
+    st[3] = console_mode_get();
+    st[4] = 0;                 // UARTHS has no overrun status bit
+    return either_copyout(1, arg, st, sizeof(st));
+  }
   case CONSOLE_IOCTL_SET_FG_PGRP:
     if(arg > 0x7fffffffUL)
       return -1;
