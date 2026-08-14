@@ -136,6 +136,7 @@ exec(char *path, char **argv)
   // Unmap old user mappings, then copy new ones from the new pagetable.
   uvmunmap(p->kpagetable, 0, PGROUNDUP(old_sz) / PGSIZE, 0);
   upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz);
+  sfence_vma();
 
   proc_freepagetable(oldpagetable, old_sz);
   signal_reset_on_exec(p);
