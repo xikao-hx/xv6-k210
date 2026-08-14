@@ -56,13 +56,25 @@ crc32(4 LE)
 ## 4. 包类型
 
 ```text
-PKT_INFO = 0x01  主机 -> 板端，发送镜像大小和可选传输 baud
+PKT_INFO = 0x01  主机 -> 板端，发送镜像大小、可选传输 baud 和数据口选择
 PKT_DATA = 0x02  主机 -> 板端，发送一个 512 字节扇区
 PKT_DONE = 0x03  主机 -> 板端，表示所有数据发送完成
 PKT_BAUD = 0x04  主机 -> 板端，用于 baud 切换同步
 PKT_ACK  = 0x81  板端 -> 主机，表示接受
 PKT_NAK  = 0x82  板端 -> 主机，表示拒绝
 ```
+
+INFO payload（依次小端）：
+
+```text
+total_size(4)   镜像总字节数
+board_baud(4)   板端目标 baud（可选；plen<8 时板端用默认 115200）
+data_port(1)    数据口选择（可选；plen<9 时默认为 0）
+                0 = console（UARTHS，与握手同口）
+                1 = /dev/uart1（DW UART1，DMA RX CH5 / TX CH4）
+```
+
+板端解析按 plen 向后兼容：旧主机只发 8 字节（无 data_port）→ 数据走 console；新主机 9 字节 → 按第 9 字节选择数据口。shell 握手（BURN 宣告 + INFO 收发）始终在 console 上，`data_port==1` 时仅 DATA 阶段移到 uart1。
 
 ACK payload：
 
@@ -95,38 +107,45 @@ NAK payload 当前为错误码：
 板端 `burn` 程序流程：
 
 ```text
-打开 DEV_UART
+打开 DEV_CONSOLE（shell 握手口）
 打开 DEV_SDCARD
 初始化 OLED
-UART_IOCTL_RAW_START
-发送 "BURN\n"
+CONSOLE_IOCTL_SET_MODE(RAW)（所有预协议 printf 必须先于此）
+发送 "BURN\n"（console）
 
-接收 INFO
-  解析 total_size 和 transfer_baud
+接收 INFO（console 握手口）
+  解析 total_size、transfer_baud（plen>=8）
+  解析 data_port（plen>=9 的第 9 字节；缺省=0）
   计算 nsectors
   检查 SD 卡容量
   SDCARD_IOCTL_SEEK 到 0
-  ACK INFO
+  若 data_port == 1：                    # 数据口切到 DW UART1
+    open /dev/uart1
+    SET_BAUD(115200)                     # 钉死波特率，覆盖前次残留
+    SET_RX/TX_MODE(DMA)                  # uart1 boot 起默认 DMA，此步为 no-op
+    FLUSH_INPUT                          # 清适配器 open 杂讯/旧波特率垃圾帧
+  ACK INFO（发往数据口：console 或 uart1）
 
-可选 baud 切换
+可选 baud 切换（数据口上）
   接收 BAUD
   ACK BAUD
-  UART_IOCTL_SET_BAUD
+  SET_BAUD
   再接收 BAUD 同步
   ACK BAUD
 
-循环接收 DATA
+循环接收 DATA（数据口上）
   CRC 错误 -> NAK
   seq < 当前扇区 -> ACK_DUP，不重复写
   seq != 当前扇区 -> NAK
   正常 -> write(sdcard_fd, payload, 512) -> ACK_OK
 
-接收 DONE
+接收 DONE（数据口上）
   ACK_DONE
 
-恢复 115200 baud
+数据口恢复 115200 baud
 SDCARD_IOCTL_INVALIDATE_CACHE
-UART_IOCTL_RAW_END
+数据口 SET_MODE(TTY)（uart1 返回 -1 忽略）
+若数据口为 uart1：console SET_MODE(TTY)   # 须早于最终 printf
 打印完成日志
 ```
 
@@ -166,6 +185,8 @@ raw mode:
 - `UART_IOCTL_GET_RAW_STATS`：查询 raw ring 的 dropped、buffered、capacity 和当前模式。
 
 raw ring buffer 当前在 `kernel/driver/uarths.c` 中维护，大小为 32768 字节，用于缓冲中断接收到的数据。
+
+当 INFO 的 `data_port==1` 时，数据阶段改用 `/dev/uart1`（DW APB 16550，`kernel/driver/uart.c`）：RX 走 DMA CH5（RDA/CTI/DMA-done 边界事件驱动，harvest 进 32KB ring）、TX 走阻塞 DMA CH4。uart1 **自 boot 起默认 DMA 模式**（`uartinit()` 末尾 `SET_RX/TX_MODE(DMA)`），因此切换数据口后 `SET_RX/TX_MODE(DMA)` 是 no-op，不再有 INT→DMA 切换伪字节；但切换后仍需 `FLUSH_INPUT` 清适配器 open 杂讯与旧波特率垃圾帧。
 
 ## 7. baud 切换策略
 

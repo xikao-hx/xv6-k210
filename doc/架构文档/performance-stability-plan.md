@@ -66,8 +66,8 @@ date,board,sd_card,baud,board_baud,image_size,elapsed_ms,throughput_kib_s,retrie
 建议运行：
 
 ```sh
-python3 tools/burn.py --baud 230400 --board-baud 230400 /dev/ttyUSB0 target/fs.img
-python3 tools/burn.py --baud 460800 --board-baud 500000 /dev/ttyUSB0 target/fs.img
+python3 tools/burn.py --baud 230400 /dev/ttyUSB0 target/fs.img
+python3 tools/burn.py --baud 500000 /dev/ttyUSB0 target/fs.img
 ```
 
 报告输出：

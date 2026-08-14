@@ -23,6 +23,7 @@ main(void)
   mknod("/dev/oled", DEV_I2C, I2C_DEV_OLED);
   mknod("/dev/mpu6050", DEV_I2C, I2C_DEV_MPU6050);
   mknod("/dev/oledfb", DEV_OLEDFB, 0);
+  mknod("/dev/uart1", DEV_UART1, 0);
 #endif
 
   open("/dev/console", O_RDWR);

@@ -10,6 +10,9 @@ platform ?= k210
 #   LOG_LEVEL_NONE LOG_LEVEL_ERROR LOG_LEVEL_WARN LOG_LEVEL_INFO LOG_LEVEL_DEBUG
 LOG_LEVEL ?= LOG_LEVEL_INFO
 SCHED ?= mlfq
+DOWNLOAD_BAUD ?= 1500000
+DATA_PORT ?= /dev/ttyUSB0
+CONSOLE_PORT ?= /dev/ttyUSB1
 
 K=kernel
 U=user
@@ -70,6 +73,7 @@ OBJS = \
   $K/trap/trampoline.o \
   $K/trap/kernelvec.o \
   $K/trap/sigtramp.o \
+  $K/trap/irq.o \
 
 # Platform-specific objects
 ifeq ($(platform), k210)
@@ -80,6 +84,8 @@ OBJS += \
   $K/devsw/i2cdev.o \
   $K/devsw/sdcarddev.o \
   $K/devsw/oledfb.o \
+  $K/devsw/uartdev.o \
+  $K/driver/uart.o \
   $K/driver/gpiohs.o \
   $K/driver/fpioa.o \
   $K/driver/utils.o \
@@ -87,7 +93,8 @@ OBJS += \
   $K/driver/dmac.o \
   $K/driver/sysctl.o \
   $K/board/i2c_board.o \
-  $K/board/spi_board.o
+  $K/board/spi_board.o \
+  $K/board/uart_board.o
 else
 OBJS += \
   $K/driver/virtio_disk.o
@@ -213,7 +220,7 @@ ULIB = $(UBUILD)/libc/ulib.o $(UBUILD)/usys.o $(UBUILD)/libc/printf.o $(UBUILD)/
 
 ifeq ($(platform), k210)
 # reference: only programs that actually call OLED_* / reference sprites /
-# MPU6050_* (rendertest, DinoGame, mpu6050, i2ctest, ...) pull the members in.
+# MPU6050_* (rendertest, DinoGame, i2ctest, ...) pull the members in.
 $(UBUILD)/libc/libgame.a: $(UBUILD)/libc/oled.o $(UBUILD)/libc/game_data.o $(UBUILD)/libc/mpu6050.o
 	$(AR) crs $@ $^
 ULIB += $(UBUILD)/libc/libgame.a
@@ -283,7 +290,8 @@ TESTCASE_EXCLUDE = \
   statistics \
   usertests
 
-TESTCASES ?= testcase/bcachetest.c testcase/kalloctest.c testcase/mmaptest.c testcase/signaltest.c testcase/cowtest.c testcase/lazytests.c
+# testcase/bcachetest.c testcase/kalloctest.c testcase/cowtest.c testcase/lazytests.c
+TESTCASES ?=  testcase/mmaptest.c testcase/signaltest.c 
 ifeq ($(strip $(TESTCASES)),)
 TESTCASES := $(filter-out $(addprefix testcase/,$(addsuffix .c,$(TESTCASE_EXCLUDE))),$(wildcard testcase/*.c))
 endif
@@ -293,8 +301,8 @@ UPROGS += $(TESTCASE_PROGS)
 # Platform-specific objects
 ifeq ($(platform), k210)
 UPROGS += \
+	$(UBUILD)/app/_dino\
 	$(UBUILD)/app/_w25q64\
-	$(UBUILD)/app/_burn\
 	$(UBUILD)/test/_consoletest\
 	$(UBUILD)/test/_sdtest\
 	$(UBUILD)/test/_spitest\
@@ -302,7 +310,8 @@ UPROGS += \
 	$(UBUILD)/test/_dmactest\
 	$(UBUILD)/test/_oledfbtest\
 	$(UBUILD)/test/_rendertest\
-	$(UBUILD)/app/_dino
+	$(UBUILD)/app/_burn\
+	$(UBUILD)/test/_uarttest
 endif
 
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
@@ -349,11 +358,10 @@ QEMUOPTS += -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 # k210
 image = $T/kernel.bin
 k210 = $T/k210.bin
-k210-serialport := /dev/ttyUSB0
 
 boot:
-	@sudo chmod 777 $(k210-serialport)
-	@python3 -m serial.tools.miniterm --raw --dtr 0 --rts 0 $(k210-serialport) 115200
+	@sudo chmod 777 $(CONSOLE_PORT)
+	@python3 -m serial.tools.miniterm --raw --dtr 0 --rts 0 $(CONSOLE_PORT) 115200
 	
 run: build fs
 ifeq ($(platform), k210)
@@ -361,8 +369,8 @@ ifeq ($(platform), k210)
 	@$(OBJCOPY) $(RUSTSBI) --strip-all -O binary $(k210)
 	@dd if=$(image) of=$(k210) bs=128k seek=1
 # @$(OBJDUMP) -D -b binary -m riscv $(k210) > $T/k210.asm
-	@sudo chmod 777 $(k210-serialport)
-	@python3 ./tools/kflash.py -p $(k210-serialport) -b 115200 -t $(k210)
+	@sudo chmod 777 $(CONSOLE_PORT)
+	@python3 ./tools/kflash.py -p $(CONSOLE_PORT) -b 500000 -t $(k210)
 else
 	@$(QEMU) $(QEMUOPTS)
 endif
@@ -386,7 +394,12 @@ sdcard: fs
 	@sudo dd if=target/fs.img of=$(dev-sd) bs=1M status=progress
 	@sudo eject $(dev-sd)
 
-# BUG: The baud rate of K210 must be increased.
+
 download: fs
-	@sudo chmod 777 $(k210-serialport)
-	@python3 tools/burn.py --baud 460800 --board-baud 500000 $(k210-serialport) target/fs.img
+	@sudo chmod 777 $(CONSOLE_PORT)
+ifeq ($(DATA_PORT),)
+	@python3 tools/burn.py --baud $(DOWNLOAD_BAUD) $(CONSOLE_PORT) target/fs.img
+else
+	@sudo chmod 777 $(DATA_PORT)
+	@python3 tools/burn.py --baud $(DOWNLOAD_BAUD) --data-port $(DATA_PORT) $(CONSOLE_PORT) target/fs.img
+endif

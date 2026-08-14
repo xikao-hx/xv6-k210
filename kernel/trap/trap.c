@@ -1,5 +1,5 @@
-#include "disk.h"
 #include "file.h"
+#include "irq.h"
 #include "memlayout.h"
 #include "plic.h"
 #include "printf.h"
@@ -7,7 +7,6 @@
 #include "sbi.h"
 #include "syscall.h"
 #include "trap.h"
-#include "uarths.h"
 #include "vm.h"
 #include "mmap.h"
 #include "signal.h"
@@ -110,7 +109,8 @@ usertrap(void)
         p->killed = 1;
       }
     } else {
-      printf("usertrap(): page fault is illegal\n");
+      printf("usertrap(): page fault is illegal pid=%d sepc=%p stval=%p\n",
+             p->pid, r_sepc(), r_stval());
       p->killed = 1;
     }
   } else {
@@ -248,20 +248,11 @@ devintr()
   {
     // this is a supervisor external interrupt, via PLIC.
 
-    // irq indicates which device interrupted.
+    // irq indicates which device interrupted.  Each device registered its
+    // PLIC source + handler via irq_register(); dispatch is a table lookup.
     int irq = plic_claim();
 
-    // ======= 添加以下调试打印 =======
-    // printf("DEBUG: Received external IRQ: %d\n", irq);
-    // ===============================
-
-    if(irq == UART0_IRQ){
-      uartintr();
-    } else if(irq == DISK_IRQ){
-      disk_intr();
-    } else if(irq){
-      printf("unexpected interrupt irq=%d\n", irq);
-    }
+    irq_dispatch(irq);
 
     // the PLIC allows each device to raise at most one
     // interrupt at a time; tell the PLIC the device is

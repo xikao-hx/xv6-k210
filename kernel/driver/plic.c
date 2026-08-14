@@ -1,3 +1,4 @@
+#include "irq.h"
 #include "memlayout.h"
 #include "plic.h"
 #include "proc.h"
@@ -5,13 +6,18 @@
 //
 // the riscv Platform Level Interrupt Controller (PLIC).
 //
+// Per-source priorities and the hart enable words are owned by the irq
+// registration mechanism (irq.c): irq_register() sets priority + enable at
+// registration time, and irq_apply_all() rebuilds the enable words from the
+// registered set.  plicinit() is kept as a no-op so the boot sequence stays
+// unchanged; plicinithart() only sets the priority threshold and defers the
+// enable words to irq_apply_all().
 
 void
 plicinit(void)
 {
-  // set desired IRQ priorities non-zero (otherwise disabled).
-  *(uint32*)(PLIC + UART_IRQ * sizeof(uint32)) = 1;
-  *(uint32*)(PLIC + DISK_IRQ * sizeof(uint32)) = 1;
+  // Priorities are set by irq_register() as each device registers; nothing
+  // to do here anymore.
 }
 
 void
@@ -19,22 +25,19 @@ plicinithart(void)
 {
   int hart = cpuid();
 #ifdef QEMU
-  // set uart's enable bit for this hart's S-mode.
-  *(uint32*)PLIC_SENABLE(hart) = (1 << UART_IRQ) | (1 << DISK_IRQ);
   // set this hart's S-mode priority threshold to 0.
   *(uint32*)PLIC_SPRIORITY(hart) = 0;
 #else
-  // K210: PLIC runs in M-mode. Overwrite the enable words authoritatively
-  // (assignment, not OR) so enable bits left over from the previous boot
-  // stage (RustSBI/bootloader, e.g. GPIOHS0 = IRQ 34) are cleared instead
-  // of left asserting forever. Only UART (33) and DISK (27) get enabled.
-  uint32 *hart_m_enable = (uint32*)PLIC_MENABLE(hart);
-  *hart_m_enable = (1 << DISK_IRQ);
-  uint32 *hart_m_enable_hi = hart_m_enable + 1;
-  *hart_m_enable_hi = (1 << (UART_IRQ % 32));
-  // zero this hart's M-mode priority threshold (forward all enabled IRQs).
+  // K210: PLIC runs in M-mode.  Zero the M-mode priority threshold so all
+  // enabled IRQs are forwarded to S-mode.
   *(uint32*)PLIC_MPRIORITY(hart) = 0;
 #endif
+  // Rebuild the enable words from the registered handlers.  The assignment
+  // in irq_apply_all() also clears enable bits left over from the previous
+  // boot stage (RustSBI/bootloader, e.g. GPIOHS0 = IRQ 34) instead of leaving
+  // them asserting forever.  Devices that register later than this call
+  // (UART1/DMAC/DISK) enable themselves inside irq_register().
+  irq_apply_all();
 }
 
 // ask the PLIC what interrupt we should serve.

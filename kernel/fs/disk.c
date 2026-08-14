@@ -1,4 +1,7 @@
 #include "buf.h"
+#include "disk.h"
+#include "irq.h"
+#include "memlayout.h"
 
 #ifdef QEMU
 #include "virtio.h"
@@ -14,6 +17,8 @@ void disk_init(void)
 #else
     sdcard_init();
 #endif
+    // The disk is a single instance; no controller context.
+    irq_register(DISK_IRQ, disk_intr, 0);
 }
 
 void disk_read(struct buf *b)
@@ -34,8 +39,9 @@ void disk_write(struct buf *b)
 #endif
 }
 
-void disk_intr(void)
+void disk_intr(void *ctx)
 {
+    (void)ctx;  // single instance; no controller context
 #ifdef QEMU
     virtio_disk_intr();
 #else

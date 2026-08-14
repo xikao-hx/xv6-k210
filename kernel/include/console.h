@@ -27,6 +27,8 @@ struct console_rx_stats {
   uint32 buffered;
   uint32 capacity;
   uint32 mode;
+  uint32 overrun;   // FIFO overruns (OE).  DW UART1 counts real LSR OE events;
+                    // UARTHS has no overflow status bit, always reports 0.
 };
 
 void consoleinit(void);
