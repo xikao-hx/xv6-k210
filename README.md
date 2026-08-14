@@ -97,13 +97,11 @@ make sdcard dev-sd=/dev/sdX
 ```shell
 # 1.首先确保板子是正常启动状态
 # 2.执行下载
+#   默认数据走 console UARTHS 单口
 make download
 
-# 2.1 下载命令解释
-# 默认 115200 握手，主机 460800 传输，板端 baud 自动补偿到约 500000
-python3 tools/burn.py /dev/ttyUSB0 target/fs.img
-# 手动指定补偿值
-python3 tools/burn.py --baud 460800 --board-baud 500000 /dev/ttyUSB0 target/fs.img
+#   双口模式：console 握手 + 数据走 DW UART1 DMA 模式（运行时握手选择）
+make download DATA_PORT=/dev/ttyUSB0
 ```
 
 ## 关于 Shell
