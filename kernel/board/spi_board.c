@@ -14,19 +14,22 @@
 /*  Controller instances                                              */
 /* ------------------------------------------------------------------ */
 
-/* SPI1: DMA channels 0 (TX) / 1 (RX) */
+/* SPI0 (SD card): DMA channels 0 (TX) / 1 (RX) */
 static struct spi_controller spi_ctrl_0 = {
     .spi_data = {
         .chan_tx = DMAC_CHANNEL0,
         .chan_rx = DMAC_CHANNEL1,
+        .dma_enable = true,
     },
 };
 
-/* SPI1: DMA channels 4 (TX) / 5 (RX) */
+/* SPI1 (W25Q64): DMA disabled -- CH4/CH5 are owned by UART1, so SPI1 uses
+ * the interrupt path only (spi_can_dma() checks dma_enable). */
 static struct spi_controller spi_ctrl_1 = {
     .spi_data = {
         .chan_tx = DMAC_CHANNEL4,
         .chan_rx = DMAC_CHANNEL5,
+        .dma_enable = false,
     },
 };
 

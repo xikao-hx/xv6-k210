@@ -31,9 +31,13 @@
 #define UART0_IRQ   33
 #define UART_IRQ    11
 #define DISK_IRQ    27
-// DMAC channel 5 (UART RX DMA) completes -> PLIC source 32 (SDK plic.h:
-// DMA0=27 .. DMA5=32).  CH4 (UART TX DMA) is used with a blocking wait, so
-// its completion IRQ is not dispatched.
+// DMAC channel completion -> PLIC source 27+n (SDK plic.h: DMA0=27 .. DMA5=32).
+// CH5 (UART RX DMA) harvests via its own handler (must not be overridden);
+// CH4 (UART TX DMA), CH2/CH3 (I2C0 TX/RX DMA, i2c_board.c) and CH0/CH1
+// (SPI0 DMA) are dispatched interrupt-driven via dmac_intr().
+#define DMAC_CH2_IRQ 29
+#define DMAC_CH3_IRQ 30
+#define DMAC_CH4_IRQ 31
 #define DMAC_CH5_IRQ 32
 // DW SPI / DW I2C PLIC sources (SDK plic.h: SPI0=1, SPI1=2, SPI_SLAVE=3,
 // SPI3=4, I2C0=8, I2C1=9, I2C2=10).  The K210 SPI base-address table

@@ -22,9 +22,11 @@ volatile spi_t *spi[4] = {
     (volatile spi_t *)SPI2_V
 };
 
-#define DMAC_WAIT_TIMEOUT 10000UL
 #define SPI_FIFO_DEPTH 32
 #define SPI_DMA_WML 16
+// Interrupt-driven DMA wait budget (ticks @5ms); the DMAC channel completion
+// IRQs wake the sleeper, this only guards a lost IRQ / wedged line.
+#define SPI_DMA_TIMEOUT_TICKS 2000UL
 // Boot-path polling (myproc()==0) idle counter; see spi_dw_poll_transfer.
 #define SPI_POLL_WAIT_TIMEOUT 10000000UL
 
@@ -177,8 +179,17 @@ static void spi_dw_init(spi_device_num_t spi_num)
 
     struct spi_controller *spi_ctrl = spi_ctrls[spi_num];
     spi_ctrl->bus_num = spi_num;
-    spi_ctrl->spi_data.dma_enable = true;
+    /* dma_enable comes from the board layer (spi_board.c): SPI0 on, SPI1 off
+     * (its CH4/CH5 are owned by UART1). */
     spi_ctrl->spi_data.index = spi_num;
+}
+
+/* DMAC channel-completion IRQ: clear the channel interrupt and wake any
+ * sleeper on dmac_chan (same pattern as i2c.c).  ctx = channel number. */
+static void
+spi_dma_irq(void *ctx)
+{
+  dmac_intr((dmac_channel_number_t)(uintptr_t)ctx);
 }
 
 void spi_init(void) {
@@ -193,6 +204,16 @@ void spi_init(void) {
         initsleeplock(&spi_ctrls[i]->lock, names[i]);
         initlock(&spi_ctrls[i]->isr_lock, names[i]);
         irq_register(SPI0_IRQ + i, spi_irq, spi_ctrls[i]);
+        /* DMAC channel completion IRQ = 27 + channel, only for controllers
+         * that actually use DMA (SPI1's CH4/CH5 are owned by UART1). */
+        if (spi_ctrls[i]->spi_data.dma_enable) {
+            if (spi_ctrls[i]->spi_data.chan_tx < DMAC_CHANNEL_MAX)
+                irq_register(27 + spi_ctrls[i]->spi_data.chan_tx, spi_dma_irq,
+                             (void *)(uintptr_t)spi_ctrls[i]->spi_data.chan_tx);
+            if (spi_ctrls[i]->spi_data.chan_rx < DMAC_CHANNEL_MAX)
+                irq_register(27 + spi_ctrls[i]->spi_data.chan_rx, spi_dma_irq,
+                             (void *)(uintptr_t)spi_ctrls[i]->spi_data.chan_rx);
+        }
     }
 }
 
@@ -447,14 +468,16 @@ static int spi_dw_dma_xfer(struct spi_dw_data *spi_data, const void *tx_buf,
                          DMAC_MSIZE_1, DMAC_TRANS_WIDTH_32, len);
     dmac_set_single_mode(spi_data->chan_tx, tx_buf, (void *)(&spi_handle->dr[0]), DMAC_ADDR_INCREMENT, DMAC_ADDR_NOCHANGE,
                              DMAC_MSIZE_4, DMAC_TRANS_WIDTH_32, len);
-    
-    /* wait dma trasfer finish */
-    dmac_wait_done(spi_data->chan_tx, DMAC_WAIT_TIMEOUT);
-    dmac_wait_done(spi_data->chan_rx, DMAC_WAIT_TIMEOUT);
-    
+
+    /* wait for the DMAC completion IRQs (interrupt-driven, with a timeout
+     * fallback so a lost IRQ cannot hang the caller) */
+    int ret = dmac_wait_idle_timeout(spi_data->chan_tx, SPI_DMA_TIMEOUT_TICKS);
+    if (ret == 0)
+        ret = dmac_wait_idle_timeout(spi_data->chan_rx, SPI_DMA_TIMEOUT_TICKS);
+
     spi_handle->dmacr = 0x00;    // clear dma enable
-    
-    return 0;
+
+    return ret;
 }
 
 static int spi_dw_dma_transfer(struct spi_dw_data *spi_data, struct spi_transfer *transfer) {
@@ -496,7 +519,11 @@ static int spi_dw_dma_transfer(struct spi_dw_data *spi_data, struct spi_transfer
             break;
     }
     
-    spi_dw_dma_xfer(spi_data, write_cmd, read_buf, count);
+    int ret = spi_dw_dma_xfer(spi_data, write_cmd, read_buf, count);
+    if (ret < 0) {
+        kfree_page(write_cmd);
+        return ret;
+    }
 
     switch(frame_width)
     {

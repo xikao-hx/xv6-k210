@@ -24,33 +24,24 @@ struct i2c_dw_data {
     bool dma_enable;
 };
 
-// In-flight state of one I2C transaction, shared between the transfer
-// function and the ISR (guarded by controller->isr_lock).  One transfer is
-// one atomic transaction -- no ring buffer.  The ISR drives the hardware
-// FIFOs, the caller blocks on xfer.done.
 struct i2c_xfer {
-  const uint8 *tx_src;            /* send: source data; recv: 0 (ISR emits CMD) */
-  uint tx_cmds;                   /* data_cmd words still to write */
-  uint8 *rx_dst;                  /* recv: destination buffer */
-  uint rx_left;                   /* bytes still to receive */
-  int need_restart;               /* first command word carries RESTART */
-  int is_lastmsg;                 /* last command word carries STOP */
-  volatile int done;              /* transfer finished (success or error) */
-  volatile int err;               /* 0 = ok; <0 = TX_ABRT / timeout */
+  const uint8 *tx_src;            
+  uint tx_len;                   
+  uint8 *rx_dst;                  
+  uint rx_len;                   
+  int need_restart;               
+  int is_lastmsg;                 
+  volatile int done;              
+  volatile int err;              
 };
 
 struct i2c_controller {
   i2c_device_number_t bus_num;
   struct i2c_dw_data i2c_data;
-  struct sleeplock lock;          /* per-controller transfer mutex (existing) */
-  struct spinlock isr_lock;       /* ISR <-> waiter coordination (new) */
-  struct i2c_xfer xfer;           /* in-flight transaction (new, isr_lock-held) */
+  struct sleeplock lock;          
+  struct spinlock isr_lock;      
+  struct i2c_xfer xfer;          
 };
-
-// Default transfer timeout: 100 ticks = 500 ms at the K210 5 ms tick.  A
-// 129-byte OLED frame takes ~2.9 ms at 400 kHz, so this leaves ample margin
-// while still bounding the hang window on an unresponsive/absent slave.
-#define I2C_INT_TIMEOUT_TICKS 100
 
 struct i2c_device {
   i2c_device_number_t bus_num;

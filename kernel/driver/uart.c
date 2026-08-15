@@ -40,8 +40,9 @@ static volatile uart_t *const uart_base[UART_DEVICE_MAX] = {
 // DMA mode (see uartintr) so RDA and done never race.
 #define UART_RXDMA_SIZE 512
 #define UART_TXDMA_SIZE 256
-// dmac_wait_done(CH4) spin budget; ~1s at 400MHz, only guards a wedged line.
-#define UART_DMA_TIMEOUT 100000000UL
+// Interrupt-driven DMA wait budget (ticks @5ms); the DMAC CH4 completion IRQ
+// wakes the sleeper, this only guards a lost IRQ / wedged line.
+#define UART_DMA_TIMEOUT_TICKS 2000UL
 
 extern volatile int panicked;
 
@@ -160,6 +161,8 @@ uartinit(struct uart_controller *uart_ctrl)
   uart_ctrl->rx_dma_active = 0;
 
   irq_register(UART_IRQ + uart_ctrl->index, uartintr, uart_ctrl);
+  if (uart_ctrl->chan_tx < DMAC_CHANNEL_MAX)
+    irq_register(DMAC_CH4_IRQ, uart_dma_tx_intr, uart_ctrl);
   if (uart_ctrl->chan_rx < DMAC_CHANNEL_MAX)
     irq_register(DMAC_CH5_IRQ, uart_dma_rx_intr, uart_ctrl);
 
@@ -269,6 +272,17 @@ uart_rx_dma_start(struct uart_controller *uart_ctrl)
                        DMAC_ADDR_NOCHANGE, DMAC_ADDR_INCREMENT,
                        DMAC_MSIZE_1, DMAC_TRANS_WIDTH_32, UART_RXDMA_SIZE);
   uart_ctrl->rx_dma_active = 1;
+}
+
+// TX DMA completion: the write is finished once the channel goes idle.  The
+// transfer function waits on dmac_chan via dmac_wait_idle_timeout, so the
+// handler just clears the channel interrupt and wakes it (dmac_intr does both).
+void
+uart_dma_tx_intr(void *ctx)
+{
+  struct uart_controller *uart_ctrl = ctx;
+
+  dmac_intr(uart_ctrl->chan_tx);
 }
 
 // RX boundary: harvest and re-arm.  Called from the PLIC RX-DMA ISR and from
@@ -395,7 +409,7 @@ uart_tx_wait_room(struct uart_controller *uart_ctrl)
 }
 
 // TX via DMA: pack up to TXDMA_SIZE bytes into words, arm the TX channel,
-// block on dmac_wait_done.
+// block on the DMAC CH4 completion IRQ (dmac_wait_idle_timeout).
 static int
 uart_write_dma(struct uart_controller *uart_ctrl, const char *src, int n)
 {
@@ -416,7 +430,7 @@ uart_write_dma(struct uart_controller *uart_ctrl, const char *src, int n)
                          DMAC_ADDR_INCREMENT, DMAC_ADDR_NOCHANGE,
                          DMAC_MSIZE_1, DMAC_TRANS_WIDTH_32, (uint64)chunk);
     release(&uart_ctrl->tx.lock);
-    if (dmac_wait_done(uart_ctrl->chan_tx, UART_DMA_TIMEOUT) < 0)
+    if (dmac_wait_idle_timeout(uart_ctrl->chan_tx, UART_DMA_TIMEOUT_TICKS) < 0)
       return done > 0 ? done : -1;
     done += chunk;
   }

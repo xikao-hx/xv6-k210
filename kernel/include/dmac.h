@@ -1462,6 +1462,19 @@ int dmac_is_idle(dmac_channel_number_t channel_num);
 void dmac_wait_idle(dmac_channel_number_t channel_num);
 
 /**
+ * @brief       Wait for dmac idle, interrupt-driven (the channel-completion
+ *              IRQ wakes the sleeper) with a timeout fallback.
+ *
+ * @param[in]   channel_num     Dmac channel
+ * @param[in]   timeout_ticks   Timeout in ticks (0 = no timeout)
+ *
+ * @return      result
+ *     - 0      idle
+ *     - -ETIMEDOUT
+*/
+int dmac_wait_idle_timeout(dmac_channel_number_t channel_num, uint timeout_ticks);
+
+/**
  * @brief       Set interrupt param
  *
  * @param[in]   channel_num             Dmac channel

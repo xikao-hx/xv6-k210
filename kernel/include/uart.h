@@ -78,6 +78,7 @@ void uart_flush_rx(struct uart_controller *c);
 void uart_get_rx_stats(struct uart_controller *c, uint32 *info);
 void uart_set_rx_mode(struct uart_controller *c, int mode);
 void uart_set_tx_mode(struct uart_controller *c, int mode);
+void uart_dma_tx_intr(void *ctx);          // DMA TX completion: clear + wake
 void uart_dma_rx_intr(void *ctx);          // DMA RX completion: harvest + re-arm
 
 #endif
