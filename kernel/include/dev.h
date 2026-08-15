@@ -12,6 +12,7 @@
 #define DEV_KBUF     6
 #define DEV_EAGER    7
 #define DEV_OLEDFB   8
+#define DEV_UART1    9
 
 // Stable logical device numbers. Hardware topology stays in board code.
 #define SPI_DEV_W25Q64   0
@@ -37,4 +38,3 @@ int device_register(int major, const char *name,
 struct device *device_get(int major);
 
 #endif
-

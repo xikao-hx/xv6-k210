@@ -285,12 +285,6 @@ int sysctl_clock_enable(sysctl_clock_t clock)
     return 0;
 }
 
-/*
- * K210 sysctl 总线不支持子字（字节/半字）访问（板上实测：lbu/lhu 读回 0xFF、sb/sh
- * 写不生效，见 doc/重构文档/外设时钟配置方案.md §3）。8/16 位阈值字段的读写必须整字
- * 进行：读用 CLK_TH_FIELD（lw + 移位掩码），写用 CLK_TH_SET_FIELD（lw→掩码→sw，
- * 与 sysctl_clock_enable 同款可靠路径）。2/4 位字段编译器本就生成整字 RMW，不受影响。
- */
 #define CLK_TH_FIELD(reg, shift, width) \
     (int)(((*(volatile uint32 *)&sysctl->reg) >> (shift)) & ((1u << (width)) - 1))
 #define CLK_TH_SET_FIELD(reg, shift, width, val) do { \
@@ -1032,4 +1026,118 @@ int sysctl_dma_select(sysctl_dma_channel_t channel, sysctl_dma_select_t select)
     sysctl->dma_sel1 = dma_sel1;
 
     return 0;
+}
+
+/*
+ * Peripheral reset controller.  Mirrors the standalone SDK; the header has
+ * always declared it but the implementation was dropped in this port.
+ * 1-bit bitfields compile to whole-word RMW, which is the reliable path on
+ * this board (see the CLK_TH_FIELD note above).
+ */
+static void sysctl_reset_ctl(sysctl_reset_t reset, uint8 rst_value)
+{
+    switch(reset)
+    {
+        case SYSCTL_RESET_SOC:
+            sysctl->soft_reset.soft_reset = rst_value;
+            break;
+        case SYSCTL_RESET_ROM:
+            sysctl->peri_reset.rom_reset = rst_value;
+            break;
+        case SYSCTL_RESET_DMA:
+            sysctl->peri_reset.dma_reset = rst_value;
+            break;
+        case SYSCTL_RESET_AI:
+            sysctl->peri_reset.ai_reset = rst_value;
+            break;
+        case SYSCTL_RESET_DVP:
+            sysctl->peri_reset.dvp_reset = rst_value;
+            break;
+        case SYSCTL_RESET_FFT:
+            sysctl->peri_reset.fft_reset = rst_value;
+            break;
+        case SYSCTL_RESET_GPIO:
+            sysctl->peri_reset.gpio_reset = rst_value;
+            break;
+        case SYSCTL_RESET_SPI0:
+            sysctl->peri_reset.spi0_reset = rst_value;
+            break;
+        case SYSCTL_RESET_SPI1:
+            sysctl->peri_reset.spi1_reset = rst_value;
+            break;
+        case SYSCTL_RESET_SPI2:
+            sysctl->peri_reset.spi2_reset = rst_value;
+            break;
+        case SYSCTL_RESET_SPI3:
+            sysctl->peri_reset.spi3_reset = rst_value;
+            break;
+        case SYSCTL_RESET_I2S0:
+            sysctl->peri_reset.i2s0_reset = rst_value;
+            break;
+        case SYSCTL_RESET_I2S1:
+            sysctl->peri_reset.i2s1_reset = rst_value;
+            break;
+        case SYSCTL_RESET_I2S2:
+            sysctl->peri_reset.i2s2_reset = rst_value;
+            break;
+        case SYSCTL_RESET_I2C0:
+            sysctl->peri_reset.i2c0_reset = rst_value;
+            break;
+        case SYSCTL_RESET_I2C1:
+            sysctl->peri_reset.i2c1_reset = rst_value;
+            break;
+        case SYSCTL_RESET_I2C2:
+            sysctl->peri_reset.i2c2_reset = rst_value;
+            break;
+        case SYSCTL_RESET_UART1:
+            sysctl->peri_reset.uart1_reset = rst_value;
+            break;
+        case SYSCTL_RESET_UART2:
+            sysctl->peri_reset.uart2_reset = rst_value;
+            break;
+        case SYSCTL_RESET_UART3:
+            sysctl->peri_reset.uart3_reset = rst_value;
+            break;
+        case SYSCTL_RESET_AES:
+            sysctl->peri_reset.aes_reset = rst_value;
+            break;
+        case SYSCTL_RESET_FPIOA:
+            sysctl->peri_reset.fpioa_reset = rst_value;
+            break;
+        case SYSCTL_RESET_TIMER0:
+            sysctl->peri_reset.timer0_reset = rst_value;
+            break;
+        case SYSCTL_RESET_TIMER1:
+            sysctl->peri_reset.timer1_reset = rst_value;
+            break;
+        case SYSCTL_RESET_TIMER2:
+            sysctl->peri_reset.timer2_reset = rst_value;
+            break;
+        case SYSCTL_RESET_WDT0:
+            sysctl->peri_reset.wdt0_reset = rst_value;
+            break;
+        case SYSCTL_RESET_WDT1:
+            sysctl->peri_reset.wdt1_reset = rst_value;
+            break;
+        case SYSCTL_RESET_SHA:
+            sysctl->peri_reset.sha_reset = rst_value;
+            break;
+        case SYSCTL_RESET_RTC:
+            sysctl->peri_reset.rtc_reset = rst_value;
+            break;
+        default:
+            break;
+    }
+}
+
+void sysctl_reset(sysctl_reset_t reset)
+{
+    volatile int i;
+
+    sysctl_reset_ctl(reset, 1);
+    /* Keep the reset asserted briefly (SDK uses usleep(10)): clearing it too
+     * fast may leave the peripheral in a half-reset state. */
+    for(i = 0; i < 4000; i++)
+        ;
+    sysctl_reset_ctl(reset, 0);
 }

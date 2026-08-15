@@ -8,6 +8,9 @@
 #include "syscall.h"
 #include "trap.h"
 #include "uarths.h"
+#ifndef QEMU
+#include "uart.h"
+#endif
 #include "vm.h"
 #include "mmap.h"
 #include "signal.h"
@@ -110,7 +113,8 @@ usertrap(void)
         p->killed = 1;
       }
     } else {
-      printf("usertrap(): page fault is illegal\n");
+      printf("usertrap(): page fault is illegal pid=%d sepc=%p stval=%p\n",
+             p->pid, r_sepc(), r_stval());
       p->killed = 1;
     }
   } else {
@@ -255,8 +259,16 @@ devintr()
     // printf("DEBUG: Received external IRQ: %d\n", irq);
     // ===============================
 
-    if(irq == UART0_IRQ){
+    if(irq == UARTHS_IRQ){
+      uarthsintr();
+#ifndef QEMU
+    } else if(irq == UART0_IRQ){
       uartintr();
+    } else if(irq == DMAC_CH5_IRQ){
+      // DMA CH5 completed a full RX block: harvest + re-arm.  RDA/CTI
+      // boundaries still come through the UART IRQ 11 path above.
+      uart_dma_rx_intr();
+#endif
     } else if(irq == DISK_IRQ){
       disk_intr();
     } else if(irq){

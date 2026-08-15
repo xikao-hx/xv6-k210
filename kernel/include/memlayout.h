@@ -24,13 +24,17 @@
 #define VIRTIO0 0x10001000
 #endif
 
-#ifdef QEMU     // QEMU 
-#define UART0_IRQ   10 
+#ifdef QEMU
+#define UARTHS_IRQ  10
 #define DISK_IRQ    1
-#else           // k210 
-#define UART0_IRQ   33
+#else
+#define UARTHS_IRQ  33
 #define DISK_IRQ    27
-#endif 
+#endif
+
+#define UART0_IRQ    11
+// DMAC channel 5
+#define DMAC_CH5_IRQ 32  
 
 // local interrupt controller, which contains the timer.
 #define CLINT 0x2000000L
@@ -51,6 +55,7 @@
 // K210 peripheral base addresses (physical, identity-mapped)
 #ifndef QEMU
 #define UART0       0x38000000
+#define UART        0x50210000
 #define GPIOHS      0x38001000
 #define DMAC        0x50000000
 #define GPIO        0x50200000
@@ -65,6 +70,7 @@
 #define I2C2        0x502A0000
 
 // Virtual addresses (identity-mapped on os/ tree)
+#define UART_V      UART
 #define GPIOHS_V    GPIOHS
 #define DMAC_V      DMAC
 #define GPIO_V      GPIO
