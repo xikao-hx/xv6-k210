@@ -368,7 +368,7 @@ i2c_recv_data_dma(struct i2c_controller *i2c_ctrl, struct i2c_dw_data *i2c_data,
         write_cmd[0] |= I2C_DATA_CMD_RESTART;
     }
 
-    for(i = 1; i < receive_buf_len; i+i2c_ctrl->xfer.done+)
+    for(i = 1; i < receive_buf_len; i ++)
         write_cmd[i] = I2C_DATA_CMD_CMD;
 
     /* stop */
