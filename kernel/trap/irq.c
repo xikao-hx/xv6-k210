@@ -24,18 +24,20 @@ struct irq_action {
 
 static struct irq_action actions[MAXIRQ];
 
-static void
+void
 irq_enable_hart(int irq)
 {
-  int hart = cpuid();
+  uint32 *men;
+  int cpu_id;
 
-#ifdef QEMU
-  *(uint32 *)PLIC_SENABLE(hart) |= (1u << (irq % 32));
-#else
-  uint32 *men = (uint32 *)PLIC_MENABLE(hart);
-
-  men[irq / 32] |= (1u << (irq % 32));
-#endif
+  for (cpu_id = 0; cpu_id < NCPU; cpu_id++) {
+    #ifdef QEMU
+      men = (uint32 *)PLIC_SENABLE(cpu_id);
+    #else
+      men = (uint32 *)PLIC_MENABLE(cpu_id);
+    #endif
+      men[irq / 32] |= (1u << (irq % 32));
+  }
 }
 
 void
@@ -48,31 +50,6 @@ irq_register(int irq, irq_handler_t h, void *ctx)
   // Non-zero priority, otherwise the PLIC treats the source as disabled.
   *(uint32 *)(PLIC + irq * sizeof(uint32)) = 1;
   irq_enable_hart(irq);
-}
-
-// Rebuild this hart's PLIC enable words from the registered handlers,
-// starting from zero so bits left over from the previous boot stage (or from
-// an earlier, now-unused driver) are cleared.  Called at the end of
-// plicinithart(), after the residual bits have been wiped.
-void
-irq_apply_all(void)
-{
-  int hart = cpuid();
-  uint32 en[2] = {0, 0};
-  uint32 *men;
-  int irq;
-
-  for (irq = 1; irq < MAXIRQ; irq++)
-    if (actions[irq].handler)
-      en[irq / 32] |= (1u << (irq % 32));
-
-#ifdef QEMU
-  men = (uint32 *)PLIC_SENABLE(hart);
-#else
-  men = (uint32 *)PLIC_MENABLE(hart);
-#endif
-  men[0] = en[0];
-  men[1] = en[1];
 }
 
 // Dispatch a claimed external interrupt to its registered handler.

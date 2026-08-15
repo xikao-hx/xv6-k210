@@ -14,12 +14,6 @@
 //
 
 void
-plicinit(void)
-{
-  // IRQ priorities are set by irq_register(); nothing to do here.
-}
-
-void
 plicinithart(void)
 {
   int hart = cpuid();
@@ -40,7 +34,6 @@ plicinithart(void)
 #endif
   men[0] = 0;
   men[1] = 0;
-  irq_apply_all();
 }
 
 // ask the PLIC what interrupt we should serve.

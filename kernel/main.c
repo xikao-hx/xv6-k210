@@ -46,7 +46,6 @@ main(unsigned long hartid, unsigned long dtb_pa)
     procinit();      // process table
     trapinit();      // trap vectors
     trapinithart();  // install kernel trap vector
-    plicinit();      // set up interrupt controller
     plicinithart();  // ask PLIC for device interrupts
 #ifndef QEMU
     sbi_set_mie();   // enable M-mode external interrupts (RustSBI disables by default)
@@ -88,7 +87,6 @@ main(unsigned long hartid, unsigned long dtb_pa)
     printf("hart %d starting\n", hartid);
     kvminithart();    // turn on paging
     trapinithart();   // install kernel trap vector
-    plicinithart();   // ask PLIC for device interrupts
   }
 
   scheduler();
