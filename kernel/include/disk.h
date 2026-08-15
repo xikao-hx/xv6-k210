@@ -6,6 +6,6 @@ struct buf;
 void disk_init(void);
 void disk_read(struct buf *b);
 void disk_write(struct buf *b);
-void disk_intr(void);
+void disk_intr(void *ctx);
 
 #endif

@@ -70,6 +70,7 @@ OBJS = \
   $K/vm/kbuf.o \
   $K/proc/swtch.o \
   $K/trap/trap.o \
+  $K/trap/irq.o \
   $K/trap/trampoline.o \
   $K/trap/kernelvec.o \
   $K/trap/sigtramp.o \
@@ -92,7 +93,8 @@ OBJS += \
   $K/driver/dmac.o \
   $K/driver/sysctl.o \
   $K/board/i2c_board.o \
-  $K/board/spi_board.o
+  $K/board/spi_board.o \
+  $K/board/uart_board.o
 else
 OBJS += \
   $K/driver/virtio_disk.o

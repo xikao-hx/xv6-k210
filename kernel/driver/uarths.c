@@ -1,6 +1,8 @@
 // UART byte-stream driver for QEMU 16550A and K210 UARTHS.
 
+#include "irq.h"
 #include "memlayout.h"
+#include "plic.h"
 #include "proc.h"
 #include "ringbuffer.h"
 #include "uarths.h"
@@ -179,6 +181,10 @@ uarthsinit(void)
   requested_baud = 115200;
   uarths_txenable(0);
   uarths_rxenable(1);
+
+  // consoleinit runs before plicinithart; irq_register records the action so
+  // plicinithart's irq_apply_all() re-enables it after wiping residual bits.
+  irq_register(UARTHS_IRQ, uarthsintr, 0);
 }
 
 // ---------- UART RX ----------
@@ -477,8 +483,10 @@ uarths_get_baud_info(uint32 *info)
 // ---------- handler ----------
 
 void
-uarthsintr(void)
+uarthsintr(void *ctx)
 {
+  (void)ctx;
+
   acquire(&uarths_rx.lock);
   uarths_rx_service();
   release(&uarths_rx.lock);

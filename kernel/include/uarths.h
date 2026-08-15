@@ -189,7 +189,7 @@ typedef int (*uarths_rx_observer_t)(int);
 #define UARTHS_RX_CONSUME_CANCEL 2
 
 void            uarthsinit(void);
-void            uarthsintr(void);
+void            uarthsintr(void *ctx);
 void            uarthsputc(int);
 void            uarthsputc_sync(int);
 int             uarths_write(const char*, int);

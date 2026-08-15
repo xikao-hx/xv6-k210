@@ -57,6 +57,9 @@
 #ifndef QEMU
 #define UART0       0x38000000
 #define UART        0x50210000
+#define UART1       0x50210000
+#define UART2       0x50220000
+#define UART3       0x50230000
 #define GPIOHS      0x38001000
 #define DMAC        0x50000000
 #define GPIO        0x50200000
@@ -72,6 +75,9 @@
 
 // Virtual addresses (identity-mapped on os/ tree)
 #define UART_V      UART
+#define UART1_V     UART1
+#define UART2_V     UART2
+#define UART3_V     UART3
 #define GPIOHS_V    GPIOHS
 #define DMAC_V      DMAC
 #define GPIO_V      GPIO
