@@ -35,6 +35,17 @@
 // DMA0=27 .. DMA5=32).  CH4 (UART TX DMA) is used with a blocking wait, so
 // its completion IRQ is not dispatched.
 #define DMAC_CH5_IRQ 32
+// DW SPI / DW I2C PLIC sources (SDK plic.h: SPI0=1, SPI1=2, SPI_SLAVE=3,
+// SPI3=4, I2C0=8, I2C1=9, I2C2=10).  The K210 SPI base-address table
+// (spi.c) is ordered SPI0/SPI1/SPI_SLAVE/SPI2, so SPI0_IRQ+num and
+// I2C0_IRQ+num derive each instance's source by index.
+#define SPI0_IRQ 1
+#define SPI1_IRQ 2
+#define SPI_SLAVE_IRQ 3
+#define SPI2_IRQ 4
+#define I2C0_IRQ 8
+#define I2C1_IRQ 9
+#define I2C2_IRQ 10
 #endif
 
 // local interrupt controller, which contains the timer.

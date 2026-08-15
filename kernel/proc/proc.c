@@ -871,7 +871,9 @@ forkret(void)
     // regular process (e.g., because it calls sleep), and thus cannot
     // be run from main().
     first = 0;
+    printf("[DBG] fat32_init enter\n");
     fat32_init();
+    printf("[DBG] fat32_init done\n");
     myproc()->cwd = ename("/");
   }
   

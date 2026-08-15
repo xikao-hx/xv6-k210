@@ -141,6 +141,27 @@ typedef enum _spi_transfer_width
     SPI_TRANS_INT = 0x4,
 } spi_transfer_width_t;
 
+/* SPI Interrupt Status Register bits (DW_apb_ssi, K210 layout per the
+ * reference manual 3.19.4.13).  ISR is not cleared by reading it: read dr
+ * clears RXF, write dr clears TXE, read rxoicr/txoicr clears RXO/TXO, read
+ * icr clears the TXE/TXO/RXU/RXO/MST group (NOT RXF).  NOTE: this layout was
+ * previously mislabeled (RXO/RXF/TXUI were one bit off) which silently
+ * disabled the RXF interrupt -- imr=0xF masked bit4, the real RXF. */
+#define SPI_ISR_TXE   0x1   /* bit0: TX FIFO at/below threshold (empty) */
+#define SPI_ISR_TXO   0x2   /* bit1: TX FIFO overflow (fed a full FIFO) */
+#define SPI_ISR_RXU   0x4   /* bit2: RX FIFO underflow (read an empty FIFO) */
+#define SPI_ISR_RXO   0x8   /* bit3: RX FIFO overflow */
+#define SPI_ISR_RXF   0x10  /* bit4: RX FIFO at/above threshold (full) */
+#define SPI_ISR_MST   0x20  /* bit5: multi-master contention */
+
+/* SPI Interrupt Mask Register mirrors the ISR bits; 0 disables all. */
+#define SPI_IMR_TXE   0x1
+#define SPI_IMR_TXO   0x2
+#define SPI_IMR_RXU   0x4
+#define SPI_IMR_RXO   0x8
+#define SPI_IMR_RXF   0x10
+#define SPI_IMR_MST   0x20
+
 typedef enum _spi_chip_select
 {
     SPI_CHIP_SELECT_0,
