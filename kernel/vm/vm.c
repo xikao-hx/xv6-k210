@@ -23,28 +23,18 @@ kvminit()
   kernel_pagetable = (pagetable_t) kalloc_page();
   memset(kernel_pagetable, 0, PGSIZE);
 
-  // uart registers
-  kvmmap(UART0_V, UART0, PGSIZE, PTE_R | PTE_W);
-  
+  kvmmap(UARTHS_V, UARTHS, PGSIZE, PTE_R | PTE_W);
+
 #ifdef QEMU
   // virtio mmio disk interface
   kvmmap(VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
 #else
-  // K210: GPIOHS
   kvmmap(GPIOHS_V, GPIOHS, PGSIZE, PTE_R | PTE_W);
-  // K210: UART
-  kvmmap(UART_V, UART, PGSIZE, PTE_R | PTE_W);
-  // K210: DMAC
+  kvmmap(UART0_V, UART0, PGSIZE, PTE_R | PTE_W);
   kvmmap(DMAC_V, DMAC, PGSIZE, PTE_R | PTE_W);
-  // K210: GPIO
   kvmmap(GPIO_V, GPIO, PGSIZE, PTE_R | PTE_W);
-  // K210: SPI_SLAVE
-  kvmmap(SPI_SLAVE_V, SPI_SLAVE, PGSIZE, PTE_R | PTE_W);
-  // K210: FPIOA
   kvmmap(FPIOA_V, FPIOA, PGSIZE, PTE_R | PTE_W);
-  // K210: SYSCTL
   kvmmap(SYSCTL_V, SYSCTL, PGSIZE, PTE_R | PTE_W);
-  // K210: SPI0, SPI1, SPI2
   kvmmap(SPI0_V, SPI0, PGSIZE, PTE_R | PTE_W);
   kvmmap(SPI1_V, SPI1, PGSIZE, PTE_R | PTE_W);
   kvmmap(SPI2_V, SPI2, PGSIZE, PTE_R | PTE_W);
@@ -53,11 +43,8 @@ kvminit()
   kvmmap(I2C2_V, I2C2, PGSIZE, PTE_R | PTE_W);
 #endif
 
-  // CLINT
   kvmmap(CLINT, CLINT, 0x10000, PTE_R | PTE_W);
-  // PLIC
   kvmmap(PLIC, PLIC, 0x400000, PTE_R | PTE_W);
-
   // map kernel text executable and read-only.
   kvmmap(KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
   // map kernel data and the physical RAM we'll make use of.
@@ -73,20 +60,15 @@ ukvminit(void)
   pagetable_t pagetable = (pagetable_t) kalloc_page();
   memset(pagetable, 0, PGSIZE);
 
+  ukvmmap(pagetable, UARTHS_V, UARTHS, PGSIZE, PTE_R | PTE_W);
+  
 #ifdef QEMU
-  ukvmmap(pagetable, UART0_V, UART0, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
-  ukvmmap(pagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
-  ukvmmap(pagetable, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
-  ukvmmap(pagetable, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
-  ukvmmap(pagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 #else
-  ukvmmap(pagetable, UART0_V, UART0, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, GPIOHS_V, GPIOHS, PGSIZE, PTE_R | PTE_W);
-  ukvmmap(pagetable, UART_V, UART, PGSIZE, PTE_R | PTE_W);
+  ukvmmap(pagetable, UART0_V, UART0, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, DMAC_V, DMAC, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, GPIO_V, GPIO, PGSIZE, PTE_R | PTE_W);
-  ukvmmap(pagetable, SPI_SLAVE_V, SPI_SLAVE, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, FPIOA_V, FPIOA, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, SYSCTL_V, SYSCTL, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, SPI0_V, SPI0, PGSIZE, PTE_R | PTE_W);
@@ -95,11 +77,13 @@ ukvminit(void)
   ukvmmap(pagetable, I2C0_V, I2C0, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, I2C1_V, I2C1, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, I2C2_V, I2C2, PGSIZE, PTE_R | PTE_W);
+#endif
+
+  ukvmmap(pagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
   ukvmmap(pagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
   ukvmmap(pagetable, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
   ukvmmap(pagetable, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
   ukvmmap(pagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
-#endif
 
   return pagetable;
 }
@@ -273,15 +257,15 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 void
 ukvmunmap(pagetable_t pagetable)
 {
-  uvmunmap(pagetable, UART0_V, PGSIZE / PGSIZE, 0);
+  uvmunmap(pagetable, UARTHS_V, PGSIZE / PGSIZE, 0);
+
 #ifdef QEMU
   uvmunmap(pagetable, VIRTIO0, PGSIZE / PGSIZE, 0);
 #else
   uvmunmap(pagetable, GPIOHS_V, PGSIZE / PGSIZE, 0);
-  uvmunmap(pagetable, UART_V, PGSIZE / PGSIZE, 0);
+  uvmunmap(pagetable, UART0_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, DMAC_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, GPIO_V, PGSIZE / PGSIZE, 0);
-  uvmunmap(pagetable, SPI_SLAVE_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, FPIOA_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, SYSCTL_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, SPI0_V, PGSIZE / PGSIZE, 0);
@@ -291,6 +275,8 @@ ukvmunmap(pagetable_t pagetable)
   uvmunmap(pagetable, I2C1_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, I2C2_V, PGSIZE / PGSIZE, 0);
 #endif
+
+  uvmunmap(pagetable, CLINT, 0x10000 / PGSIZE, 0);
   uvmunmap(pagetable, PLIC, 0x400000 / PGSIZE, 0);
   uvmunmap(pagetable, KERNBASE, ((uint64)etext-KERNBASE) / PGSIZE, 0);
   uvmunmap(pagetable, (uint64)etext, (PHYSTOP-(uint64)etext) / PGSIZE, 0);
