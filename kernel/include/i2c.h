@@ -1,7 +1,8 @@
-#ifndef __I2C_DEVICE_H
-#define __I2C_DEVICE_H
+#ifndef __I2C_H
+#define __I2C_H
 
 #include "sleeplock.h"
+#include "spinlock.h"
 #include "types.h"
 #include "i2c-dw.h"
 #include "stdbool.h"
@@ -23,10 +24,23 @@ struct i2c_dw_data {
     bool dma_enable;
 };
 
+struct i2c_xfer {
+  const uint8 *tx_src;            
+  uint tx_len;                   
+  uint8 *rx_dst;                  
+  uint rx_len;                   
+  int need_restart;               
+  int is_lastmsg;                 
+  volatile int done;              
+  volatile int err;              
+};
+
 struct i2c_controller {
   i2c_device_number_t bus_num;
   struct i2c_dw_data i2c_data;
-  struct sleeplock lock;
+  struct sleeplock lock;          
+  struct spinlock isr_lock;      
+  struct i2c_xfer xfer;          
 };
 
 struct i2c_device {
@@ -37,15 +51,5 @@ struct i2c_device {
 
 void i2c_init(void);
 int i2c_transfer(struct i2c_device *dev, struct i2c_msg *msgs, int num);
-
-#ifdef SW
-
-/* software i2c */
-void sw_i2c_init(void);
-void sw_i2c_start(void);
-void sw_i2c_stop(void);
-void sw_i2c_send_byte(uint8_t byte);
-
-#endif
 
 #endif

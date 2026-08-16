@@ -10,7 +10,7 @@ platform ?= k210
 #   LOG_LEVEL_NONE LOG_LEVEL_ERROR LOG_LEVEL_WARN LOG_LEVEL_INFO LOG_LEVEL_DEBUG
 LOG_LEVEL ?= LOG_LEVEL_INFO
 SCHED ?= mlfq
-DOWNLOAD_BAUD ?= 1500000
+DOWNLOAD_BAUD ?= 1000000
 DATA_PORT ?= /dev/ttyUSB2
 CONSOLE_PORT ?= /dev/ttyUSB0
 
@@ -70,6 +70,7 @@ OBJS = \
   $K/vm/kbuf.o \
   $K/proc/swtch.o \
   $K/trap/trap.o \
+  $K/trap/irq.o \
   $K/trap/trampoline.o \
   $K/trap/kernelvec.o \
   $K/trap/sigtramp.o \
@@ -92,7 +93,8 @@ OBJS += \
   $K/driver/dmac.o \
   $K/driver/sysctl.o \
   $K/board/i2c_board.o \
-  $K/board/spi_board.o
+  $K/board/spi_board.o \
+  $K/board/uart_board.o
 else
 OBJS += \
   $K/driver/virtio_disk.o

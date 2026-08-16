@@ -20,6 +20,7 @@ static struct i2c_controller i2c_ctrl_0 = {
         .speed_hz = 400000,
         .chan_tx = DMAC_CHANNEL2,
         .chan_rx = DMAC_CHANNEL3,
+        .dma_enable = true,
     },
 };
 
@@ -28,6 +29,7 @@ static struct i2c_controller i2c_ctrl_1 = {
         .speed_hz = 400000,
         .chan_tx = DMAC_CHANNEL4,
         .chan_rx = DMAC_CHANNEL5,
+        .dma_enable = false,
     },
 };
 
