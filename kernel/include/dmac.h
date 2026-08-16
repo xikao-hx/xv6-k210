@@ -1398,139 +1398,26 @@ typedef struct _dmac_lli_item
 
 extern volatile dmac_t *const dmac;
 
-/**
- * @brief       Dmac initialize
- */
-void dmac_init(void);
 
-/**
- * @brief       Set dmac param
- *
- * @param[in]   channel_num             Dmac channel
- * @param[in]   src                     Dmac source
- * @param[in]   dest                    Dmac dest
- * @param[in]   src_inc                 Source address increase or not
- * @param[in]   dest_inc                Dest address increase or not
- * @param[in]   dmac_burst_size         Dmac burst length
- * @param[in]   dmac_trans_width        Dmac transfer data width
- * @param[in]   block_size               Dmac transfer length
- *
- */
+
+
+
+void dmac_init(void);
 void dmac_set_single_mode(dmac_channel_number_t channel_num,
                           const void *src, void *dest, dmac_address_increment_t src_inc,
                           dmac_address_increment_t dest_inc,
                           dmac_burst_trans_length_t dmac_burst_size,
                           dmac_transfer_width_t dmac_trans_width,
                           uint64 block_size);
-
-/**
- * @brief       Determine the transfer is complete or not
- *
- * @param[in]   channel_num             Dmac channel
- *
- * @return      result
- *     - 0      uncompleted
- *     - 1  completed
-*/
 int dmac_is_done(dmac_channel_number_t channel_num);
-
-/**
- * @brief       Wait for dmac work done
- *
- * @param[in]   channel_num  Dmac channel
- *
- */
 int dmac_wait_done(dmac_channel_number_t channel_num, uint64 timeout);
-
-/**
- * @brief       Determine the dma is idle or not
- *
- * @param[in]   channel_num             Dmac channel
- *
- * @return      result
- *     - 0      busy
- *     - 1      idel
-*/
 int dmac_is_idle(dmac_channel_number_t channel_num);
-
-/**
- * @brief       Wait for dmac idle
- *
- * @param[in]   channel_num  Dmac channel
- *
- */
 void dmac_wait_idle(dmac_channel_number_t channel_num);
-
-/**
- * @brief       Set interrupt param
- *
- * @param[in]   channel_num             Dmac channel
- * @param[in]   dmac_callback           Dmac interrupt callback
- * @param[in]   ctx                     The param of callback
- * @param[in]   priority                Interrupt priority
- */
-//void dmac_set_irq(dmac_channel_number_t channel_num, plic_irq_callback_t dmac_callback, void *ctx, uint32 priority);
-
-/**
- * @brief       Set interrupt param
- *
- * @param[in]   channel_num             Dmac channel
- * @param[in]   dmac_callback           Dmac interrupt callback
- * @param[in]   ctx                     The param of callback
- * @param[in]   priority                Interrupt priority
- */
-//void dmac_irq_register(dmac_channel_number_t channel_num, plic_irq_callback_t dmac_callback, void *ctx, uint32 priority);
-
-/**
- * @brief       Unregister dmac interrupt
- *
- * @param[in]   channel_num             Dmac channel
- *
- */
-void dmac_irq_unregister(dmac_channel_number_t channel_num);
-
-/**
- * @brief       Disable dmac interrupt
- *
- * @param[in]   channel_num             Dmac channel
- *
- */
-void dmac_free_irq(dmac_channel_number_t channel_num);
-
-/**
- * @brief       Set source dest and length
- *
- * @param[in]   channel_num             Dmac channel
- * @param[in]   src                     Source
- * @param[in]   dest                    Dest
- * @param[in]   len                     The length of dmac transfer
- */
+int dmac_wait_idle_timeout(dmac_channel_number_t channel_num, uint timeout_ticks);
 void dmac_set_src_dest_length(dmac_channel_number_t channel_num, const void *src, void *dest, uint64 len);
-
-/**
- * @brief       Disable dmac channel interrupt
- *
- * @param[in]   channel_num             Dmac channel
- *
-*/
 void dmac_disable_channel_interrupt(dmac_channel_number_t channel_num);
-
-/**
- * @brief       Disable dmac channel
- *
- * @param[in]   channel_num             Dmac channel
- *
-*/
 void dmac_channel_disable(dmac_channel_number_t channel_num);
-
-/**
- * @brief       Enable dmac channel
- *
- * @param[in]   channel_num             Dmac channel
- *
-*/
 void dmac_channel_enable(dmac_channel_number_t channel_num);
-
 void dmac_intr(dmac_channel_number_t channel_num);
 
 #ifdef __cplusplus

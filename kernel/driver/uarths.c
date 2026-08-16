@@ -1,6 +1,8 @@
 // UART byte-stream driver for QEMU 16550A and K210 UARTHS.
 
+#include "irq.h"
 #include "memlayout.h"
+#include "plic.h"
 #include "proc.h"
 #include "ringbuffer.h"
 #include "uarths.h"
@@ -8,7 +10,7 @@
 
 #ifdef QEMU
 
-#define Reg(reg)     ((volatile unsigned char *)(UART0 + reg))
+#define Reg(reg)     ((volatile unsigned char *)(UARTHS + reg))
 #define RHR          0
 #define THR          0
 #define IER          1
@@ -31,17 +33,13 @@
 
 #include "sysctl.h"
 
-volatile uarths_t *const uarths = (volatile uarths_t *)UART0_V;
+volatile uarths_t *const uarths = (volatile uarths_t *)UARTHS;
 
 #endif
 
 #define UARTHS_RX_BUF_SIZE 32768
 #define UARTHS_TX_BUF_SIZE 4096
 
-// RX/TX state, split so rx control flags and tx state stay independent.
-// Each backing array is one byte longer than its size because a ringbuffer
-// reserves one slot to tell "empty" apart from "full"; ringbuffer_capacity()
-// reports the real usable size (32768 / 4096).
 struct uarths_rx {
   struct spinlock lock;
   char buf[UARTHS_RX_BUF_SIZE + 1];
@@ -148,6 +146,7 @@ uarths_txenable(int enabled)
 
 // ---------- UART Init ----------
 
+void uarths_dw_isr(void *data);
 void
 uarthsinit(void)
 {
@@ -180,6 +179,7 @@ uarthsinit(void)
   requested_baud = 115200;
   uarths_txenable(0);
   uarths_rxenable(1);
+  irq_register(UARTHS_IRQ, uarths_dw_isr, 0);
 }
 
 // ---------- UART RX ----------
@@ -478,8 +478,10 @@ uarths_get_baud_info(uint32 *info)
 // ---------- handler ----------
 
 void
-uarthsintr(void)
+uarths_dw_isr(void *data)
 {
+  (void)data;
+
   acquire(&uarths_rx.lock);
   uarths_rx_service();
   release(&uarths_rx.lock);

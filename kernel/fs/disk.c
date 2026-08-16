@@ -1,4 +1,8 @@
 #include "buf.h"
+#include "disk.h"
+#include "irq.h"
+#include "plic.h"
+#include "memlayout.h"
 
 #ifdef QEMU
 #include "virtio.h"
@@ -7,6 +11,7 @@
 #include "sdcard.h"
 #endif
 
+extern void disk_intr(void *data);
 void disk_init(void)
 {
 #ifdef QEMU
@@ -14,6 +19,8 @@ void disk_init(void)
 #else
     sdcard_init();
 #endif
+    // The disk completion interrupt is dispatched through the irq registry.
+    irq_register(DISK_IRQ, disk_intr, 0);
 }
 
 void disk_read(struct buf *b)
@@ -34,8 +41,9 @@ void disk_write(struct buf *b)
 #endif
 }
 
-void disk_intr(void)
+void disk_intr(void *data)
 {
+    (void)data;
 #ifdef QEMU
     virtio_disk_intr();
 #else

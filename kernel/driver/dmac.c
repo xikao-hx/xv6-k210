@@ -14,9 +14,11 @@
  */
 
 #include "dmac.h"
+#include "errno.h"
 #include "sysctl.h"
 #include "memlayout.h"
 #include "proc.h"
+#include "trap.h"
 
 volatile dmac_t *const dmac = (dmac_t *)DMAC_V;
 
@@ -367,8 +369,30 @@ void dmac_wait_idle(dmac_channel_number_t channel_num)
     }
 }
 
+int dmac_wait_idle_timeout(dmac_channel_number_t channel_num, uint timeout_ticks)
+{
+    uint start = ticks;
+    struct proc *p = myproc();
+    while(!dmac_is_idle(channel_num)) {
+        if(timeout_ticks && (uint)(ticks - start) > timeout_ticks) {
+            dmac_channel_disable(channel_num);
+            dmac_channel_interrupt_clear(channel_num);
+            return -ETIMEDOUT;
+        }
+        if (p) {
+            acquire(&tickslock);
+            sleep(&ticks, &tickslock);
+            release(&tickslock);
+        }
+        /* boot window (myproc()==0, e.g. SD card init): spin until idle --
+         * there is no scheduler/sleep context to wait on the DMAC IRQ. */
+    }
+    return 0;
+}
+
 void dmac_intr(dmac_channel_number_t channel_num)
 {
     dmac_channel_interrupt_clear(channel_num);
     wakeup_reason(dmac_chan, WAKEUP_DEVICE);
+    wakeup(&ticks);
 }

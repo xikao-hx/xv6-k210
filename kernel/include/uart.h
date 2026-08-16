@@ -1,40 +1,65 @@
 #ifndef __UART_H
 #define __UART_H
 
+#include "dmac.h"
+#include "ringbuffer.h"
+#include "spinlock.h"
 #include "types.h"
+#include "uart-dw.h"
 
-// UART driver for the K210 generic UART (DW APB 16550), independent from
-// UARTHS (which drives the console).  Byte-stream interface with two
-// switchable RX/TX paths each: interrupt-driven (Step 1) and DMA (Step 2).
-
-// Physical pins routed to the UART TX/RX functions.  Direction (which IO is
-// TX vs RX) is pending real-hardware confirmation; swap these if the board
-// behaves the other way round.  u1test.c documents IO22/IO23 as the wiring
-// used in practice -- if the board still shows no signal, this is the first
-// knob to check.
-#define UART_TX_IO  7
-#define UART_RX_IO  8
-
-// RX/TX operating modes, the arg to UART_IOCTL_SET_*_MODE and what
-// uart_get_rx_stats() reports in info[3].
 #define UART_MODE_INT 0
 #define UART_MODE_DMA 1
-
-// uart1-specific ioctl codes.  Numerically distinct from CONSOLE_IOCTL_*
-// (0x01-0x08); uartdev.c routes them to uart_set_rx_mode/uart_set_tx_mode.
 #define UART_IOCTL_SET_RX_MODE 0x21
 #define UART_IOCTL_SET_TX_MODE 0x22
 
-void uartinit(void);
-void uartintr(void);
-int  uart_read(char *dst, int n);
-int  uart_write(const char *src, int n);
-void uart_set_baud(int baud);
-void uart_get_baud_info(uint32 *info);
-void uart_flush_rx(void);
-void uart_get_rx_stats(uint32 *info);
-void uart_set_rx_mode(int mode);
-void uart_set_tx_mode(int mode);
-void uart_dma_rx_intr(void);   // DMA CH5 completion: harvest + re-arm RX DMA
+// RX/TX ring capacities (usable bytes; the backing array is +1 to keep
+// "empty" apart from "full") and DMA per-transfer block sizes in 32-bit
+// words, 1 byte/word (as the SDK).  RX re-arms RXDMA_SIZE on each boundary;
+// TX writes > TXDMA_SIZE split into blocks.
+#define UART_RX_BUF_SIZE 32768
+#define UART_TX_BUF_SIZE 4096
+#define UART_RXDMA_SIZE 512
+#define UART_TXDMA_SIZE 256
+
+struct uart_rx {
+  struct spinlock lock;
+  char buf[UART_RX_BUF_SIZE + 1];
+  struct ringbuffer ring;
+  uint dropped;        // bytes discarded because the ring was full
+  uint overrun;        // hardware FIFO overruns (LSR OE), counted on LSERR
+  uint epoch;          // bumped by uart_flush_rx to wake blocked readers
+};
+
+struct uart_tx {
+  struct spinlock lock;
+  char buf[UART_TX_BUF_SIZE + 1];
+  struct ringbuffer ring;
+};
+
+struct uart_controller {
+  int index;                               
+  int tx_io, rx_io;                        
+  dmac_channel_number_t chan_tx;  
+  dmac_channel_number_t chan_rx;  
+  uint32 default_baud;
+  uint32 rx_dma_buf[UART_RXDMA_SIZE] __attribute__((aligned(8)));
+  uint32 tx_dma_buf[UART_TXDMA_SIZE] __attribute__((aligned(8)));
+  struct uart_rx rx;                       
+  struct uart_tx tx;
+  uint32 requested_baud;
+  int rx_mode;
+  int tx_mode;
+  int rx_dma_active;
+};
+
+void uartinit(struct uart_controller *c);
+int  uart_read(struct uart_controller *c, char *dst, int n);
+int  uart_write(struct uart_controller *c, const char *src, int n);
+void uart_set_baud(struct uart_controller *c, int baud);
+void uart_get_baud_info(struct uart_controller *c, uint32 *info);
+void uart_flush_rx(struct uart_controller *c);
+void uart_get_rx_stats(struct uart_controller *c, uint32 *info);
+void uart_set_rx_mode(struct uart_controller *c, int mode);
+void uart_set_tx_mode(struct uart_controller *c, int mode);
 
 #endif
