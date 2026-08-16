@@ -1,5 +1,5 @@
-#include "disk.h"
 #include "file.h"
+#include "irq.h"
 #include "memlayout.h"
 #include "plic.h"
 #include "printf.h"
@@ -7,10 +7,6 @@
 #include "sbi.h"
 #include "syscall.h"
 #include "trap.h"
-#include "uarths.h"
-#ifndef QEMU
-#include "uart.h"
-#endif
 #include "vm.h"
 #include "mmap.h"
 #include "signal.h"
@@ -252,28 +248,9 @@ devintr()
   {
     // this is a supervisor external interrupt, via PLIC.
 
-    // irq indicates which device interrupted.
+    // irq indicates which device interrupted; the irq registry dispatches it.
     int irq = plic_claim();
-
-    // ======= 添加以下调试打印 =======
-    // printf("DEBUG: Received external IRQ: %d\n", irq);
-    // ===============================
-
-    if(irq == UARTHS_IRQ){
-      uarthsintr();
-#ifndef QEMU
-    } else if(irq == UART0_IRQ){
-      uartintr();
-    } else if(irq == DMAC_CH5_IRQ){
-      // DMA CH5 completed a full RX block: harvest + re-arm.  RDA/CTI
-      // boundaries still come through the UART IRQ 11 path above.
-      uart_dma_rx_intr();
-#endif
-    } else if(irq == DISK_IRQ){
-      disk_intr();
-    } else if(irq){
-      printf("unexpected interrupt irq=%d\n", irq);
-    }
+    irq_dispatch(irq);
 
     // the PLIC allows each device to raise at most one
     // interrupt at a time; tell the PLIC the device is

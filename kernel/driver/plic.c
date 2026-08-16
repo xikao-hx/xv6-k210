@@ -1,3 +1,4 @@
+#include "irq.h"
 #include "memlayout.h"
 #include "plic.h"
 #include "proc.h"
@@ -5,42 +6,27 @@
 //
 // the riscv Platform Level Interrupt Controller (PLIC).
 //
-
-void
-plicinit(void)
-{
-  // set desired IRQ priorities non-zero (otherwise disabled).
-  *(uint32*)(PLIC + UARTHS_IRQ * sizeof(uint32)) = 1;
-  *(uint32*)(PLIC + DISK_IRQ * sizeof(uint32)) = 1;
-#ifndef QEMU
-  *(uint32*)(PLIC + UART0_IRQ * sizeof(uint32)) = 1;
-  *(uint32*)(PLIC + DMAC_CH5_IRQ * sizeof(uint32)) = 1;
-#endif
-}
+// Priorities and per-hart enable bits are driven by the irq registry
+// (irq.c): each device registers itself with irq_register().
 
 void
 plicinithart(void)
 {
   int hart = cpuid();
+  uint32 *men;
+
 #ifdef QEMU
-  // set uart's enable bit for this hart's S-mode.
-  *(uint32*)PLIC_SENABLE(hart) = (1 << UARTHS_IRQ) | (1 << DISK_IRQ);
   // set this hart's S-mode priority threshold to 0.
-  *(uint32*)PLIC_SPRIORITY(hart) = 0;
+  *(uint32 *)PLIC_SPRIORITY(hart) = 0;
+  men = (uint32 *)PLIC_SENABLE(hart);
 #else
-  // K210: PLIC runs in M-mode. Overwrite the enable words authoritatively
-  // (assignment, not OR) so enable bits left over from the previous boot
-  // stage (RustSBI/bootloader, e.g. GPIOHS0 = IRQ 34) are cleared instead
-  // of left asserting forever. UARTHS (33), UART (11), DISK (27) and the
-  // RX-DMA completion DMA5 (32) get enabled; the high enable word carries
-  // both 32 (DMA5) and 33 (UARTHS).
-  uint32 *hart_m_enable = (uint32*)PLIC_MENABLE(hart);
-  *hart_m_enable = (1 << DISK_IRQ) | (1 << UART0_IRQ);
-  uint32 *hart_m_enable_hi = hart_m_enable + 1;
-  *hart_m_enable_hi = (1 << (UARTHS_IRQ % 32)) | (1 << (DMAC_CH5_IRQ % 32));
-  // zero this hart's M-mode priority threshold (forward all enabled IRQs).
-  *(uint32*)PLIC_MPRIORITY(hart) = 0;
+  // K210: zero this hart's M-mode priority threshold (forward all enabled
+  // IRQs), then clear the enable words. 
+  *(uint32 *)PLIC_MPRIORITY(hart) = 0;
+  men = (uint32 *)PLIC_MENABLE(hart);
 #endif
+  men[0] = 0;
+  men[1] = 0;
 }
 
 // ask the PLIC what interrupt we should serve.
@@ -49,9 +35,9 @@ plic_claim(void)
 {
   int hart = cpuid();
 #ifdef QEMU
-  int irq = *(uint32*)PLIC_SCLAIM(hart);
+  int irq = *(uint32 *)PLIC_SCLAIM(hart);
 #else
-  int irq = *(uint32*)PLIC_MCLAIM(hart);
+  int irq = *(uint32 *)PLIC_MCLAIM(hart);
 #endif
   return irq;
 }
@@ -62,8 +48,8 @@ plic_complete(int irq)
 {
   int hart = cpuid();
 #ifdef QEMU
-  *(uint32*)PLIC_SCLAIM(hart) = irq;
+  *(uint32 *)PLIC_SCLAIM(hart) = irq;
 #else
-  *(uint32*)PLIC_MCLAIM(hart) = irq;
+  *(uint32 *)PLIC_MCLAIM(hart) = irq;
 #endif
 }
