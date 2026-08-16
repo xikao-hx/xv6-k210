@@ -38,7 +38,8 @@ struct uart_tx {
 
 struct uart_controller {
   int index;                               
-  int tx_io, rx_io;                        
+  int tx_io;   
+  int rx_io;                     
   dmac_channel_number_t chan_tx;  
   dmac_channel_number_t chan_rx;  
   uint32 default_baud;

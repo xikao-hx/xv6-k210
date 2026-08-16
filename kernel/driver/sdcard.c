@@ -2,16 +2,48 @@
 #include "buf.h"
 #include "printf.h"
 #include "spi_board.h"
+#include "kalloc.h"
+#include "memlayout.h"
+#include "string.h"
 
 static struct spi_device *spi_sd_dev = 0;
+
+/* The SPI interrupt-mode ISR runs under an arbitrary page table once the
+ * caller sleeps during the transfer, so it can only touch buffers the shared
+ * kernel_pagetable maps: the kernel image/heap range [KERNBASE, PHYSTOP).
+ * Stack-local and user buffers must be bounced through a kmalloc'd copy
+ * (spi_write/spi_read pass the caller's data side through unchanged). */
+static int sd_spi_buf_needs_bounce(const void *p) {
+	uint64 a = (uint64)p;
+	return a < KERNBASE || a >= PHYSTOP;
+}
+
 static void sd_write_data(uint8 const *data_buff, uint32 length) {
 	spi_sd_dev = spi_device_get(SPI_DEV_SDCARD);
-	spi_write(spi_sd_dev, data_buff, length);
+	if (sd_spi_buf_needs_bounce(data_buff)) {
+		uint8 *ktx = kmalloc(length);
+		if (ktx == 0)
+			panic("sd_write_data: kmalloc");
+		memmove(ktx, data_buff, length);
+		spi_write(spi_sd_dev, ktx, length);
+		kfree(ktx);
+	} else {
+		spi_write(spi_sd_dev, data_buff, length);
+	}
 }
 
 static void sd_read_data(uint8 *data_buff, uint32 length) {
 	spi_sd_dev = spi_device_get(SPI_DEV_SDCARD);
-	spi_read(spi_sd_dev, data_buff, length);
+	if (sd_spi_buf_needs_bounce(data_buff)) {
+		uint8 *krx = kmalloc(length);
+		if (krx == 0)
+			panic("sd_read_data: kmalloc");
+		spi_read(spi_sd_dev, krx, length);
+		memmove(data_buff, krx, length);
+		kfree(krx);
+	} else {
+		spi_read(spi_sd_dev, data_buff, length);
+	}
 }
 
 /*
