@@ -49,14 +49,14 @@ r_time()
   return x;
 }
 
-// ====================== S 模式 CSR 寄存器操作 ======================
+// ====================== Supervisor-mode CSR operations ======================
 
-// 1. S 模式状态寄存器 sstatus
-#define SSTATUS_SPP (1L << 8)  // 先前模式：1=S模式，0=U模式
-#define SSTATUS_SPIE (1L << 5) // S 模式先前中断使能
-#define SSTATUS_UPIE (1L << 4) // U 模式先前中断使能
-#define SSTATUS_SIE (1L << 1)  // S 模式中断使能（核心！控制全局中断）
-#define SSTATUS_UIE (1L << 0)  // U 模式中断使能
+// 1. Supervisor status register (sstatus)
+#define SSTATUS_SPP (1L << 8)  // Previous privilege mode: 1=S-mode, 0=U-mode
+#define SSTATUS_SPIE (1L << 5) // Previous S-mode interrupt-enable state
+#define SSTATUS_UPIE (1L << 4) // Previous U-mode interrupt-enable state
+#define SSTATUS_SIE (1L << 1)  // Global S-mode interrupt enable
+#define SSTATUS_UIE (1L << 0)  // Global U-mode interrupt enable
 
 static inline uint64
 r_sstatus()
@@ -72,10 +72,10 @@ w_sstatus(uint64 x)
   asm volatile("csrw sstatus, %0" : : "r" (x));
 }
 
-// 2. S 模式中断使能寄存器 sie
-#define SIE_SEIE (1L << 9) // 外部中断使能
-#define SIE_STIE (1L << 5) // 定时器中断使能
-#define SIE_SSIE (1L << 1) // 软件中断使能
+// 2. Supervisor interrupt-enable register (sie)
+#define SIE_SEIE (1L << 9) // Supervisor external interrupt enable
+#define SIE_STIE (1L << 5) // Supervisor timer interrupt enable
+#define SIE_SSIE (1L << 1) // Supervisor software interrupt enable
 
 static inline uint64
 r_sie()
@@ -91,10 +91,10 @@ w_sie(uint64 x)
   asm volatile("csrw sie, %0" : : "r" (x));
 }
 
-// 3. S 模式中断挂起寄存器 sip
-#define SIP_SEIP (1L << 9) // 外部中断挂起
-#define SIP_STIP (1L << 5) // 定时器中断挂起
-#define SIP_SSIP (1L << 1) // 软件中断挂起
+// 3. Supervisor interrupt-pending register (sip)
+#define SIP_SEIP (1L << 9) // Supervisor external interrupt pending
+#define SIP_STIP (1L << 5) // Supervisor timer interrupt pending
+#define SIP_SSIP (1L << 1) // Supervisor software interrupt pending
 
 static inline uint64
 r_sip()
@@ -110,7 +110,7 @@ w_sip(uint64 x)
   asm volatile("csrw sip, %0" : : "r" (x));
 }
 
-// 4. S 模式陷阱向量基址寄存器 stvec（异常/中断处理入口）
+// 4. Supervisor trap-vector base-address register (stvec)
 static inline void
 w_stvec(uint64 x)
 {
@@ -125,7 +125,7 @@ r_stvec()
   return x;
 }
 
-// 5. S 模式异常程序计数器 sepc（保存异常触发时的指令地址）
+// 5. Supervisor exception program counter (sepc)
 static inline void
 w_sepc(uint64 x)
 {
@@ -140,7 +140,7 @@ r_sepc()
   return x;
 }
 
-// 6. S 模式陷阱原因寄存器 scause（异常/中断类型）
+// 6. Supervisor trap-cause register (scause)
 static inline uint64
 r_scause()
 {
@@ -149,7 +149,7 @@ r_scause()
   return x;
 }
 
-// 7. S 模式陷阱值寄存器 stval（异常相关的附加信息，如错误地址）
+// 7. Supervisor trap-value register (stval)
 static inline uint64
 r_stval()
 {
@@ -158,7 +158,7 @@ r_stval()
   return x;
 }
 
-// 8. S 模式临时寄存器 sscratch（陷阱处理时保存上下文）
+// 8. Supervisor scratch register (sscratch)
 static inline void
 w_sscratch(uint64 x)
 {
@@ -174,7 +174,7 @@ r_sscratch()
 }
 
 #define SATP_SV39 (8L << 60) 
-#define MAKE_SATP(pagetable) (SATP_SV39 | (((uint64)pagetable) >> 12)) // 构造 satp 值
+#define MAKE_SATP(pagetable) (SATP_SV39 | (((uint64)pagetable) >> 12)) // Build the satp value
 
 static inline void
 w_satp(uint64 x)

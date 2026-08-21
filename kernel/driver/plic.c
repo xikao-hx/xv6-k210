@@ -20,7 +20,7 @@ plicinithart(void)
   *(uint32 *)PLIC_SPRIORITY(hart) = 0;
   men = (uint32 *)PLIC_SENABLE(hart);
 #else
-  // K210: zero this hart's M-mode priority threshold (forward all enabled
+  // K210: zero this hart's M-mode priority threshold (forward all enabled)
   // IRQs), then clear the enable words. 
   *(uint32 *)PLIC_MPRIORITY(hart) = 0;
   men = (uint32 *)PLIC_MENABLE(hart);

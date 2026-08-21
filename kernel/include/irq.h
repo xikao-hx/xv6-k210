@@ -5,7 +5,6 @@
 // device driver registers (irq, handler, data) once and both the PLIC priority
 // and the current hart's enable bit are taken care of.  trap.c's devintr()
 // degrades to a plain table lookup (irq_dispatch).
-#define MAXIRQ 64
 
 typedef void (*irq_handler_t)(void *data);
 

@@ -17,6 +17,7 @@
 // end -- start of kernel page allocation area
 // PHYSTOP -- end RAM used by the kernel
 
+// ------ define irq num ------
 #ifdef QEMU   // QEMU 
 #define UARTHS_IRQ   10 
 #define DISK_IRQ     1
@@ -40,6 +41,7 @@
 #define UART0_IRQ     11
 #endif
 
+// ------ clint and plic ------
 // local interrupt controller, which contains the timer.
 #define CLINT 0x2000000L
 #define CLINT_MTIMECMP(hartid) (CLINT + 0x4000 + 8*(hartid))
@@ -56,6 +58,7 @@
 #define PLIC_MCLAIM(hart) (PLIC + 0x200004 + (hart)*0x2000)
 #define PLIC_SCLAIM(hart) (PLIC + 0x201004 + (hart)*0x2000)
 
+// ------ define Phyaddr and VA ------
 #ifdef QEMU    // QEMU 
 #define UARTHS 0x10000000L
 #define VIRTIO0 0x10001000  
@@ -95,6 +98,7 @@
 #endif
 #define UARTHS_V    UARTHS
 
+// ------ define special address ------
 // the kernel expects there to be RAM
 // for use by the kernel and user pages
 // from physical address 0x80000000 to PHYSTOP.

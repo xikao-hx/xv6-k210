@@ -15,6 +15,7 @@
 #define NBUF         (MAXOPBLOCKS*3)  // size of disk block cache
 #define FSSIZE       200000  // size of file system in blocks
 #define MAXPATH      128   // maximum file path name
+#define MAXIRQ       64    // maximum irq number
 // Timer interrupt interval in `time`-CSR cycles -> 5ms/tick (200Hz).
 #ifdef QEMU
 #define INTERVAL     (10000000 / 200) // QEMU virt: 10MHz time base

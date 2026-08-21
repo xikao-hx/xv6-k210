@@ -3,6 +3,7 @@
 #include "plic.h"
 #include "proc.h"
 #include "printf.h"
+#include "param.h"
 
 // PLIC interrupt registry.
 //
