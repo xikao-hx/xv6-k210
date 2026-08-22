@@ -35,7 +35,7 @@ console_rx_observer(int c)
   if(mode == CONSOLE_MODE_TTY && foreground_pgid > 0 && c == C('C')) {
     cons.tty_events |= TTY_EVENT_SIGINT;
     release(&cons.lock);
-    return UARTHS_RX_CONSUME_CANCEL;
+    return UARTHS_RX_CONSUME;
   }
   release(&cons.lock);
   return UARTHS_RX_KEEP;
@@ -121,7 +121,7 @@ console_set_foreground_pgrp(int pgid)
   owner_exists = owner_pgid > 0 && signal_pgrp_exists(owner_pgid);
 
   acquire(&cons.lock);
-  // clear deal owner
+  // clear death owner
   if(cons.foreground_owner_pgid == owner_pgid && !owner_exists) {
     cons.foreground_owner_pgid = 0;
     cons.foreground_pgid = 0;
@@ -130,8 +130,8 @@ console_set_foreground_pgrp(int pgid)
   if(cons.foreground_owner_pgid == 0 && cons.foreground_pgid == 0)
     cons.foreground_owner_pgid = caller_pgid;
 
-  // Only members of the current foreground process group and owner 
-  // can change the foreground process group
+  // Only the owner may change the foreground process group.
+  // Other callers may only idempotently set the current foreground PGID.
   if(cons.foreground_owner_pgid != caller_pgid &&
      cons.foreground_pgid != pgid) {
     release(&cons.lock);

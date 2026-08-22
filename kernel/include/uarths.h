@@ -5,9 +5,8 @@
 
 typedef int (*uarths_rx_observer_t)(int);
 
-#define UARTHS_RX_KEEP          0
-#define UARTHS_RX_CONSUME       1
-#define UARTHS_RX_CONSUME_CANCEL 2
+#define UARTHS_RX_KEEP     0
+#define UARTHS_RX_CONSUME  1
 
 void            uarthsinit(void);
 void            uarthsputc(int);

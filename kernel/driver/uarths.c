@@ -46,7 +46,6 @@ struct uarths_rx {
   struct ringbuffer ring;
   uint dropped;        // bytes discarded because the ring was full
   uint epoch;          // bumped by uarths_flush_rx to wake blocked readers
-  int cancel_pending;  // observer (Ctrl-C) asked to abort the current read
   uarths_rx_observer_t observer;
 };
 
@@ -191,20 +190,12 @@ static void
 uarths_rx_service(void)
 {
   int received = 0;
-  int cancelled = 0;
   int c;
 
   while ((c = uarths_hw_getc()) != -1) {
     if (uarths_rx.observer) {
       int action = uarths_rx.observer(c);
 
-      if (action == UARTHS_RX_CONSUME_CANCEL) {
-        ringbuffer_reset(&uarths_rx.ring);
-        uarths_rx.cancel_pending = 1;
-        cancelled = 1;
-        received = 0;
-        continue;
-      }
       if (action == UARTHS_RX_CONSUME)
         continue;
     }
@@ -215,7 +206,7 @@ uarths_rx_service(void)
       uarths_rx.dropped++;
   }
 
-  if (received || cancelled)
+  if (received)
     wakeup_reason(&uarths_rx.ring, WAKEUP_DEVICE);
 }
 
@@ -225,12 +216,6 @@ uarths_rx_wait_data(uint epoch)
 {
   struct proc *p = myproc();
 
-  // A pending cancel wins over buffered data: the observer raises it by
-  // emptying the ring, so any later byte only arrived before the flag.
-  if (uarths_rx.cancel_pending) {
-    uarths_rx.cancel_pending = 0;
-    return -1;
-  }
   for (;;) {
     if (!ringbuffer_empty(&uarths_rx.ring))
       return 1;
@@ -238,10 +223,6 @@ uarths_rx_wait_data(uint epoch)
       return -1;
     if (!p)
       sleep(&uarths_rx.ring, &uarths_rx.lock);
-    if (uarths_rx.cancel_pending) {
-      uarths_rx.cancel_pending = 0;
-      return -1;
-    }
     if (epoch != uarths_rx.epoch)
       return 0;
   }
@@ -287,7 +268,6 @@ uarths_flush_rx(void)
   uarths_hw_drain_fifo();
   ringbuffer_reset(&uarths_rx.ring);
   uarths_rx.dropped = 0;
-  uarths_rx.cancel_pending = 0;
   uarths_rx.epoch++;
   wakeup_reason(&uarths_rx.ring, WAKEUP_DEVICE);
   release(&uarths_rx.lock);

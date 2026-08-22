@@ -7,8 +7,8 @@
 #include "vm.h"
 
 extern struct proc proc[NPROC];
-static int signal_default_ignored(int);
 
+// ------ signal validate check ------
 // Check if signal number is valid (1 to NSIG-1). Signal 0 is invalid
 // as it's only used for process existence testing (kill(pid, 0)).
 static int
@@ -36,6 +36,13 @@ signal_handler_valid(struct proc *p, uint64 handler)
   return (*pte & (PTE_V | PTE_U | PTE_X)) == (PTE_V | PTE_U | PTE_X);
 }
 
+static int
+signal_default_ignored(int signum)
+{
+  return signum == SIGCHLD;
+}
+
+// ------ proc related ------
 void
 signal_proc_init(struct proc *p)
 {
@@ -82,6 +89,7 @@ signal_reset_on_exec(struct proc *p)
   release(&p->lock);
 }
 
+// ------ set handler ------
 uint64
 signal_set_handler(struct proc *p, int signum, uint64 handler)
 {
@@ -98,6 +106,8 @@ signal_set_handler(struct proc *p, int signum, uint64 handler)
   acquire(&p->lock);
   old = p->sig_handlers[signum];
   p->sig_handlers[signum] = handler;
+
+  // Clear signals that have been set to ignore previously
   if(handler == (uint64)SIG_IGN ||
      (handler == (uint64)SIG_DFL && signal_default_ignored(signum)))
     p->sig_pending &= ~signal_bit(signum);
@@ -105,11 +115,13 @@ signal_set_handler(struct proc *p, int signum, uint64 handler)
   return old;
 }
 
+// ------ mark pend bitmap ------
 static void
 signal_mark_locked(struct proc *p, int signum)
 {
   uint64 handler = p->sig_handlers[signum];
 
+  // Do not add ignored signals to the pending set
   if(handler == (uint64)SIG_IGN ||
      (handler == (uint64)SIG_DFL && signal_default_ignored(signum)))
     return;
@@ -152,6 +164,7 @@ signal_send_pid(int pid, int signum)
   return -1;
 }
 
+// ------ pgrp related ------
 int
 signal_send_pgrp(int pgid, int signum)
 {
@@ -189,6 +202,7 @@ signal_pgrp_exists(int pgid)
   return 0;
 }
 
+// ------ check signal before sleep ------ 
 int
 signal_pending_locked(struct proc *p)
 {
@@ -222,12 +236,7 @@ signal_choose(uint32 pending)
   return 0;
 }
 
-static int
-signal_default_ignored(int signum)
-{
-  return signum == SIGCHLD;
-}
-
+// ------ siganl deal ------
 void
 signal_deliver(struct proc *p)
 {
@@ -291,6 +300,7 @@ signal_deliver(struct proc *p)
   release(&p->lock);
 }
 
+// ------ user signal handler deal finish ------
 uint64
 signal_sigreturn(struct proc *p)
 {

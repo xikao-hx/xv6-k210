@@ -79,10 +79,7 @@ pipewrite(struct pipe *pi, uint64 addr, int n)
   for(i = 0; i < n; i++){
     while(pi->nwrite == pi->nread + PIPESIZE &&
           pi->readopen){  //DOC: pipewrite-full
-      if(signal_pending(pr)){
-        release(&pi->lock);
-        return i > 0 ? i : -1;
-      }
+
       wakeup(&pi->nread);
       if(sleep_interruptible(&pi->nwrite, &pi->lock) < 0) {
         release(&pi->lock);
