@@ -32,12 +32,10 @@ copyin_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
   uint64 pa0;
   pte_t *pte;
 
-  if(srcva + len < srcva)
+  if(srcva >= MAXUVA || len > MAXUVA - srcva)
     return -1;
   
   while(len > 0){
-    if(srcva >= MAXVA)
-      return -1;
     va0 = PGROUNDDOWN(srcva);
     pte = walk(pagetable, va0, 0);
     if((pte == 0 || !(*pte & PTE_V)) && pagetable == p->pagetable){
@@ -75,9 +73,12 @@ copyinstr_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   uint64 n;
   pte_t *pte;
   
+  if(srcva >= MAXUVA)
+    return -1;
+
   stats.ncopyinstr++;   // XXX lock
   while(max > 0) {
-    if(srcva >= MAXVA)
+    if(srcva >= MAXUVA)
       return -1;
     va0 = PGROUNDDOWN(srcva);
     pte = walk(pagetable, va0, 0);
@@ -93,6 +94,8 @@ copyinstr_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     n = PGSIZE - (srcva - va0);
     if(n > max)
       n = max;
+    if(n > MAXUVA - srcva)
+      n = MAXUVA - srcva;
     char *src = (char *)(pa0 + (srcva - va0));
     while(n > 0){
       if(*src == '\0'){

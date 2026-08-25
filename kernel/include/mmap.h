@@ -7,7 +7,7 @@
 #include "types.h"
 
 #define NVMA 16
-#define MMAP_TOP KSTACK(0)
+#define MMAP_TOP USER_STACK_BOTTOM
 
 struct file;
 struct proc;

@@ -43,19 +43,19 @@ vma_overlaps(struct vma_area *vma, uint64 start, uint64 end)
 static uint64
 vma_find_address(struct proc *p, uint64 length)
 {
+  uint64 bottom = PGROUNDUP(p->sz);
   uint64 top = MMAP_TOP;
 
-  while(top >= length){
+  if(bottom < p->sz || bottom > top)
+    return 0;
+  while(length <= top - bottom){
     uint64 start = top - length;
     struct vma_area *overlap = 0;
 
-    if(start < PHYSTOP)
-      return 0;
     for(int i = 0; i < NVMA; i++){
-      if(vma_overlaps(&p->vmas[i], start, top)){
+      if(vma_overlaps(&p->vmas[i], start, top) &&
+         (overlap == 0 || p->vmas[i].start > overlap->start))
         overlap = &p->vmas[i];
-        break;
-      }
     }
     if(overlap == 0)
       return start;
@@ -316,7 +316,7 @@ vma_map_create(struct proc *p, uint64 addr, uint64 length, int prot,
   uint64 map_length;
   uint64 start;
 
-  if(addr != 0 || length == 0 || length > MAXVA)
+  if(addr != 0 || length == 0 || length > MMAP_TOP)
     return MAP_FAILED;
   if((prot & ~(PROT_READ | PROT_WRITE | PROT_EXEC)) != 0)
     return MAP_FAILED;
@@ -440,7 +440,7 @@ vm_fault(struct proc *p, uint64 va, int access)
   void *mem;
   int pte_flags = PTE_U;
 
-  if(va >= MAXVA || (vma = vma_find(p, va)) == 0)
+  if(va >= MAXUVA || (vma = vma_find(p, va)) == 0)
     return -1;
   if(!vma_access_allowed(vma, access))
     return -1;
@@ -581,10 +581,10 @@ vma_unmap(struct proc *p, uint64 addr, uint64 length)
 
   if(length == 0 || (addr % PGSIZE) != 0 || addr >= MMAP_TOP)
     return -1;
-  if(addr + length < addr)
+  if(length > MMAP_TOP - addr)
     return -1;
   end = PGROUNDUP(addr + length);
-  if(end < addr || end > MMAP_TOP)
+  if(end > MMAP_TOP)
     return -1;
 
   for(int i = 0; i < NVMA; i++){

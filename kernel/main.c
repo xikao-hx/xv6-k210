@@ -84,9 +84,9 @@ main(unsigned long hartid, unsigned long dtb_pa)
     while(started == 0)
       ;
     __sync_synchronize();
-    printf("hart %d starting\n", hartid);
     kvminithart();    // turn on paging
     trapinithart();   // install kernel trap vector
+    printf("hart %d starting\n", hartid);
   }
 
   scheduler();

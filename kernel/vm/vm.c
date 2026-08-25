@@ -152,7 +152,7 @@ walkaddr(pagetable_t pagetable, uint64 va)
   pte_t *pte;
   uint64 pa;
 
-  if(va >= MAXVA)
+  if(va >= MAXUVA)
     return 0;
 
   pte = walk(pagetable, va, 0);
@@ -429,6 +429,8 @@ uvm_stack_fault(struct proc *p, pagetable_t pagetable, uint64 va)
 int
 faultin_page(struct proc *p, pagetable_t pagetable, uint64 va, int access)
 {
+  if(va >= MAXUVA)
+    return -1;
   if(vm_fault(p, va, access) == 0)
     return 0;
   if(access == VM_FAULT_WRITE && uvmcowpage(pagetable, va) == 0)
@@ -491,7 +493,7 @@ uvmcowmalloc(pagetable_t pagetable, uint64 va)
 
 int uvmcowpage(pagetable_t pagetable, uint64 va)
 {
-  if (va >= MAXVA) return -1;
+  if (va >= MAXUVA) return -1;
   pte_t *pte = walk(pagetable, va, 0);
   if (pte == 0) return -1;
   if ((*pte & PTE_V) == 0) return -1;
@@ -533,9 +535,7 @@ ukvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int alloc)
 void
 upg2ukpg(pagetable_t u_pagetable, pagetable_t k_pagetable, uint64 begin_addr, uint64 end_addr)
 {
-  // High-address VMAs remain valid until mmap moves below MAXUVA. Low user
-  // ranges must never cross into the kernel's L2[2] branch.
-  if(begin_addr > end_addr || (begin_addr < MAXUVA && end_addr > MAXUVA))
+  if(begin_addr > end_addr || end_addr > MAXUVA)
     panic("upg2ukpg: range");
 
   for (uint64 addr = begin_addr; addr < end_addr; addr += PGSIZE) {
@@ -670,9 +670,10 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   struct proc *p = myproc();
   pte_t *pte;
 
+  if(dstva >= MAXUVA || len > MAXUVA - dstva)
+    return -1;
+
   while(len > 0){
-    if(dstva >= MAXVA)
-      return -1;
     va0 = PGROUNDDOWN(dstva);
     pte = walk(pagetable, va0, 0);
     if((pte == 0 || !(*pte & PTE_V)) && pagetable == p->pagetable){

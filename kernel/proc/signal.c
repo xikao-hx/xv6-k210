@@ -28,7 +28,7 @@ signal_handler_valid(struct proc *p, uint64 handler)
 {
   pte_t *pte;
 
-  if(handler >= MAXVA)
+  if(handler >= MAXUVA)
     return 0;
   pte = walk(p->pagetable, handler, 0);
   if(pte == 0)

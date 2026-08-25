@@ -42,6 +42,7 @@ uint64
 sys_sbrk(void)
 {
   uint64 addr;
+  uint64 limit;
   int n;
   struct proc *p = myproc();
   uint64 sz = p->sz;
@@ -51,7 +52,8 @@ sys_sbrk(void)
   addr = p->sz;
 
   if (n >= 0) {
-    if(addr > MAXUVA || (uint64)n > MAXUVA - addr)
+    limit = vma_heap_limit(p);
+    if(addr > limit || (uint64)n > limit - addr)
       return -1;
     p->sz = addr + (uint64)n;
   } else {

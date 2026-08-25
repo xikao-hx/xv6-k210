@@ -9,7 +9,7 @@ int
 fetchaddr(uint64 addr, uint64 *ip)
 {
   struct proc *p = myproc();
-  if(addr >= p->sz || addr+sizeof(uint64) > p->sz)
+  if(addr >= MAXUVA || sizeof(uint64) > MAXUVA - addr)
     return -1;
   if(copyin(p->pagetable, (char *)ip, addr, sizeof(*ip)) != 0)
     return -1;
@@ -63,7 +63,7 @@ int
 argaddr(int n, uint64 *ip)
 {
   *ip = argraw(n);
-  return 0;
+  return *ip < MAXUVA ? 0 : -1;
 }
 
 // Fetch the nth word-sized system call argument as a null-terminated string.
