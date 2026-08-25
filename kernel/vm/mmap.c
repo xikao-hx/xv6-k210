@@ -10,6 +10,8 @@
 
 #define MAP_FAILED ((uint64)-1)
 
+// ------ VMA Helper Function ------
+
 static struct vma_area *
 vma_find(struct proc *p, uint64 va)
 {
@@ -61,6 +63,8 @@ vma_find_address(struct proc *p, uint64 length)
   }
   return 0;
 }
+
+// ------ Unified ANON Object Creation ------
 
 static struct anon_object *
 anon_object_create(void)
@@ -145,6 +149,8 @@ anon_page_get(struct anon_object *anon, uint64 index)
   return mem;
 }
 
+// ------ Unified Fault Handler (vma_ops) ------
+
 // Zero a fresh page, then read the file range intersecting the faulted page.
 // The core-mm file fault handler; used by MAP_PRIVATE/MAP_SHARED file VMAs.
 static int
@@ -224,6 +230,8 @@ static const struct vma_ops kbufdev_vma_ops = {
   .fault = kbufdev_vma_fault,
 };
 
+// ------ Unified MMAP Object Creation ------
+
 static struct mmap_object *
 mmap_object_create(enum vma_type type, struct file *file, int flags)
 {
@@ -283,6 +291,8 @@ mmap_object_put(struct mmap_object *object)
     kfree(object);
   }
 }
+
+// ------ Unified VMA Creation ------
 
 uint64
 vma_heap_limit(struct proc *p)
@@ -407,6 +417,8 @@ vma_map_device(struct proc *p, uint64 addr, uint64 length, int prot,
   return start;
 }
 
+// ------ VM Fault Handling ------
+
 static int
 vma_access_allowed(struct vma_area *vma, int access)
 {
@@ -465,6 +477,8 @@ vm_fault(struct proc *p, uint64 va, int access)
   return 0;
 }
 
+// ------ WriteBack Handling------
+
 static int
 vma_writeback_page(struct vma_area *vma, pagetable_t pagetable,
                    uint64 page)
@@ -501,6 +515,8 @@ vma_writeback_range(struct proc *p, struct vma_area *vma,
   }
   return 0;
 }
+
+// ------ Unified Lifecycle Management for VMA (Virtual Memory Areas) ------
 
 static void
 vma_unmap_pages(struct proc *p, uint64 start, uint64 end)
