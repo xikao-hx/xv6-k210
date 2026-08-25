@@ -41,27 +41,27 @@ sys_wait(void)
 uint64
 sys_sbrk(void)
 {
-  int addr;
+  uint64 addr;
   int n;
   struct proc *p = myproc();
-  int sz = p->sz;
+  uint64 sz = p->sz;
 
   if(argint(0, &n) < 0)
     return -1;
   addr = p->sz;
 
-  if ((addr + n) > PLIC) {
-    return -1;
-  }
-
   if (n >= 0) {
-    p->sz += n;
-  } else if ((addr + n) > 0) {
-    sz = uvmdealloc(p->pagetable, addr, addr + n);
-    ukvmdealloc(p->kpagetable, addr, addr + n, 0);
-    p->sz = sz;
+    if(addr > MAXUVA || (uint64)n > MAXUVA - addr)
+      return -1;
+    p->sz = addr + (uint64)n;
   } else {
-    return -1;
+    uint64 shrink = -(long)n;
+
+    if(shrink > addr)
+      return -1;
+    sz = uvmdealloc(p->pagetable, addr, addr - shrink);
+    ukvmdealloc(p->kpagetable, addr, addr - shrink, 0);
+    p->sz = sz;
   }
   // if(growproc(n) < 0)
   //   return -1;

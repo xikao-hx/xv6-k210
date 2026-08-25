@@ -48,7 +48,7 @@ irq_register(int irq, irq_handler_t h, void *data)
   actions[irq].handler = h;
   actions[irq].data = data;
   // Non-zero priority, otherwise the PLIC treats the source as disabled.
-  *(uint32 *)(PLIC + irq * sizeof(uint32)) = 1;
+  *(uint32 *)(PLIC_PRIORITY + irq * sizeof(uint32)) = 1;
   irq_enable_hart(irq);
 #ifdef QEMU
   printf("DBG irq_register irq=%d men0=%x men1=%x\n", irq,

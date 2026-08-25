@@ -34,6 +34,9 @@ main(unsigned long hartid, unsigned long dtb_pa)
   inithartid(hartid);
   
   if (hartid == 0) {
+    kinit();         // physical page allocator
+    kvminit();       // create kernel page table
+    kvminithart();   // turn on paging
     plicinithart();  // clear all device interrupts
     consoleinit();
     printfinit();
@@ -41,9 +44,6 @@ main(unsigned long hartid, unsigned long dtb_pa)
     printf("\n");
     printf("xv6 kernel is booting\n");
     printf("\n");
-    kinit();         // physical page allocator
-    kvminit();       // create kernel page table
-    kvminithart();   // turn on paging
     procinit();      // process table
     trapinit();      // trap vectors
     trapinithart();  // install kernel trap vector

@@ -56,6 +56,8 @@ exec(char *path, char **argv)
     goto bad;
   if(elf.magic != ELF_MAGIC)
     goto bad;
+  if(elf.entry >= MAXUVA)
+    goto bad;
 
   if((pagetable = proc_pagetable(p)) == 0)
     goto bad;
@@ -70,8 +72,10 @@ exec(char *path, char **argv)
       goto bad;
     if(ph.vaddr + ph.memsz < ph.vaddr)
       goto bad;
+    if(ph.vaddr >= MAXUVA || ph.memsz > MAXUVA - ph.vaddr)
+      goto bad;
     uint64 sz2;
-    if((sz2 = uvmalloc(pagetable, sz, ph.vaddr + ph.memsz)) < 0)
+    if((sz2 = uvmalloc(pagetable, sz, ph.vaddr + ph.memsz)) == 0)
       goto bad;
     sz = sz2;
     if(ph.vaddr % PGSIZE != 0)

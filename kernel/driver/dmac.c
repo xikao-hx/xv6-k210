@@ -22,6 +22,14 @@
 
 volatile dmac_t *const dmac = (dmac_t *)DMAC_V;
 
+static uintptr_t
+dmac_bus_address(uintptr_t address)
+{
+    if(address >= VIRT_OFFSET && address < VIRT_OFFSET + MAXUVA)
+        return address - VIRT_OFFSET;
+    return address;
+}
+
 static int is_memory(uintptr_t address)
 {
     enum
@@ -197,9 +205,11 @@ int dmac_set_channel_param(dmac_channel_number_t channel_num,
 {
     dmac_ch_ctl_u_t ctl;
     dmac_ch_cfg_u_t cfg_u;
+    uintptr_t src_addr = dmac_bus_address((uintptr_t)src);
+    uintptr_t dest_addr = dmac_bus_address((uintptr_t)dest);
 
     /* check addr type: peripheral or memory */
-    int mem_type_src = is_memory((uintptr_t)src), mem_type_dest = is_memory((uintptr_t)dest);
+    int mem_type_src = is_memory(src_addr), mem_type_dest = is_memory(dest_addr);
 
     /* select transfer flow control mode  */
     dmac_transfer_flow_t flow_control;
@@ -235,8 +245,8 @@ int dmac_set_channel_param(dmac_channel_number_t channel_num,
     writeq(cfg_u.data, &dmac->channel[channel_num].cfg);
 
     /* set source addr and dest addr */
-    dmac->channel[channel_num].sar = (uint64)src;
-    dmac->channel[channel_num].dar = (uint64)dest;
+    dmac->channel[channel_num].sar = src_addr;
+    dmac->channel[channel_num].dar = dest_addr;
 
     /* ctl register */
     ctl.data = readq(&dmac->channel[channel_num].ctl);

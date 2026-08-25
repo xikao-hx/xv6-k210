@@ -10,7 +10,7 @@
 
 #ifdef QEMU
 
-#define Reg(reg)     ((volatile unsigned char *)(UARTHS + reg))
+#define Reg(reg)     ((volatile unsigned char *)(UARTHS_V + reg))
 #define RHR          0
 #define THR          0
 #define IER          1
@@ -33,7 +33,7 @@
 
 #include "sysctl.h"
 
-volatile uarths_t *const uarths = (volatile uarths_t *)UARTHS;
+volatile uarths_t *const uarths = (volatile uarths_t *)UARTHS_V;
 
 #endif
 

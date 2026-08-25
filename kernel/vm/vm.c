@@ -27,10 +27,12 @@ kvminit()
 
 #ifdef QEMU
   // virtio mmio disk interface
-  kvmmap(VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+  kvmmap(VIRTIO0_V, VIRTIO0, PGSIZE, PTE_R | PTE_W);
 #else
   kvmmap(GPIOHS_V, GPIOHS, PGSIZE, PTE_R | PTE_W);
   kvmmap(UART0_V, UART0, PGSIZE, PTE_R | PTE_W);
+  kvmmap(UART1_V, UART1, PGSIZE, PTE_R | PTE_W);
+  kvmmap(UART2_V, UART2, PGSIZE, PTE_R | PTE_W);
   kvmmap(DMAC_V, DMAC, PGSIZE, PTE_R | PTE_W);
   kvmmap(GPIO_V, GPIO, PGSIZE, PTE_R | PTE_W);
   kvmmap(FPIOA_V, FPIOA, PGSIZE, PTE_R | PTE_W);
@@ -38,13 +40,14 @@ kvminit()
   kvmmap(SPI0_V, SPI0, PGSIZE, PTE_R | PTE_W);
   kvmmap(SPI1_V, SPI1, PGSIZE, PTE_R | PTE_W);
   kvmmap(SPI2_V, SPI2, PGSIZE, PTE_R | PTE_W);
+  kvmmap(SPI_SLAVE_V, SPI_SLAVE, PGSIZE, PTE_R | PTE_W);
   kvmmap(I2C0_V, I2C0, PGSIZE, PTE_R | PTE_W);
   kvmmap(I2C1_V, I2C1, PGSIZE, PTE_R | PTE_W);
   kvmmap(I2C2_V, I2C2, PGSIZE, PTE_R | PTE_W);
 #endif
 
-  kvmmap(CLINT, CLINT, 0x10000, PTE_R | PTE_W);
-  kvmmap(PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+  kvmmap(CLINT_V, CLINT, 0x10000, PTE_R | PTE_W);
+  kvmmap(PLIC_V, PLIC, 0x400000, PTE_R | PTE_W);
   // map kernel text executable and read-only.
   kvmmap(KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
   // map kernel data and the physical RAM we'll make use of.
@@ -63,10 +66,12 @@ ukvminit(void)
   ukvmmap(pagetable, UARTHS_V, UARTHS, PGSIZE, PTE_R | PTE_W);
   
 #ifdef QEMU
-  ukvmmap(pagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+  ukvmmap(pagetable, VIRTIO0_V, VIRTIO0, PGSIZE, PTE_R | PTE_W);
 #else
   ukvmmap(pagetable, GPIOHS_V, GPIOHS, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, UART0_V, UART0, PGSIZE, PTE_R | PTE_W);
+  ukvmmap(pagetable, UART1_V, UART1, PGSIZE, PTE_R | PTE_W);
+  ukvmmap(pagetable, UART2_V, UART2, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, DMAC_V, DMAC, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, GPIO_V, GPIO, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, FPIOA_V, FPIOA, PGSIZE, PTE_R | PTE_W);
@@ -74,13 +79,14 @@ ukvminit(void)
   ukvmmap(pagetable, SPI0_V, SPI0, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, SPI1_V, SPI1, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, SPI2_V, SPI2, PGSIZE, PTE_R | PTE_W);
+  ukvmmap(pagetable, SPI_SLAVE_V, SPI_SLAVE, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, I2C0_V, I2C0, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, I2C1_V, I2C1, PGSIZE, PTE_R | PTE_W);
   ukvmmap(pagetable, I2C2_V, I2C2, PGSIZE, PTE_R | PTE_W);
 #endif
 
-  ukvmmap(pagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
-  ukvmmap(pagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+  ukvmmap(pagetable, CLINT_V, CLINT, 0x10000, PTE_R | PTE_W);
+  ukvmmap(pagetable, PLIC_V, PLIC, 0x400000, PTE_R | PTE_W);
   ukvmmap(pagetable, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
   ukvmmap(pagetable, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
   ukvmmap(pagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
@@ -260,10 +266,12 @@ ukvmunmap(pagetable_t pagetable)
   uvmunmap(pagetable, UARTHS_V, PGSIZE / PGSIZE, 0);
 
 #ifdef QEMU
-  uvmunmap(pagetable, VIRTIO0, PGSIZE / PGSIZE, 0);
+  uvmunmap(pagetable, VIRTIO0_V, PGSIZE / PGSIZE, 0);
 #else
   uvmunmap(pagetable, GPIOHS_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, UART0_V, PGSIZE / PGSIZE, 0);
+  uvmunmap(pagetable, UART1_V, PGSIZE / PGSIZE, 0);
+  uvmunmap(pagetable, UART2_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, DMAC_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, GPIO_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, FPIOA_V, PGSIZE / PGSIZE, 0);
@@ -271,13 +279,14 @@ ukvmunmap(pagetable_t pagetable)
   uvmunmap(pagetable, SPI0_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, SPI1_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, SPI2_V, PGSIZE / PGSIZE, 0);
+  uvmunmap(pagetable, SPI_SLAVE_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, I2C0_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, I2C1_V, PGSIZE / PGSIZE, 0);
   uvmunmap(pagetable, I2C2_V, PGSIZE / PGSIZE, 0);
 #endif
 
-  uvmunmap(pagetable, CLINT, 0x10000 / PGSIZE, 0);
-  uvmunmap(pagetable, PLIC, 0x400000 / PGSIZE, 0);
+  uvmunmap(pagetable, CLINT_V, 0x10000 / PGSIZE, 0);
+  uvmunmap(pagetable, PLIC_V, 0x400000 / PGSIZE, 0);
   uvmunmap(pagetable, KERNBASE, ((uint64)etext-KERNBASE) / PGSIZE, 0);
   uvmunmap(pagetable, (uint64)etext, (PHYSTOP-(uint64)etext) / PGSIZE, 0);
   uvmunmap(pagetable, TRAMPOLINE, PGSIZE / PGSIZE, 0);
@@ -322,6 +331,8 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 
   if(newsz < oldsz)
     return oldsz;
+  if(newsz > MAXUVA)
+    return 0;
 
   oldsz = PGROUNDUP(oldsz);
   for(a = oldsz; a < newsz; a += PGSIZE){
@@ -346,7 +357,7 @@ uvmlazymalloc(pagetable_t pagetable, uint64 va)
   struct proc *p = myproc();
   char *mem;
 
-  if ((va % PGSIZE) != 0) {
+  if ((va % PGSIZE) != 0 || va >= MAXUVA) {
     printf("uvmlazymalloc: va must be page-aligned\n");
     return -1;
   }
@@ -489,6 +500,11 @@ ukvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int alloc)
 void
 upg2ukpg(pagetable_t u_pagetable, pagetable_t k_pagetable, uint64 begin_addr, uint64 end_addr)
 {
+  // High-address VMAs remain valid until mmap moves below MAXUVA. Low user
+  // ranges must never cross into the kernel's L2[2] branch.
+  if(begin_addr > end_addr || (begin_addr < MAXUVA && end_addr > MAXUVA))
+    panic("upg2ukpg: range");
+
   for (uint64 addr = begin_addr; addr < end_addr; addr += PGSIZE) {
     pte_t *u_pte = walk(u_pagetable, addr, 0);
     if (u_pte == 0 || (*u_pte & PTE_V) == 0) {
@@ -555,27 +571,20 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
 
-    // 设置权限
     if (flags & PTE_W) {
       flags = (flags | PTE_COW) & ~PTE_W;   
       *pte = PA2PTE(pa) | flags;
     }
 
-    // if((mem = kalloc_page()) == 0)
-    //   goto err;
-    // memmove(mem, (char*)pa, PGSIZE);
-
-    if(mappages(new, i, PGSIZE, pa, flags) != 0){
-      uvmunmap(new, 0, i / PGSIZE, 1);
+    if(mappages(new, i, PGSIZE, pa, flags) != 0)
       goto err;
-    }
 
     kaddquota((void *)pa);
   }
   sfence_vma();
   return 0;
 
- err:
+err:
   uvmunmap(new, 0, i / PGSIZE, 1);
   return -1;
 }

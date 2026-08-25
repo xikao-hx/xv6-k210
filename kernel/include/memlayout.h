@@ -41,62 +41,71 @@
 #define UART0_IRQ     11
 #endif
 
-// ------ clint and plic ------
-// local interrupt controller, which contains the timer.
-#define CLINT 0x2000000L
-#define CLINT_MTIMECMP(hartid) (CLINT + 0x4000 + 8*(hartid))
-#define CLINT_MTIME (CLINT + 0xBFF8) // cycles since boot.
+// ------ device physical addresses ------
+#define VIRT_OFFSET 0x3F00000000L
 
-// qemu puts programmable interrupt controller here.
-#define PLIC 0x0c000000L
-#define PLIC_PRIORITY (PLIC + 0x0)
-#define PLIC_PENDING (PLIC + 0x1000)
-#define PLIC_MENABLE(hart) (PLIC + 0x2000 + (hart)*0x100)
-#define PLIC_SENABLE(hart) (PLIC + 0x2080 + (hart)*0x100)
-#define PLIC_MPRIORITY(hart) (PLIC + 0x200000 + (hart)*0x2000)
-#define PLIC_SPRIORITY(hart) (PLIC + 0x201000 + (hart)*0x2000)
-#define PLIC_MCLAIM(hart) (PLIC + 0x200004 + (hart)*0x2000)
-#define PLIC_SCLAIM(hart) (PLIC + 0x201004 + (hart)*0x2000)
+#define CLINT 0x02000000L
+#define PLIC  0x0C000000L
 
 // ------ define Phyaddr and VA ------
 #ifdef QEMU    // QEMU 
 #define UARTHS 0x10000000L
-#define VIRTIO0 0x10001000  
+#define VIRTIO0 0x10001000L
 #else          // K210
-#define UARTHS      0x38000000
-#define UART0       0x50210000
-#define UART1       0x50220000
-#define UART2       0x50230000
-#define GPIOHS      0x38001000
-#define DMAC        0x50000000
-#define GPIO        0x50200000
-#define FPIOA       0x502B0000
-#define SYSCTL      0x50440000
-#define SPI0        0x52000000
-#define SPI1        0x53000000
-#define SPI2        0x54000000
-#define SPI_SLAVE   0x50240000
-#define I2C0        0x50280000
-#define I2C1        0x50290000
-#define I2C2        0x502A0000
-
-// Virtual addresses (identity-mapped on os/ tree)
-#define UART0_V     UART0
-#define UART1_V     UART1
-#define UART2_V     UART2
-#define GPIOHS_V    GPIOHS
-#define DMAC_V      DMAC
-#define GPIO_V      GPIO
-#define FPIOA_V     FPIOA
-#define SYSCTL_V    SYSCTL
-#define SPI0_V      SPI0
-#define SPI1_V      SPI1
-#define SPI2_V      SPI2
-#define I2C0_V      I2C0
-#define I2C1_V      I2C1
-#define I2C2_V      I2C2
+#define UARTHS      0x38000000L
+#define UART0       0x50210000L
+#define UART1       0x50220000L
+#define UART2       0x50230000L
+#define GPIOHS      0x38001000L
+#define DMAC        0x50000000L
+#define GPIO        0x50200000L
+#define FPIOA       0x502B0000L
+#define SYSCTL      0x50440000L
+#define SPI0        0x52000000L
+#define SPI1        0x53000000L
+#define SPI2        0x54000000L
+#define SPI_SLAVE   0x50240000L
+#define I2C0        0x50280000L
+#define I2C1        0x50290000L
+#define I2C2        0x502A0000L
 #endif
-#define UARTHS_V    UARTHS
+
+// ------ device virtual addresses ------
+#define CLINT_V     (CLINT + VIRT_OFFSET)
+#define PLIC_V      (PLIC + VIRT_OFFSET)
+#define UARTHS_V    (UARTHS + VIRT_OFFSET)
+
+#ifdef QEMU
+#define VIRTIO0_V   (VIRTIO0 + VIRT_OFFSET)
+#else
+#define UART0_V     (UART0 + VIRT_OFFSET)
+#define UART1_V     (UART1 + VIRT_OFFSET)
+#define UART2_V     (UART2 + VIRT_OFFSET)
+#define GPIOHS_V    (GPIOHS + VIRT_OFFSET)
+#define DMAC_V      (DMAC + VIRT_OFFSET)
+#define GPIO_V      (GPIO + VIRT_OFFSET)
+#define FPIOA_V     (FPIOA + VIRT_OFFSET)
+#define SYSCTL_V    (SYSCTL + VIRT_OFFSET)
+#define SPI0_V      (SPI0 + VIRT_OFFSET)
+#define SPI1_V      (SPI1 + VIRT_OFFSET)
+#define SPI2_V      (SPI2 + VIRT_OFFSET)
+#define SPI_SLAVE_V (SPI_SLAVE + VIRT_OFFSET)
+#define I2C0_V      (I2C0 + VIRT_OFFSET)
+#define I2C1_V      (I2C1 + VIRT_OFFSET)
+#define I2C2_V      (I2C2 + VIRT_OFFSET)
+#endif
+
+#define CLINT_MTIMECMP(hartid) (CLINT_V + 0x4000 + 8*(hartid))
+#define CLINT_MTIME (CLINT_V + 0xBFF8)
+
+#define PLIC_PRIORITY (PLIC_V + 0x0)
+#define PLIC_PENDING (PLIC_V + 0x1000)
+#define PLIC_MENABLE(hart) (PLIC_V + 0x2000 + (hart)*0x100)
+#define PLIC_SENABLE(hart) (PLIC_V + 0x2080 + (hart)*0x100)
+#define PLIC_MPRIORITY(hart) (PLIC_V + 0x200000 + (hart)*0x2000)
+#define PLIC_SPRIORITY(hart) (PLIC_V + 0x201000 + (hart)*0x2000)
+#define PLIC_MCLAIM(hart) (PLIC_V + 0x200004 + (hart)*0x2000)
+#define PLIC_SCLAIM(hart) (PLIC_V + 0x201004 + (hart)*0x2000)
 
 // ------ define special address ------
 // the kernel expects there to be RAM
@@ -109,6 +118,13 @@
 #endif
 #define PHYSTOP 0x80600000L
 // #define PHYSTOP (KERNBASE + 128*1024*1024)
+
+// User mappings occupy only the first two Sv39 L2 entries.
+#define MAXUVA              0x80000000L
+#define USER_STACK_TOP      MAXUVA
+#define USER_STACK_SIZE     (1L << 20)
+#define USER_STACK_BOTTOM   (USER_STACK_TOP - USER_STACK_SIZE)
+#define USER_STACK_GUARD    USER_STACK_BOTTOM
 
 // map the trampoline page to the highest address,
 // in both user and kernel space.
