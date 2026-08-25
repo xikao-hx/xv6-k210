@@ -390,6 +390,37 @@ uvmlazymalloc(pagetable_t pagetable, uint64 va)
   return 0;
 }
 
+static int
+uvm_stack_address(uint64 va)
+{
+  return va >= USER_STACK_START && va < USER_STACK_TOP;
+}
+
+int
+uvm_stack_init(pagetable_t pagetable)
+{
+  char *mem = kalloc_page();
+  uint64 va = USER_STACK_TOP - PGSIZE;
+
+  if(mem == 0)
+    return -1;
+  memset(mem, 0, PGSIZE);
+  if(mappages(pagetable, va, PGSIZE, (uint64)mem,
+              PTE_R | PTE_W | PTE_U) < 0){
+    kfree_page(mem);
+    return -1;
+  }
+  return 0;
+}
+
+static int
+uvm_stack_fault(struct proc *p, pagetable_t pagetable, uint64 va)
+{
+  if(!uvm_stack_address(va) || pagetable != p->pagetable)
+    return -1;
+  return uvmlazymalloc(pagetable, va);
+}
+
 // Resolve a fault on page-aligned va for the given access.
 // First tries mmap demand paging (vm_fault); if the page is not backed
 // by a VMA, falls back to lazy allocation of the anonymous heap/stack
@@ -400,9 +431,11 @@ faultin_page(struct proc *p, pagetable_t pagetable, uint64 va, int access)
 {
   if(vm_fault(p, va, access) == 0)
     return 0;
-  if(va < p->sz && PGROUNDUP(p->trapframe->sp) - 1 < va)
+  if(access == VM_FAULT_WRITE && uvmcowpage(pagetable, va) == 0)
+    return uvmcowmalloc(pagetable, va) ? 0 : -1;
+  if(va < p->sz)
     return uvmlazymalloc(pagetable, va);
-  return -1;
+  return uvm_stack_fault(p, pagetable, va);
 }
 
 void *
@@ -554,14 +587,14 @@ uvmfree(pagetable_t pagetable, uint64 sz)
 // physical memory.
 // returns 0 on success, -1 on failure.
 // frees any allocated pages on failure.
-int
-uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
+static int
+uvmcopy_range(pagetable_t old, pagetable_t new, uint64 start, uint64 end)
 {
   pte_t *pte;
   uint64 pa, i;
   uint flags;
 
-  for(i = 0; i < sz; i += PGSIZE){
+  for(i = start; i < end; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       // panic("uvmcopy: pte should exist");
       continue;
@@ -585,8 +618,33 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   return 0;
 
 err:
-  uvmunmap(new, 0, i / PGSIZE, 1);
+  uvmunmap(new, start, (i - start) / PGSIZE, 1);
   return -1;
+}
+
+int
+uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
+{
+  return uvmcopy_range(old, new, 0, sz);
+}
+
+int
+uvm_stack_copy(pagetable_t old, pagetable_t new)
+{
+  return uvmcopy_range(old, new, USER_STACK_START, USER_STACK_TOP);
+}
+
+void
+uvm_stack_sync(pagetable_t user, pagetable_t kernel)
+{
+  upg2ukpg(user, kernel, USER_STACK_START, USER_STACK_TOP);
+}
+
+void
+uvm_stack_unmap(pagetable_t pagetable, int do_free)
+{
+  uvmunmap(pagetable, USER_STACK_START,
+           (USER_STACK_TOP - USER_STACK_START) / PGSIZE, do_free);
 }
 
 // mark a PTE invalid for user access.

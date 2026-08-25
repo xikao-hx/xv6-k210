@@ -94,21 +94,7 @@ usertrap(void)
     else
       access = VM_FAULT_WRITE;
     
-    if (vm_fault(p, va, access) == 0) {
-      // ok
-    } else if (va < p->sz) {
-      if (access == VM_FAULT_WRITE && uvmcowpage(pagetable, va) == 0) {
-        if (uvmcowmalloc(pagetable, PGROUNDDOWN(va)) == 0) {
-          p->killed = 1;
-        }
-      } else if (PGROUNDUP(p->trapframe->sp) - 1 < va) {
-        if (uvmlazymalloc(pagetable, PGROUNDDOWN(va)) != 0) {
-          p->killed = 1;
-        }
-      } else {
-        p->killed = 1;
-      }
-    } else {
+    if(faultin_page(p, pagetable, PGROUNDDOWN(va), access) < 0) {
       printf("usertrap(): page fault is illegal pid=%d sepc=%p stval=%p\n",
              p->pid, r_sepc(), r_stval());
       p->killed = 1;

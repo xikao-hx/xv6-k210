@@ -84,14 +84,11 @@ exec(char *path, char **argv)
       goto bad;
   }
 
-  // Allocate a user page for the stack
+  // Allocate only the top page of the fixed user stack reservation.
   sz = PGROUNDUP(sz);
-  uint64 sz3;
-  if((sz3 = uvmalloc(pagetable, sz, sz + 2*PGSIZE)) == 0)
+  if(uvm_stack_init(pagetable) < 0)
     goto bad;
-  sz = sz3;
-  uvmclear(pagetable, sz-2*PGSIZE);
-  sp = sz;
+  sp = USER_STACK_TOP;
   stackbase = sp - PGSIZE;
 
   // Push argument strings, prepare rest of stack in ustack.
@@ -139,7 +136,9 @@ exec(char *path, char **argv)
   // Update kpagetable for the new user address space.
   // Unmap old user mappings, then copy new ones from the new pagetable.
   uvmunmap(p->kpagetable, 0, PGROUNDUP(old_sz) / PGSIZE, 0);
+  uvm_stack_unmap(p->kpagetable, 0);
   upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz);
+  uvm_stack_sync(p->pagetable, p->kpagetable);
   sfence_vma();
 
   proc_freepagetable(oldpagetable, old_sz);

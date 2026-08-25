@@ -125,6 +125,7 @@
 #define USER_STACK_SIZE     (1L << 20)
 #define USER_STACK_BOTTOM   (USER_STACK_TOP - USER_STACK_SIZE)
 #define USER_STACK_GUARD    USER_STACK_BOTTOM
+#define USER_STACK_START    (USER_STACK_GUARD + PGSIZE)
 
 // map the trampoline page to the highest address,
 // in both user and kernel space.

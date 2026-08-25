@@ -448,6 +448,7 @@ proc_pagetable(struct proc *p)
 void
 proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
+  uvm_stack_unmap(pagetable, 1);
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
   uvmunmap(pagetable, SIGTRAMP, 1, 0);
@@ -459,6 +460,7 @@ proc_freekpagetable(pagetable_t pagetable, uint64 kstack, uint64 sz)
 {
   ukvmunmap(pagetable);
   uvmunmap(pagetable, 0, PGROUNDUP(sz) / PGSIZE, 0);
+  uvm_stack_unmap(pagetable, 0);
   uvmunmap(pagetable, kstack, 1, 1);
   uvmfree(pagetable, 0);
 }
@@ -487,14 +489,17 @@ userinit(void)
   // allocate one user page and copy init's instructions
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
+  if(uvm_stack_init(p->pagetable) < 0)
+    panic("userinit: stack");
   p->sz = PGSIZE;
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
-  p->trapframe->sp = PGSIZE;  // user stack pointer
+  p->trapframe->sp = USER_STACK_TOP;
   safestrcpy(p->name, "initcode", sizeof(p->name));
 
   upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz);
+  uvm_stack_sync(p->pagetable, p->kpagetable);
   p->state = RUNNABLE;
 
   release(&p->lock);
@@ -544,9 +549,18 @@ fork(void)
     release(&np->lock);
     return -1;
   }
+  if(uvm_stack_copy(p->pagetable, np->pagetable) < 0){
+    upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz);
+    uvm_stack_sync(p->pagetable, p->kpagetable);
+    sfence_vma();
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
   np->sz = p->sz;
   if(vma_fork(p, np) < 0){
     upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz);
+    uvm_stack_sync(p->pagetable, p->kpagetable);
     sfence_vma();
     freeproc(np);
     release(&np->lock);
@@ -575,6 +589,7 @@ fork(void)
   pid = np->pid;
 
   upg2ukpg(np->pagetable, np->kpagetable, 0, np->sz);
+  uvm_stack_sync(np->pagetable, np->kpagetable);
   sfence_vma();
 
   np->state = RUNNABLE;
@@ -584,6 +599,7 @@ fork(void)
   // Keep the parent's kpagetable in sync with its user page table
   // after uvmcopy modified user PTEs (COW markings).
   upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz);
+  uvm_stack_sync(p->pagetable, p->kpagetable);
   sfence_vma();
 
   return pid;
