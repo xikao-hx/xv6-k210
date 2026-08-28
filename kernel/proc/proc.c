@@ -22,6 +22,7 @@ struct spinlock pid_lock;
 extern void forkret(void);
 static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
+static void freeprocvm(struct proc *p);
 
 #ifdef SCHED_MLFQ
 // Logical MLFQ queues are represented by queue_level in proc[].
@@ -153,10 +154,21 @@ found:
   // Map it high in memory, followed by an invalid
   // guard page.
   char *pa = kalloc_page();
-  if(pa == 0)
-    panic("kalloc");
+  if(pa == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
   uint64 va = KSTACK((int) 0);
-  ukvmmap(p->kpagetable, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+  if(mappages(p->kpagetable, va, PGSIZE, (uint64)pa,
+              PTE_R | PTE_W) < 0){
+    kfree_page(pa);
+    ukvmfree(p->kpagetable);
+    p->kpagetable = 0;
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
   p->kstack = va;
 
   // Set up new context to start executing at forkret,
@@ -184,9 +196,8 @@ found:
 // including user pages.
 // p->lock must be held.
 static void
-freeproc(struct proc *p)
+freeprocvm(struct proc *p)
 {
-  vma_destroy_all(p);
   if(p->trapframe)
     kfree_page((void*)p->trapframe);
   p->trapframe = 0;
@@ -199,6 +210,13 @@ freeproc(struct proc *p)
   p->kstack = 0;
   p->pagetable = 0;
   p->sz = 0;
+}
+
+static void
+freeproc(struct proc *p)
+{
+  vma_destroy_all(p);
+  freeprocvm(p);
   p->pid = 0;
   p->pgid = 0;
   p->parent = 0;
@@ -498,7 +516,8 @@ userinit(void)
   p->trapframe->sp = USER_STACK_TOP;
   safestrcpy(p->name, "initcode", sizeof(p->name));
 
-  upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz);
+  if(upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz) < 0)
+    panic("userinit: upg2ukpg");
   uvm_stack_sync(p->pagetable, p->kpagetable);
   p->state = RUNNABLE;
 
@@ -520,8 +539,10 @@ growproc(int n)
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
-    upg2ukpg(p->pagetable, p->kpagetable, p->sz, sz);
+    if(upg2ukpg(p->pagetable, p->kpagetable, p->sz, sz) < 0)
+      panic("growproc: upg2ukpg");
   } else if(n < 0){
+    ukvmdealloc(p->kpagetable, sz, sz + n, 0);
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
   p->sz = sz;
@@ -550,7 +571,8 @@ fork(void)
     return -1;
   }
   if(uvm_stack_copy(p->pagetable, np->pagetable) < 0){
-    upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz);
+    if(upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz) < 0)
+      panic("fork: parent upg2ukpg");
     uvm_stack_sync(p->pagetable, p->kpagetable);
     sfence_vma();
     freeproc(np);
@@ -559,7 +581,8 @@ fork(void)
   }
   np->sz = p->sz;
   if(vma_fork(p, np) < 0){
-    upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz);
+    if(upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz) < 0)
+      panic("fork: parent upg2ukpg");
     uvm_stack_sync(p->pagetable, p->kpagetable);
     sfence_vma();
     freeproc(np);
@@ -588,7 +611,8 @@ fork(void)
   signal_proc_fork(p, np);
   pid = np->pid;
 
-  upg2ukpg(np->pagetable, np->kpagetable, 0, np->sz);
+  if(upg2ukpg(np->pagetable, np->kpagetable, 0, np->sz) < 0)
+    panic("fork: child upg2ukpg");
   uvm_stack_sync(np->pagetable, np->kpagetable);
   sfence_vma();
 
@@ -598,7 +622,8 @@ fork(void)
 
   // Keep the parent's kpagetable in sync with its user page table
   // after uvmcopy modified user PTEs (COW markings).
-  upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz);
+  if(upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz) < 0)
+    panic("fork: parent upg2ukpg");
   uvm_stack_sync(p->pagetable, p->kpagetable);
   sfence_vma();
 
@@ -769,6 +794,9 @@ wait(uint64 addr)
         if(np->state == ZOMBIE){
           // Found one.
           pid = np->pid;
+          // A COW status destination may need a page. Reclaim the
+          // zombie's VM first, while retaining its wait metadata.
+          freeprocvm(np);
           if(addr != 0 && copyout(p->pagetable, addr, (char *)&np->xstate,
                                   sizeof(np->xstate)) < 0) {
             release(&np->lock);

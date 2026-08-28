@@ -283,15 +283,12 @@ UPROGS=\
 #   'testcase/a.c testcase/b.c'    -> build only those listed
 #
 # TESTCASE_EXCLUDE lists files that are never treated as test programs:
-#   grind, usertests  -> call kill(), which this port does not implement
-#   statistics        -> library source (no main), collides with ulib.c
+#   grind             -> long-running stress test
 TESTCASE_EXCLUDE = \
   grind \
-  statistics \
-  usertests
 
 # testcase/bcachetest.c testcase/kalloctest.c testcase/cowtest.c testcase/lazytests.c
-TESTCASES ?=  testcase/mmaptest.c testcase/signaltest.c 
+TESTCASES ?= testcase/memlayouttest.c testcase/mmaptest.c testcase/signaltest.c testcase/usertests.c
 ifeq ($(strip $(TESTCASES)),)
 TESTCASES := $(filter-out $(addprefix testcase/,$(addsuffix .c,$(TESTCASE_EXCLUDE))),$(wildcard testcase/*.c))
 endif

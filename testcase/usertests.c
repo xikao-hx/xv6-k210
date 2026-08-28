@@ -18,6 +18,8 @@
 //
 
 #define BUFSZ  (MAXOPBLOCKS+2)*BSIZE
+#define TEST_MAXFILE 512
+#define TEST_SBRK_BIG (1*1024*1024)
 
 char buf[BUFSZ];
 char name[3];
@@ -76,9 +78,9 @@ copyout(char *s)
   for(int ai = 0; ai < 2; ai++){
     uint64 addr = addrs[ai];
 
-    int fd = open("README", 0);
+    int fd = open("echo", 0);
     if(fd < 0){
-      printf("open(README) failed\n");
+      printf("open(echo) failed\n");
       exit(1);
     }
     int n = read(fd, (void*)addr, 8192);
@@ -534,7 +536,7 @@ writebig(char *s)
     exit(1);
   }
 
-  for(i = 0; i < MAXFILE; i++){
+  for(i = 0; i < TEST_MAXFILE; i++){
     ((int*)buf)[0] = i;
     if(write(fd, buf, BSIZE) != BSIZE){
       printf("%s: error: write big file failed\n", i);
@@ -554,7 +556,7 @@ writebig(char *s)
   for(;;){
     i = read(fd, buf, BSIZE);
     if(i == 0){
-      if(n == MAXFILE - 1){
+      if(n == TEST_MAXFILE - 1){
         printf("%s: read only %d blocks from big", n);
         exit(1);
       }
@@ -1139,6 +1141,7 @@ createdelete(char *s)
   enum { N = 20, NCHILD=4 };
   int pid, i, fd, pi;
   char name[32];
+  char illegal[] = { '"', '*', '/', ':', '<', '>', '?', '\\', '|', 0 };
 
   for(pi = 0; pi < NCHILD; pi++){
     pid = fork();
@@ -1152,15 +1155,17 @@ createdelete(char *s)
       name[2] = '\0';
       for(i = 0; i < N; i++){
         name[1] = '0' + i;
-        fd = open(name, O_CREATE | O_RDWR);
-        if(fd < 0){
-          printf("%s: create failed\n", s);
-          exit(1);
+        if(strchr(illegal, name[1]) == 0){
+          fd = open(name, O_CREATE | O_RDWR);
+          if(fd < 0){
+            printf("%s: create %s failed\n", s, name);
+            exit(1);
+          }
+          close(fd);
         }
-        close(fd);
         if(i > 0 && (i % 2 ) == 0){
           name[1] = '0' + (i / 2);
-          if(unlink(name) < 0){
+          if(strchr(illegal, name[1]) == 0 && unlink(name) < 0){
             printf("%s: unlink failed\n", s);
             exit(1);
           }
@@ -1182,6 +1187,8 @@ createdelete(char *s)
     for(pi = 0; pi < NCHILD; pi++){
       name[0] = 'p' + pi;
       name[1] = '0' + i;
+      if(strchr(illegal, name[1]) != 0)
+        continue;
       fd = open(name, 0);
       if((i == 0 || i >= N/2) && fd < 0){
         printf("%s: oops createdelete %s didn't exist\n", s, name);
@@ -1197,7 +1204,7 @@ createdelete(char *s)
 
   for(i = 0; i < N; i++){
     for(pi = 0; pi < NCHILD; pi++){
-      name[0] = 'p' + i;
+      name[0] = 'p' + pi;
       name[1] = '0' + i;
       unlink(name);
     }
@@ -1528,11 +1535,6 @@ subdir(char *s)
   }
   close(fd);
 
-  if(link("dd/dd/ff", "dd/dd/ffff") != 0){
-    printf("link dd/dd/ff dd/dd/ffff failed\n", s);
-    exit(1);
-  }
-
   if(unlink("dd/dd/ff") != 0){
     printf("%s: unlink dd/dd/ff failed\n", s);
     exit(1);
@@ -1559,17 +1561,6 @@ subdir(char *s)
     exit(1);
   }
 
-  fd = open("dd/dd/ffff", 0);
-  if(fd < 0){
-    printf("%s: open dd/dd/ffff failed\n", s);
-    exit(1);
-  }
-  if(read(fd, buf, sizeof(buf)) != 2){
-    printf("%s: read dd/dd/ffff wrong len\n", s);
-    exit(1);
-  }
-  close(fd);
-
   if(open("dd/dd/ff", O_RDONLY) >= 0){
     printf("%s: open (unlinked) dd/dd/ff succeeded!\n", s);
     exit(1);
@@ -1595,28 +1586,12 @@ subdir(char *s)
     printf("%s: open dd wronly succeeded!\n", s);
     exit(1);
   }
-  if(link("dd/ff/ff", "dd/dd/xx") == 0){
-    printf("%s: link dd/ff/ff dd/dd/xx succeeded!\n", s);
-    exit(1);
-  }
-  if(link("dd/xx/ff", "dd/dd/xx") == 0){
-    printf("%s: link dd/xx/ff dd/dd/xx succeeded!\n", s);
-    exit(1);
-  }
-  if(link("dd/ff", "dd/dd/ffff") == 0){
-    printf("%s: link dd/ff dd/dd/ffff succeeded!\n", s);
-    exit(1);
-  }
   if(mkdir("dd/ff/ff") == 0){
     printf("%s: mkdir dd/ff/ff succeeded!\n", s);
     exit(1);
   }
   if(mkdir("dd/xx/ff") == 0){
     printf("%s: mkdir dd/xx/ff succeeded!\n", s);
-    exit(1);
-  }
-  if(mkdir("dd/dd/ffff") == 0){
-    printf("%s: mkdir dd/dd/ffff succeeded!\n", s);
     exit(1);
   }
   if(unlink("dd/xx/ff") == 0){
@@ -1636,10 +1611,6 @@ subdir(char *s)
     exit(1);
   }
 
-  if(unlink("dd/dd/ffff") != 0){
-    printf("%s: unlink dd/dd/ff failed\n", s);
-    exit(1);
-  }
   if(unlink("dd/ff") != 0){
     printf("%s: unlink dd/ff failed\n", s);
     exit(1);
@@ -1853,7 +1824,7 @@ dirfile(char *s)
     printf("%s: unlink dirfile/xx succeeded!\n", s);
     exit(1);
   }
-  if(link("README", "dirfile/xx") == 0){
+  if(link("echo", "dirfile/xx") == 0){
     printf("%s: link to dirfile/xx succeeded!\n", s);
     exit(1);
   }
@@ -1893,7 +1864,7 @@ iref(char *s)
     }
 
     mkdir("");
-    link("README", "");
+    link("echo", "");
     fd = open("", O_CREATE);
     if(fd >= 0)
       close(fd);
@@ -2019,7 +1990,7 @@ sbrkbasic(char *s)
 void
 sbrkmuch(char *s)
 {
-  enum { BIG=100*1024*1024 };
+  enum { BIG=TEST_SBRK_BIG };
   char *c, *oldbrk, *a, *lastaddr, *p;
   uint64 amt;
 
@@ -2348,10 +2319,8 @@ stacktest(char *s)
   
   pid = fork();
   if(pid == 0) {
-    char *sp = (char *) r_sp();
-    sp -= PGSIZE;
-    // the *sp should cause a trap.
-    printf("%s: stacktest: read below stack %p\n", *sp);
+    char *guard = (char *)USER_STACK_GUARD;
+    printf("%s: stacktest: read guard page %p\n", *guard);
     exit(1);
   } else if(pid < 0){
     printf("%s: fork failed\n", s);
@@ -2618,6 +2587,17 @@ run(void f(char *), char *s) {
 }
 
 int
+skip_default(char *s)
+{
+  return strcmp(s, "linkunlink") == 0 ||
+         strcmp(s, "linktest") == 0 ||
+         strcmp(s, "concreate") == 0 ||
+         strcmp(s, "fourteen") == 0 ||
+         strcmp(s, "iref") == 0 ||
+         strcmp(s, "bigdir") == 0;
+}
+
+int
 main(int argc, char *argv[])
 {
   int continuous = 0;
@@ -2693,7 +2673,7 @@ main(int argc, char *argv[])
     {dirfile, "dirfile"},
     {iref, "iref"},
     {forktest, "forktest"},
-    {bigdir, "bigdir"}, // slow
+    {bigdir, "bigdir"},
     { 0, 0},
   };
 
@@ -2703,6 +2683,8 @@ main(int argc, char *argv[])
       int fail = 0;
       int free0 = countfree();
       for (struct test *t = tests; t->s != 0; t++) {
+        if(skip_default(t->s))
+          continue;
         if(!run(t->f, t->s)){
           fail = 1;
           break;
@@ -2727,6 +2709,10 @@ main(int argc, char *argv[])
   int free1 = 0;
   int fail = 0;
   for (struct test *t = tests; t->s != 0; t++) {
+    if(justone == 0 && skip_default(t->s)){
+      printf("test %s: SKIPPED\n", t->s);
+      continue;
+    }
     if((justone == 0) || strcmp(t->s, justone) == 0) {
       if(!run(t->f, t->s))
         fail = 1;

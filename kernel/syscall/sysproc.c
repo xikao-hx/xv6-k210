@@ -24,6 +24,16 @@ sys_getpid(void)
 }
 
 uint64
+sys_kill(void)
+{
+  int pid;
+
+  if(argint(0, &pid) < 0)
+    return -1;
+  return signal_send_pid(pid, SIGKILL);
+}
+
+uint64
 sys_fork(void)
 {
   return fork();
@@ -61,8 +71,8 @@ sys_sbrk(void)
 
     if(shrink > addr)
       return -1;
-    sz = uvmdealloc(p->pagetable, addr, addr - shrink);
     ukvmdealloc(p->kpagetable, addr, addr - shrink, 0);
+    sz = uvmdealloc(p->pagetable, addr, addr - shrink);
     p->sz = sz;
   }
   // if(growproc(n) < 0)

@@ -61,37 +61,50 @@ pagetable_t
 ukvminit(void) 
 {
   pagetable_t pagetable = (pagetable_t) kalloc_page();
+  if(pagetable == 0)
+    return 0;
   memset(pagetable, 0, PGSIZE);
 
-  ukvmmap(pagetable, UARTHS_V, UARTHS, PGSIZE, PTE_R | PTE_W);
+  if(mappages(pagetable, UARTHS_V, PGSIZE, UARTHS, PTE_R | PTE_W) < 0)
+    goto bad;
   
 #ifdef QEMU
-  ukvmmap(pagetable, VIRTIO0_V, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+  if(mappages(pagetable, VIRTIO0_V, PGSIZE, VIRTIO0, PTE_R | PTE_W) < 0)
+    goto bad;
 #else
-  ukvmmap(pagetable, GPIOHS_V, GPIOHS, PGSIZE, PTE_R | PTE_W);
-  ukvmmap(pagetable, UART0_V, UART0, PGSIZE, PTE_R | PTE_W);
-  ukvmmap(pagetable, UART1_V, UART1, PGSIZE, PTE_R | PTE_W);
-  ukvmmap(pagetable, UART2_V, UART2, PGSIZE, PTE_R | PTE_W);
-  ukvmmap(pagetable, DMAC_V, DMAC, PGSIZE, PTE_R | PTE_W);
-  ukvmmap(pagetable, GPIO_V, GPIO, PGSIZE, PTE_R | PTE_W);
-  ukvmmap(pagetable, FPIOA_V, FPIOA, PGSIZE, PTE_R | PTE_W);
-  ukvmmap(pagetable, SYSCTL_V, SYSCTL, PGSIZE, PTE_R | PTE_W);
-  ukvmmap(pagetable, SPI0_V, SPI0, PGSIZE, PTE_R | PTE_W);
-  ukvmmap(pagetable, SPI1_V, SPI1, PGSIZE, PTE_R | PTE_W);
-  ukvmmap(pagetable, SPI2_V, SPI2, PGSIZE, PTE_R | PTE_W);
-  ukvmmap(pagetable, SPI_SLAVE_V, SPI_SLAVE, PGSIZE, PTE_R | PTE_W);
-  ukvmmap(pagetable, I2C0_V, I2C0, PGSIZE, PTE_R | PTE_W);
-  ukvmmap(pagetable, I2C1_V, I2C1, PGSIZE, PTE_R | PTE_W);
-  ukvmmap(pagetable, I2C2_V, I2C2, PGSIZE, PTE_R | PTE_W);
+  if(mappages(pagetable, GPIOHS_V, PGSIZE, GPIOHS, PTE_R | PTE_W) < 0 ||
+     mappages(pagetable, UART0_V, PGSIZE, UART0, PTE_R | PTE_W) < 0 ||
+     mappages(pagetable, UART1_V, PGSIZE, UART1, PTE_R | PTE_W) < 0 ||
+     mappages(pagetable, UART2_V, PGSIZE, UART2, PTE_R | PTE_W) < 0 ||
+     mappages(pagetable, DMAC_V, PGSIZE, DMAC, PTE_R | PTE_W) < 0 ||
+     mappages(pagetable, GPIO_V, PGSIZE, GPIO, PTE_R | PTE_W) < 0 ||
+     mappages(pagetable, FPIOA_V, PGSIZE, FPIOA, PTE_R | PTE_W) < 0 ||
+     mappages(pagetable, SYSCTL_V, PGSIZE, SYSCTL, PTE_R | PTE_W) < 0 ||
+     mappages(pagetable, SPI0_V, PGSIZE, SPI0, PTE_R | PTE_W) < 0 ||
+     mappages(pagetable, SPI1_V, PGSIZE, SPI1, PTE_R | PTE_W) < 0 ||
+     mappages(pagetable, SPI2_V, PGSIZE, SPI2, PTE_R | PTE_W) < 0 ||
+     mappages(pagetable, SPI_SLAVE_V, PGSIZE, SPI_SLAVE, PTE_R | PTE_W) < 0 ||
+     mappages(pagetable, I2C0_V, PGSIZE, I2C0, PTE_R | PTE_W) < 0 ||
+     mappages(pagetable, I2C1_V, PGSIZE, I2C1, PTE_R | PTE_W) < 0 ||
+     mappages(pagetable, I2C2_V, PGSIZE, I2C2, PTE_R | PTE_W) < 0)
+    goto bad;
 #endif
 
-  ukvmmap(pagetable, CLINT_V, CLINT, 0x10000, PTE_R | PTE_W);
-  ukvmmap(pagetable, PLIC_V, PLIC, 0x400000, PTE_R | PTE_W);
-  ukvmmap(pagetable, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
-  ukvmmap(pagetable, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
-  ukvmmap(pagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+  if(mappages(pagetable, CLINT_V, 0x10000, CLINT, PTE_R | PTE_W) < 0 ||
+     mappages(pagetable, PLIC_V, 0x400000, PLIC, PTE_R | PTE_W) < 0 ||
+     mappages(pagetable, KERNBASE, (uint64)etext-KERNBASE,
+              KERNBASE, PTE_R | PTE_X) < 0 ||
+     mappages(pagetable, (uint64)etext, PHYSTOP-(uint64)etext,
+              (uint64)etext, PTE_R | PTE_W) < 0 ||
+     mappages(pagetable, TRAMPOLINE, PGSIZE,
+              (uint64)trampoline, PTE_R | PTE_X) < 0)
+    goto bad;
 
   return pagetable;
+
+bad:
+  ukvmfree(pagetable);
+  return 0;
 }
 
 
@@ -180,8 +193,20 @@ kvmmap(uint64 va, uint64 pa, uint64 sz, int perm)
 void
 ukvmmap(pagetable_t pagetable, uint64 va, uint64 pa, uint64 sz, int perm)
 {
-  if(mappages(pagetable, va, sz, pa, perm) != 0)
+  if(mappages(pagetable, va, sz, pa, perm) < 0)
     panic("ukvmmap");
+}
+
+void
+ukvmfree(pagetable_t pagetable)
+{
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0)
+      ukvmfree((pagetable_t)PTE2PA(pte));
+    pagetable[i] = 0;
+  }
+  kfree_page((void *)pagetable);
 }
 
 // translate a kernel virtual address to
@@ -379,7 +404,11 @@ uvmlazymalloc(pagetable_t pagetable, uint64 va)
     return -1;
   }
 
-  upg2ukpg(p->pagetable, p->kpagetable, va, va + PGSIZE);
+  if(upg2ukpg(p->pagetable, p->kpagetable,
+              va, va + PGSIZE) < 0){
+    uvmunmap(pagetable, va, 1, 1);
+    return -1;
+  }
   // if(mappages(p->kpagetable, va, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R) != 0){
   //   uvmunmap(pagetable, va, PGSIZE / PGSIZE, 1);
   //   printf("uvmalloc: mappages fail\n");
@@ -464,7 +493,9 @@ uvmcowmalloc(pagetable_t pagetable, uint64 va)
     *pte |= PTE_W;
     *pte &= ~PTE_COW;
 
-    upg2ukpg(p->pagetable, p->kpagetable, va, va + PGSIZE);
+    if(upg2ukpg(p->pagetable, p->kpagetable,
+                va, va + PGSIZE) < 0)
+      panic("uvmcowmalloc: upg2ukpg");
     sfence_vma();
 
     return (void *)pa;
@@ -482,7 +513,9 @@ uvmcowmalloc(pagetable_t pagetable, uint64 va)
       return 0;
     }
 
-    upg2ukpg(p->pagetable, p->kpagetable, va, va + PGSIZE);
+    if(upg2ukpg(p->pagetable, p->kpagetable,
+                va, va + PGSIZE) < 0)
+      panic("uvmcowmalloc: upg2ukpg");
 
     kfree_page((void *)pa);
     sfence_vma();
@@ -532,8 +565,9 @@ ukvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int alloc)
   return newsz;
 }
 
-void
-upg2ukpg(pagetable_t u_pagetable, pagetable_t k_pagetable, uint64 begin_addr, uint64 end_addr)
+int
+upg2ukpg(pagetable_t u_pagetable, pagetable_t k_pagetable,
+         uint64 begin_addr, uint64 end_addr)
 {
   if(begin_addr > end_addr || end_addr > MAXUVA)
     panic("upg2ukpg: range");
@@ -545,11 +579,11 @@ upg2ukpg(pagetable_t u_pagetable, pagetable_t k_pagetable, uint64 begin_addr, ui
       continue;
     }
     pte_t *k_pte = walk(k_pagetable, addr, 1);
-    if (k_pte == 0) {
-      panic("upg2ukpg: walk err2!\n");
-    }
+    if (k_pte == 0)
+      return -1;
     *k_pte = (*u_pte) & ~PTE_U;
   }
+  return 0;
 }
 
 // Recursively free page-table pages.
@@ -637,7 +671,8 @@ uvm_stack_copy(pagetable_t old, pagetable_t new)
 void
 uvm_stack_sync(pagetable_t user, pagetable_t kernel)
 {
-  upg2ukpg(user, kernel, USER_STACK_START, USER_STACK_TOP);
+  if(upg2ukpg(user, kernel, USER_STACK_START, USER_STACK_TOP) < 0)
+    panic("uvm_stack_sync: upg2ukpg");
 }
 
 void

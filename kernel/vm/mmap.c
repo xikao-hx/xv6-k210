@@ -472,7 +472,9 @@ vm_fault(struct proc *p, uint64 va, int access)
     kfree_page(mem);
     return -1;
   }
-  upg2ukpg(p->pagetable, p->kpagetable, page, page + PGSIZE);
+  if(upg2ukpg(p->pagetable, p->kpagetable,
+              page, page + PGSIZE) < 0)
+    panic("vm_fault: upg2ukpg");
   sfence_vma();
   return 0;
 }
@@ -560,7 +562,9 @@ vma_populate(struct proc *p, struct vma_area *vma)
       kfree_page(mem);
       goto rollback;
     }
-    upg2ukpg(p->pagetable, p->kpagetable, page, page + PGSIZE);
+    if(upg2ukpg(p->pagetable, p->kpagetable,
+                page, page + PGSIZE) < 0)
+      panic("vma_populate: upg2ukpg");
   }
   sfence_vma();
   vma->ops = 0;  // fully resident: no fault handler, faults are errors
@@ -704,14 +708,16 @@ vma_fork(struct proc *parent, struct proc *child)
       if((vma->flags & MAP_PRIVATE) && (flags & PTE_W)){
         flags = (flags | PTE_COW) & ~PTE_W;
         *pte = PA2PTE(pa) | flags;
-        upg2ukpg(parent->pagetable, parent->kpagetable,
-                 page, page + PGSIZE);
+        if(upg2ukpg(parent->pagetable, parent->kpagetable,
+                    page, page + PGSIZE) < 0)
+          panic("vma_fork: parent upg2ukpg");
       }
       if(mappages(child->pagetable, page, PGSIZE, pa, flags) < 0)
         goto bad;
       kaddquota((void *)pa);
-      upg2ukpg(child->pagetable, child->kpagetable,
-               page, page + PGSIZE);
+      if(upg2ukpg(child->pagetable, child->kpagetable,
+                  page, page + PGSIZE) < 0)
+        panic("vma_fork: child upg2ukpg");
     }
   }
   sfence_vma();

@@ -259,6 +259,7 @@ sys_exec(void)
 {
   char path[FAT32_MAX_PATH], *argv[MAXARG];
   int i;
+  int ret = -1;
   uint64 uargv, uarg;
 
   if(argstr(0, path, FAT32_MAX_PATH) < 0 || argaddr(1, &uargv) < 0){
@@ -267,18 +268,21 @@ sys_exec(void)
   memset(argv, 0, sizeof(argv));
   for(i=0; i<MAXARG; i++){
     if(fetchaddr(uargv+sizeof(uint64)*i, &uarg) < 0)
-      return -1;
+      goto out;
     if(uarg == 0)
       break;
     argv[i] = kalloc_page();
     if(argv[i] == 0)
-      panic("sys_exec kalloc");
+      goto out;
     if(fetchstr(uarg, argv[i], PGSIZE) < 0)
-      return -1;
+      goto out;
   }
+  if(i == MAXARG)
+    goto out;
 
-  int ret = exec(path, argv);
+  ret = exec(path, argv);
 
+out:
   for(i=0; i<MAXARG && argv[i]; i++)
     kfree_page(argv[i]);
   return ret;
