@@ -26,8 +26,6 @@ volatile spi_t *spi[4] = {
 // Interrupt-driven DMA wait budget (ticks @5ms); the DMAC channel completion
 // IRQs wake the sleeper, this only guards a lost IRQ / wedged line.
 #define SPI_DMA_TIMEOUT_TICKS 2000UL
-// Boot-path polling (myproc()==0) idle counter; see spi_dw_poll_transfer.
-#define SPI_POLL_WAIT_TIMEOUT 10000000UL
 
 #define DW_SPI_BUF_RX(type)						\
 static void spi_dw_buf_rx_##type(struct spi_dw_data *spi_dw)		\
@@ -408,44 +406,6 @@ spi_dw_int_transfer(struct spi_dw_data *spi_data, struct spi_transfer *transfer)
   return ret;
 }
 
-// ---------- SPI: POLL transfer ----------
-
-// Polled transfer, used before the scheduler is up (myproc()==0, e.g. the SD card boot window).  
-static int
-spi_dw_poll_transfer(struct spi_dw_data *spi_data, struct spi_transfer *transfer)
-{
-  int ret = 0;
-  spi_device_num_t spi_num = spi_data->index;
-  volatile spi_t *spi_handle = spi[spi_num];
-  spi_transfer_width_t frame_width = spi_get_frame_size(spi_num, spi_handle);
-  uint64 idle;
-
-  spi_data->tx_buf = transfer->tx_buf;
-  spi_data->rx_buf = transfer->rx_buf;
-  spi_data->count = spi_data->rx_count = transfer->len;
-
-  if (!spi_data->tx_buf)
-    spi_data->tx_buf = kmalloc(spi_data->count);
-
-  if ((spi_data->count % frame_width) != 0)
-    return -EINVAL;
-
-  idle = 0;
-  while (spi_data->rx_count) {
-    int moved = spi_dw_rx_drain(spi_data, spi_handle, frame_width)
-              + spi_dw_tx_fill(spi_data, spi_handle, frame_width);
-
-    if (moved)
-      idle = 0;
-    else if (++idle > SPI_POLL_WAIT_TIMEOUT) {
-      ret = -ETIMEDOUT;
-      break;
-    }
-  }
-
-  return ret;
-}
-
 // ---------- SPI: DMA transfer ----------
 
 static int spi_dw_dma_xfer(struct spi_dw_data *spi_data, const void *tx_buf,
@@ -606,15 +566,13 @@ static int __spi_transfer(struct spi_device *dev, struct spi_transfer *xfers, ui
     spi_handle->ssienr = 0x01;
 
     for (int i = 0; i < num; i ++) {
-        /* large block-aligned frames go through DMA; small frames (SD card
-         * commands / responses) go through the interrupt path once the
-         * scheduler is up. */
+        /* Large block-aligned frames go through DMA; all other transfers use
+         * the interrupt path.  Before the scheduler starts, spi_wait_xfer()
+         * waits for the ISR without sleeping. */
         if (spi_can_dma(spi_data, &xfers[i])) {
             ret = spi_dw_dma_transfer(spi_data, &xfers[i]);
-        } else if (myproc()) {
-            ret = spi_dw_int_transfer(spi_data, &xfers[i]);
         } else {
-            ret = spi_dw_poll_transfer(spi_data, &xfers[i]);
+            ret = spi_dw_int_transfer(spi_data, &xfers[i]);
         }
         if(ret < 0) {
             printf("spi%d len=%d transfer failed: ret=%d\n", dev->bus_num,
@@ -637,7 +595,7 @@ int spi_transfer(struct spi_device *dev, struct spi_transfer *xfers, uint64 num)
     return ret;
 }
 
-/* sd 卡 */
+/* sd card */
 int spi_write(struct spi_device *dev, const void *buf, uint64 len) 
 {
     int ret = 0;
@@ -655,7 +613,7 @@ int spi_write(struct spi_device *dev, const void *buf, uint64 len)
     return ret;
 }
 
-/* sd 卡 */
+/* sd card */
 int spi_read(struct spi_device *dev, void *buf, uint64 len) 
 {
     int ret;
