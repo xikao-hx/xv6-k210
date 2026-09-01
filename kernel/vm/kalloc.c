@@ -82,11 +82,6 @@ int kgetquota(void *pa) {
   return quota;
 }
 
-// Free the page of physical memory pointed at by v,
-// which normally should have been returned by a
-// call to kalloc_page().  (The exception is when
-// initializing the allocator; see kinit above.)
-//
 // kfree_page_to() puts the page on CPU id's freelist; kfree_page()
 // uses the current CPU, freerange() uses it to spread the initial
 // free pages across all CPUs.
@@ -94,32 +89,31 @@ static void
 kfree_page_to(int id, void *pa)
 {
   struct run *r;
+  int cnt;
 
-  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+  if (((uint64)pa % PGSIZE) != 0 ||
+      (char *)pa < end ||
+      (uint64)pa >= PHYSTOP)
     panic("kfree_page");
 
   acquire(&cow_map.lock);
-  int cnt = --cow_map.cow_quota[(uint64)pa / PGSIZE];
+  cnt = --cow_map.cow_quota[(uint64)pa / PGSIZE];
+  release(&cow_map.lock);
 
-  if (cnt == 0) {
-    acquire(&kmem[id].lock);
-    r = (struct run*)pa;
-
-    release(&cow_map.lock);
-
-    // Fill with junk to catch dangling refs.
-    memset(pa, 1, PGSIZE);
-
-    r->next = kmem[id].freelist;
-    kmem[id].freelist = r;
-    release(&kmem[id].lock);
-  } else{
-    release(&cow_map.lock);
-  }
-
-  if (cnt < 0) {
+  if (cnt < 0)
     panic("kfree_page: negative quota");
-  }
+
+  if (cnt > 0)
+    return;
+  
+  memset(pa, 1, PGSIZE);
+
+  r = (struct run *)pa;
+
+  acquire(&kmem[id].lock);
+  r->next = kmem[id].freelist;
+  kmem[id].freelist = r;
+  release(&kmem[id].lock);
 }
 
 void

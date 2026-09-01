@@ -189,15 +189,14 @@ kfree(void *ptr)
   slab->free_list = node;
   slab->free_count ++;
 
-  /* prepart free page */
+  /* prepare free page */
   if (slab->free_count == slab->total) {
     prev = &bucket->slabs;
-    /* ensure not head slab */
     while (*prev && *prev != slab)
       prev = &(*prev)->next;
     if (*prev == 0)
       panic("kfree: missing slab");
-    *prev = slab->next;  // update head
+    *prev = slab->next;   // Update bucket->slabs or the previous slab's next.
     slab->magic = 0;
     release_page = 1;
   }
