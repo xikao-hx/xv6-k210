@@ -15,10 +15,10 @@ struct buf {
   uint blockno;
   struct sleeplock lock;
   uint refcnt;
-  struct buf *prev; // LRU cache list
+  uint referenced;
+  struct buf *prev; // hash bucket list
   struct buf *next;
   uchar data[BSIZE];
-  uint timestamp;
 };
 
 void            binit(void);

@@ -18,7 +18,6 @@
 #include "disk.h"
 #include "printf.h"
 #include "proc.h"
-#include "trap.h"
 
 #define NBUCKET 13
 #define HASH(blockno) (blockno % NBUCKET)
@@ -26,18 +25,47 @@
 struct hashbuf {
   struct spinlock lock;
   struct buf head;
+  struct buf *clock_hand;
 };
 
 struct {
-  struct spinlock lock;
   struct buf buf[NBUF];
-
-  // Linked list of all buffers, through prev/next.
-  // Sorted by how recently the buffer was used.
-  // head.next is most recent, head.prev is least.
-  // struct buf head;
   struct hashbuf buckets[NBUCKET];
 } bcache;
+
+// Return an unused buffer selected by CLOCK.  The caller holds the
+// bucket lock.  Two complete passes are enough to clear every reference
+// bit and then select an unreferenced buffer.
+static struct buf*
+clock_victim(struct hashbuf *bucket)
+{
+  struct buf *b;
+  int scanned = 0;
+
+  while (scanned < 2 * NBUF) {
+    b = bucket->clock_hand;
+    if (b == &bucket->head) {
+      b = b->next;
+      bucket->clock_hand = b;
+      if (b == &bucket->head)
+        return 0;
+      continue;
+    }
+
+    bucket->clock_hand = b->next;
+    scanned++;
+
+    if (b->refcnt != 0)
+      continue;
+    if (b->referenced) {
+      b->referenced = 0;
+      continue;
+    }
+    return b;
+  }
+
+  return 0;
+}
 
 void
 binit(void)
@@ -53,6 +81,7 @@ binit(void)
 
     bcache.buckets[i].head.prev = &bcache.buckets[i].head;
     bcache.buckets[i].head.next = &bcache.buckets[i].head;
+    bcache.buckets[i].clock_hand = &bcache.buckets[i].head;
   }
 
   // Spread buffers round-robin across buckets so no single bucket
@@ -82,10 +111,7 @@ bget(uint dev, uint blockno)
   for(b = bcache.buckets[bid].head.next; b != &bcache.buckets[bid].head; b = b->next){
     if(b->dev == dev && b->blockno == blockno){
       b->refcnt++;
-
-      acquire(&tickslock);
-      b->timestamp = ticks;
-      release(&tickslock);
+      b->referenced = 1;
 
       release(&bcache.buckets[bid].lock);
       acquiresleep(&b->lock);
@@ -93,23 +119,18 @@ bget(uint dev, uint blockno)
     }
   }
 
-  // Not cached.  Drop the target bucket's lock and recycle the least
-  // recently used (LRU) unused buffer.  Scan buckets one at a time,
+  // Not cached.  Drop the target bucket's lock and recycle an unused
+  // buffer selected by CLOCK.  Scan buckets one at a time,
   // holding at most one bucket lock, so the lock order can never form
   // an ABBA cycle.
   release(&bcache.buckets[bid].lock);
 
   b = 0;
-  struct buf *tmp;
   for (int i = 0; i < NBUCKET; i ++) {
     int bucket = (bid + i) % NBUCKET;
 
     acquire(&bcache.buckets[bucket].lock);
-    for (tmp = bcache.buckets[bucket].head.prev; tmp != &bcache.buckets[bucket].head; tmp = tmp->prev) {
-      if (tmp->refcnt == 0 && (b == 0 || tmp->timestamp < b->timestamp)) {
-        b = tmp;
-      }
-    }
+    b = clock_victim(&bcache.buckets[bucket]);
 
     if (b) {
       // Detach the victim from its bucket.  b is now on no list, so no
@@ -136,28 +157,12 @@ bget(uint dev, uint blockno)
   b->blockno = blockno;
   b->valid = 0;
   b->refcnt = 1;
-
-  acquire(&tickslock);
-  b->timestamp = ticks;
-  release(&tickslock);
+  b->referenced = 1;
 
   release(&bcache.buckets[bid].lock);
   acquiresleep(&b->lock);
 
   return b;
-  /*
-  for(b = bcache.head.prev; b != &bcache.head; b = b->prev){
-    if(b->refcnt == 0) {
-      b->dev = dev;
-      b->blockno = blockno;
-      b->valid = 0;
-      b->refcnt = 1;
-      release(&bcache.lock);
-      acquiresleep(&b->lock);
-      return b;
-    }
-  }
-  */
 }
 
 // Return a locked buf with the contents of the indicated block.
@@ -203,7 +208,7 @@ binvalidate(uint dev)
 }
 
 // Release a locked buffer.
-// Move to the head of the most-recently-used list.
+// Mark the buffer as recently used for CLOCK replacement.
 void
 brelse(struct buf *b)
 {
@@ -216,23 +221,9 @@ brelse(struct buf *b)
 
   acquire(&bcache.buckets[bid].lock);
   b->refcnt--;
-  
-  acquire(&tickslock);
-  b->timestamp = ticks;
-  release(&tickslock);
+  b->referenced = 1;
 
   release(&bcache.buckets[bid].lock);
-  /*
-  if (b->refcnt == 0) {
-    // no one is waiting for it.
-    b->next->prev = b->prev;
-    b->prev->next = b->next;
-    b->next = bcache.head.next;
-    b->prev = &bcache.head;
-    bcache.head.next->prev = b;
-    bcache.head.next = b;
-  }
-  */
 }
 
 void
