@@ -9,9 +9,10 @@
 #include "errno.h"
 #include "i2c_board.h"
 
-#define I2C_INT_TIMEOUT_TICKS 100
 #define DMA_THRESHOLD 16
 #define I2C_DMA_MAX_LEN 1024
+#define I2C_INT_TIMEOUT_TICKS 100
+#define I2C_DMA_TIMEOUT_TICKS 100
 #define I2C_TX_ABRT_SOURCE_MASK 0x0001FFFFU
 
 volatile i2c_t *const i2c[3] = {
@@ -26,9 +27,7 @@ static void i2c_clk_init(i2c_device_number_t i2c_num)
 {
     sysctl_clock_enable(SYSCTL_CLOCK_I2C0 + i2c_num);
 
-    // PLL0 = 390MHz
-    // i2c_clk = PLL0 / ((threshold+1) * 2)
-    // i2c_clk = PLL0 / 8 = 97.5MHz
+    // i2c_clk = 780 / 8 = 97.5MHz
     sysctl_clock_set_threshold(SYSCTL_THRESHOLD_I2C0 + i2c_num, 3);
     if (sysctl_clock_get_threshold(SYSCTL_THRESHOLD_I2C0 + i2c_num) != 3)
         LOG_W("i2c%d clk_th5 write not reflected\n", i2c_num);
@@ -75,7 +74,7 @@ void i2c_dw_init(i2c_device_number_t i2c_num) {
 
     /* configurate DMA control */
     i2c_adapter->dma_cr = 0x3;    // enable rx and tx dma
-    i2c_adapter->dma_rdlr = 0;    // set up rx adn tx burst size
+    i2c_adapter->dma_rdlr = 0;    // set up rx and tx burst size
     i2c_adapter->dma_tdlr = 4;
     i2c_adapter->enable = I2C_ENABLE_ENABLE;
     while(!(i2c_adapter->enable_status & I2C_ENABLE_STATUS_IC_ENABLE))
@@ -114,15 +113,21 @@ void i2c_init(void) {
 }
 
 static void
-i2c_dw_xfer_msg(struct i2c_controller *i2c_ctrl)
+i2c_dw_write(struct i2c_controller *i2c_ctrl)
 {
   volatile i2c_t *i2c_adapter = i2c[i2c_ctrl->bus_num];
   struct i2c_xfer *xfer = &i2c_ctrl->xfer;
 
   while (xfer->tx_len && (8 - i2c_adapter->txflr) > 0) {
     uint32 cmd = xfer->tx_src ? I2C_DATA_CMD_DATA(*xfer->tx_src++) : I2C_DATA_CMD_CMD;
-    if (xfer->need_restart) { cmd |= I2C_DATA_CMD_RESTART; xfer->need_restart = 0; }
-    if (xfer->is_lastmsg && xfer->tx_len == 1) cmd |= I2C_DATA_CMD_STOP;
+    if (xfer->need_restart) {
+        cmd |= I2C_DATA_CMD_RESTART;
+        xfer->need_restart = 0;
+    }
+
+    if (xfer->is_lastmsg && xfer->tx_len == 1)
+        cmd |= I2C_DATA_CMD_STOP;
+
     i2c_adapter->data_cmd = cmd;
     xfer->tx_len--;
   }
@@ -137,8 +142,10 @@ i2c_dw_read(struct i2c_controller *i2c_ctrl)
   volatile i2c_t *i2c_adapter = i2c[i2c_ctrl->bus_num];
   struct i2c_xfer *xfer = &i2c_ctrl->xfer;
 
-  while (xfer->rx_len && i2c_adapter->rxflr)
-    *xfer->rx_dst++ = (uint8)i2c_adapter->data_cmd, xfer->rx_len--;
+  while (xfer->rx_len && i2c_adapter->rxflr) {
+    *xfer->rx_dst++ = (uint8)i2c_adapter->data_cmd;
+    xfer->rx_len--;
+  }
 }
 
 // ---------- I2C isr ----------
@@ -169,7 +176,7 @@ i2c_dw_isr(void *data)
   if (stat & I2C_INTR_STAT_RX_FULL)
     i2c_dw_read(i2c_ctrl);
   if (stat & I2C_INTR_STAT_TX_EMPTY)
-    i2c_dw_xfer_msg(i2c_ctrl);
+    i2c_dw_write(i2c_ctrl);
   if (stat & I2C_INTR_STAT_STOP_DET) {
     (void)i2c_adapter->clr_stop_det;
     i2c_dw_read(i2c_ctrl);                        /* tail below the RX threshold, caught here */
@@ -204,7 +211,7 @@ i2c_wait_xfer(struct i2c_controller *i2c_ctrl, uint timeout_ticks)
 
 // ---------- I2C send: interrupt and dma ----------
 
-// Send one message via the interrupt path.  Caller holds isr_lock;
+// Send one message via the interrupt path.
 static int
 i2c_send_data_int(struct i2c_controller *i2c_ctrl, const uint8 *buf, size_t len,
                   int need_restart, int is_lastmsg)
@@ -212,8 +219,11 @@ i2c_send_data_int(struct i2c_controller *i2c_ctrl, const uint8 *buf, size_t len,
   volatile i2c_t *i2c_adapter = i2c[i2c_ctrl->bus_num];
   struct i2c_xfer *xfer = &i2c_ctrl->xfer;
 
+  acquire(&i2c_ctrl->isr_lock);
   (void)i2c_adapter->clr_tx_abrt;
   (void)i2c_adapter->clr_stop_det;
+  xfer->done = 0;
+  xfer->err = 0;
   xfer->tx_src = buf;
   xfer->tx_len = len;
   xfer->rx_dst = 0;
@@ -222,13 +232,14 @@ i2c_send_data_int(struct i2c_controller *i2c_ctrl, const uint8 *buf, size_t len,
   xfer->is_lastmsg = is_lastmsg;
 
   i2c_adapter->intr_mask = I2C_INTR_MASK_TX_EMPTY | I2C_INTR_MASK_STOP_DET | I2C_INTR_MASK_TX_ABRT;
-  i2c_dw_xfer_msg(i2c_ctrl);   /* prefill the first batch so the bus does not wait on the first TX_EMPTY */
+  i2c_dw_write(i2c_ctrl);   /* prefill the first batch so the bus does not wait on the first TX_EMPTY */
   int ret = i2c_wait_xfer(i2c_ctrl, I2C_INT_TIMEOUT_TICKS);
-  i2c_adapter->intr_mask = 0;  
+  i2c_adapter->intr_mask = 0;
+  release(&i2c_ctrl->isr_lock);
   return ret;
 }
 
-// Send one message via DMAC.  Caller holds isr_lock.
+// Send one message via DMAC.
 static int
 i2c_send_data_dma(struct i2c_controller *i2c_ctrl, struct i2c_dw_data *i2c_data,
                   const uint8_t *send_buf, size_t send_buf_len,
@@ -239,7 +250,6 @@ i2c_send_data_dma(struct i2c_controller *i2c_ctrl, struct i2c_dw_data *i2c_data,
     volatile i2c_t *i2c_adapter = i2c[i2c_num];
     struct i2c_xfer *xfer = &i2c_ctrl->xfer;
     int i;
-    int dret;
 
     uint32_t *buf = kalloc_page();
     if(buf == 0)
@@ -260,24 +270,25 @@ i2c_send_data_dma(struct i2c_controller *i2c_ctrl, struct i2c_dw_data *i2c_data,
         buf[send_buf_len - 1] |= I2C_DATA_CMD_STOP;
     }
 
+    acquire(&i2c_ctrl->isr_lock);
     (void)i2c_adapter->clr_tx_abrt;
     (void)i2c_adapter->clr_stop_det;
+    xfer->done = 0; xfer->err = 0;
     xfer->tx_src = 0; xfer->tx_len = 0;
     xfer->rx_dst = 0; xfer->rx_len = 0;
     xfer->need_restart = 0; xfer->is_lastmsg = 0;
     i2c_adapter->intr_mask = I2C_INTR_MASK_STOP_DET | I2C_INTR_MASK_TX_ABRT;
+    release(&i2c_ctrl->isr_lock);
 
     /* select dma and send data by dma */
     sysctl_dma_select((sysctl_dma_channel_t)i2c_data->chan_tx, SYSCTL_DMA_SELECT_I2C0_TX_REQ + i2c_num * 2);
     dmac_set_single_mode(i2c_data->chan_tx, buf, (void *)(&i2c_adapter->data_cmd), DMAC_ADDR_INCREMENT, DMAC_ADDR_NOCHANGE,
                          DMAC_MSIZE_4, DMAC_TRANS_WIDTH_32, send_buf_len);
 
-    release(&i2c_ctrl->isr_lock);
-    dret = dmac_wait_idle_timeout(i2c_data->chan_tx, I2C_INT_TIMEOUT_TICKS);
+    ret = dmac_wait_idle_timeout(i2c_data->chan_tx, I2C_DMA_TIMEOUT_TICKS);
     acquire(&i2c_ctrl->isr_lock);
-    if(dret < 0) {
+    if(ret < 0) {
         LOG_E("i2c dma write tx timeout: bus=%d\n", i2c_num);
-        ret = -ETIMEDOUT;
         goto done;
     }
 
@@ -300,6 +311,7 @@ done:
     /* clear hardware status */
     (void)i2c_adapter->clr_tx_abrt;
     (void)i2c_adapter->clr_stop_det;
+    release(&i2c_ctrl->isr_lock);
     kfree_page((void *)buf);
 
     return ret;
@@ -307,7 +319,7 @@ done:
 
 // ---------- I2C recv: interrupt and dma ----------
 
-// Receive one message via the interrupt path.  Caller holds isr_lock
+// Receive one message via the interrupt path.
 static int
 i2c_recv_data_int(struct i2c_controller *i2c_ctrl, uint8 *buf, size_t len,
                   int need_restart, int is_lastmsg)
@@ -315,9 +327,12 @@ i2c_recv_data_int(struct i2c_controller *i2c_ctrl, uint8 *buf, size_t len,
   volatile i2c_t *i2c_adapter = i2c[i2c_ctrl->bus_num];
   struct i2c_xfer *xfer = &i2c_ctrl->xfer;
 
+  acquire(&i2c_ctrl->isr_lock);
   (void)i2c_adapter->clr_tx_abrt;
   (void)i2c_adapter->clr_stop_det;
 
+  xfer->done = 0;
+  xfer->err = 0;
   xfer->tx_src = 0;      /* the ISR generates I2C_DATA_CMD_CMD */
   xfer->tx_len = len;
   xfer->rx_dst = buf;
@@ -327,13 +342,14 @@ i2c_recv_data_int(struct i2c_controller *i2c_ctrl, uint8 *buf, size_t len,
 
   i2c_adapter->intr_mask = I2C_INTR_MASK_TX_EMPTY | I2C_INTR_MASK_RX_FULL |
                   I2C_INTR_MASK_STOP_DET | I2C_INTR_MASK_TX_ABRT;
-  i2c_dw_xfer_msg(i2c_ctrl);   /* prefill the read commands */
+  i2c_dw_write(i2c_ctrl);   /* prefill the read commands */
   int ret = i2c_wait_xfer(i2c_ctrl, I2C_INT_TIMEOUT_TICKS);
   i2c_adapter->intr_mask = 0;
+  release(&i2c_ctrl->isr_lock);
   return ret;
 }
 
-// Receive one message via DMAC.  Caller holds isr_lock.
+// Receive one message via DMAC.
 static int
 i2c_recv_data_dma(struct i2c_controller *i2c_ctrl, struct i2c_dw_data *i2c_data,
                   uint8_t *receive_buf, size_t receive_buf_len,
@@ -344,7 +360,6 @@ i2c_recv_data_dma(struct i2c_controller *i2c_ctrl, struct i2c_dw_data *i2c_data,
     volatile i2c_t *i2c_adapter = i2c[i2c_num];
     struct i2c_xfer *xfer = &i2c_ctrl->xfer;
     size_t i;
-    int dret;
     uint32_t *write_cmd = kalloc_page();
     if(write_cmd == 0)
         return -ENOMEM;
@@ -362,12 +377,15 @@ i2c_recv_data_dma(struct i2c_controller *i2c_ctrl, struct i2c_dw_data *i2c_data,
     if (is_lastmsg)
         write_cmd[receive_buf_len - 1] = I2C_DATA_CMD_CMD | I2C_DATA_CMD_STOP;
 
+    acquire(&i2c_ctrl->isr_lock);
     (void)i2c_adapter->clr_tx_abrt;
     (void)i2c_adapter->clr_stop_det;
+    xfer->done = 0; xfer->err = 0;
     xfer->tx_src = 0; xfer->tx_len = 0;
     xfer->rx_dst = 0; xfer->rx_len = 0;      /* DMA receives into write_cmd, not xfer->rx_dst */
     xfer->need_restart = 0; xfer->is_lastmsg = 0;
     i2c_adapter->intr_mask = I2C_INTR_MASK_STOP_DET | I2C_INTR_MASK_TX_ABRT;
+    release(&i2c_ctrl->isr_lock);
 
     /* set up dma rx and tx */
     sysctl_dma_select((sysctl_dma_channel_t)i2c_data->chan_tx, SYSCTL_DMA_SELECT_I2C0_TX_REQ + i2c_num * 2);
@@ -379,23 +397,20 @@ i2c_recv_data_dma(struct i2c_controller *i2c_ctrl, struct i2c_dw_data *i2c_data,
     dmac_set_single_mode(i2c_data->chan_tx, write_cmd, (void *)(&i2c_adapter->data_cmd), DMAC_ADDR_INCREMENT,
                          DMAC_ADDR_NOCHANGE, DMAC_MSIZE_4, DMAC_TRANS_WIDTH_32, receive_buf_len);
 
-    release(&i2c_ctrl->isr_lock);
-    dret = dmac_wait_idle_timeout(i2c_data->chan_tx, I2C_INT_TIMEOUT_TICKS);
-    acquire(&i2c_ctrl->isr_lock);
-    if(dret < 0) {
+    ret = dmac_wait_idle_timeout(i2c_data->chan_tx, I2C_DMA_TIMEOUT_TICKS);
+    if(ret < 0) {
         LOG_E("i2c dma read tx timeout: bus=%d\n", i2c_num);
-        ret = -ETIMEDOUT;
-        goto done;
+        goto wait_done;
     }
 
-    release(&i2c_ctrl->isr_lock);
-    dret = dmac_wait_idle_timeout(i2c_data->chan_rx, I2C_INT_TIMEOUT_TICKS);
-    acquire(&i2c_ctrl->isr_lock);
-    if(dret < 0) {
+    ret = dmac_wait_idle_timeout(i2c_data->chan_rx, I2C_DMA_TIMEOUT_TICKS);
+    if(ret < 0)
         LOG_E("i2c dma read rx timeout: bus=%d\n", i2c_num);
-        ret = -ETIMEDOUT;
+
+wait_done:
+    acquire(&i2c_ctrl->isr_lock);
+    if(ret < 0)
         goto done;
-    }
 
     if (is_lastmsg)
         ret = i2c_wait_xfer(i2c_ctrl, I2C_INT_TIMEOUT_TICKS);
@@ -405,10 +420,6 @@ i2c_recv_data_dma(struct i2c_controller *i2c_ctrl, struct i2c_dw_data *i2c_data,
 
 done:
     i2c_adapter->intr_mask = 0;
-
-    /* write data to receive buf */
-    for(i = 0; i < receive_buf_len; i++)
-        receive_buf[i] = (uint8_t)write_cmd[i];
 
     if(ret == 0 && (i2c_adapter->tx_abrt_source & I2C_TX_ABRT_SOURCE_MASK) != 0) {
         LOG_E("i2c dma read abort: bus=%d abrt=%x status=%x txflr=%d rxflr=%d\n",
@@ -420,6 +431,12 @@ done:
     /* clear hardware status */
     (void)i2c_adapter->clr_tx_abrt;
     (void)i2c_adapter->clr_stop_det;
+    release(&i2c_ctrl->isr_lock);
+
+    /* write data to receive buf */
+    for(i = 0; i < receive_buf_len; i++)
+        receive_buf[i] = (uint8_t)write_cmd[i];
+
     kfree_page((void *)write_cmd);
 
     return ret;
@@ -451,10 +468,7 @@ int i2c_transfer(struct i2c_device *dev, struct i2c_msg *msgs, int num) {
     volatile i2c_t *i2c_adapter = i2c[bus_num];
 
     acquiresleep(&i2c_ctrl->lock);
-    acquire(&i2c_ctrl->isr_lock);
     for (i = 0; i < num; i ++) {
-        i2c_ctrl->xfer.done = 0;
-        i2c_ctrl->xfer.err = 0;
         bool is_lastmsg = (i == num - 1);
         bool need_restart = (i > 0);
 
@@ -483,8 +497,6 @@ int i2c_transfer(struct i2c_device *dev, struct i2c_msg *msgs, int num) {
             break;
         }
     }
-    i2c_adapter->intr_mask = 0;
-    release(&i2c_ctrl->isr_lock);
     releasesleep(&i2c_ctrl->lock);
 
     return ret;
