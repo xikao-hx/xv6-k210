@@ -64,6 +64,11 @@ extern "C" {
 #define UARTHS_REG_IP     (0x14)
 #define UARTHS_REG_DIV    (0x18)
 
+/* TXFIFO/RXFIFO registers */
+#define UARTHS_FIFO_DATA  (0xff)
+#define UARTHS_TXFULL     (1u << 31)
+#define UARTHS_RXEMPTY    (1u << 31)
+
 /* TXCTRL register */
 #define UARTHS_TXEN       (0x01)
 #define UARTHS_TXWM(x)    (((x) & 0xffff) << 16)
@@ -75,6 +80,13 @@ extern "C" {
 /* IP register */
 #define UARTHS_IP_TXWM    (0x01)
 #define UARTHS_IP_RXWM    (0x02)
+
+/* IE register */
+#define UARTHS_IE_TXWM    (0x01)
+#define UARTHS_IE_RXWM    (0x02)
+
+/* DIV register */
+#define UARTHS_DIV_MASK   (0xffff)
 /* clang-format on */
 
 typedef struct _uarths_txdata

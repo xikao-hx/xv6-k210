@@ -66,9 +66,9 @@ void i2c_dw_init(i2c_device_number_t i2c_num) {
     i2c_adapter->ss_scl_hcnt = I2C_SS_SCL_HCNT_COUNT(v_period_clk_cnt);  // scl high/low level count
     i2c_adapter->ss_scl_lcnt = I2C_SS_SCL_LCNT_COUNT(v_period_clk_cnt);
     i2c_adapter->intr_mask = 0;   // forbid all I2C interrupt
-    /* Interrupt-mode FIFO thresholds: TX_EMPTY fires when the TX FIFO is empty
-     * (top it up to 8 in one ISR), RX_FULL when the RX FIFO is completely full
-     * (drain 8 at once); sub-threshold RX tails are drained at STOP_DET. */
+    /* TX_EMPTY fires when the TX FIFO is empty;
+    * RX_FULL when the RX FIFO is completely full (drain 8 at once);
+    * sub-threshold RX tails are drained at STOP_DET. */
     i2c_adapter->tx_tl = I2C_TX_TL_VALUE(0);
     i2c_adapter->rx_tl = I2C_RX_TL_VALUE(7);
 
@@ -387,13 +387,12 @@ i2c_recv_data_dma(struct i2c_controller *i2c_ctrl, struct i2c_dw_data *i2c_data,
     i2c_adapter->intr_mask = I2C_INTR_MASK_STOP_DET | I2C_INTR_MASK_TX_ABRT;
     release(&i2c_ctrl->isr_lock);
 
-    /* set up dma rx and tx */
     sysctl_dma_select((sysctl_dma_channel_t)i2c_data->chan_tx, SYSCTL_DMA_SELECT_I2C0_TX_REQ + i2c_num * 2);
     sysctl_dma_select((sysctl_dma_channel_t)i2c_data->chan_rx, SYSCTL_DMA_SELECT_I2C0_RX_REQ + i2c_num * 2);
 
     dmac_set_single_mode(i2c_data->chan_rx, (void *)(&i2c_adapter->data_cmd), write_cmd, DMAC_ADDR_NOCHANGE,
                          DMAC_ADDR_INCREMENT, DMAC_MSIZE_1, DMAC_TRANS_WIDTH_32, receive_buf_len);
-    /* chan tx I2C_DATA_CMD_CMD --> rx */
+
     dmac_set_single_mode(i2c_data->chan_tx, write_cmd, (void *)(&i2c_adapter->data_cmd), DMAC_ADDR_INCREMENT,
                          DMAC_ADDR_NOCHANGE, DMAC_MSIZE_4, DMAC_TRANS_WIDTH_32, receive_buf_len);
 

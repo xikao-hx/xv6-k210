@@ -14,8 +14,9 @@
 #include "irq.h"
 #include "proc.h"
 #include "trap.h"
+#include "log.h"
 
-volatile spi_t *spi[4] = {
+volatile spi_t *spi[3] = {
     (volatile spi_t *)SPI0_V,
     (volatile spi_t *)SPI1_V,
     (volatile spi_t *)SPI2_V
@@ -23,9 +24,8 @@ volatile spi_t *spi[4] = {
 
 #define SPI_FIFO_DEPTH 32
 #define SPI_DMA_WML 16
-// Interrupt-driven DMA wait budget (ticks @5ms); the DMAC channel completion
-// IRQs wake the sleeper, this only guards a lost IRQ / wedged line.
-#define SPI_DMA_TIMEOUT_TICKS 2000UL
+#define SPI_DMA_TIMEOUT_TICKS 100
+#define SPI_INT_TIMEOUT_TICKS 100
 
 #define DW_SPI_BUF_RX(type)						\
 static void spi_dw_buf_rx_##type(struct spi_dw_data *spi_dw)		\
@@ -48,7 +48,7 @@ static void spi_dw_buf_tx_##type(struct spi_dw_data *spi_dw)		\
 		spi_dw->tx_buf += sizeof(type);			\
 	}								\
 									\
-	spi_dw->count -= sizeof(type);					\
+	spi_dw->tx_count -= sizeof(type);					\
 									\
 	spi[spi_dw->index]->dr[0] = val;			\
 }
@@ -68,7 +68,8 @@ static int spi_clk_init(uint8 spi_num)
     // if(spi_num == 3)
         // sysctl_clock_set_clock_select(SYSCTL_CLOCK_SELECT_SPI3, 1);
     sysctl_clock_enable(SYSCTL_CLOCK_SPI0 + spi_num);
-    // spi_clk = 390MHz
+
+    // spi_clk = 790/2 = 380 MHz
     sysctl_clock_set_threshold(SYSCTL_THRESHOLD_SPI0 + spi_num, 0);
     return 0;
 }
@@ -264,7 +265,7 @@ static int
 spi_dw_tx_fill(struct spi_dw_data *spi_data, volatile spi_t *spi_master, spi_transfer_width_t width)
 {
   int n = 0;
-  while (spi_data->count && (SPI_FIFO_DEPTH - spi_master->txflr) > 0) {
+  while (spi_data->tx_count && (SPI_FIFO_DEPTH - spi_master->txflr) > 0) {
     switch (width) {
     case SPI_TRANS_CHAR:  spi_dw_buf_tx_uint8(spi_data);  break;
     case SPI_TRANS_SHORT: spi_dw_buf_tx_uint16(spi_data); break;
@@ -291,6 +292,7 @@ spi_dw_rx_drain(struct spi_dw_data *spi_data, volatile spi_t *spi_master, spi_tr
 }
 
 // Wait for the in-flight transfer to finish.  Caller must hold spi_ctrl->isr_lock.
+// Poll when no process context exists, such as SD card initialization during boot.
 static int
 spi_wait_xfer(struct spi_controller *spi_ctrl, uint timeout_ticks)
 {
@@ -304,12 +306,8 @@ spi_wait_xfer(struct spi_controller *spi_ctrl, uint timeout_ticks)
       return err;
     }
     if ((uint)(ticks - start) > timeout_ticks) {
-      /* We hold isr_lock, so the ISR is parked and cannot be mid-printf --
-       * safe to report here.  rxflr>0 at timeout means echoes DID land in the
-       * RX FIFO but were never drained (throughput / ISR-delivery problem);
-       * rxflr==0 means nothing was clocked out at all. */
       if (p)
-        printf("spi%d INT TIMEOUT: xfer_err=%d rxflr=%d isr=0x%x\n",
+        LOG_E("spi%d INT TIMEOUT: xfer_err=%d rxflr=%d isr=0x%x\n",
                spi_ctrl->bus_num, spi_ctrl->spi_data.xfer_err,
                (uint)spi[spi_ctrl->bus_num]->rxflr,
                (uint)spi[spi_ctrl->bus_num]->isr);
@@ -318,7 +316,7 @@ spi_wait_xfer(struct spi_controller *spi_ctrl, uint timeout_ticks)
     }
     if (p) {
       sleep(&ticks, &spi_ctrl->isr_lock);
-    } else {
+    } else {   /* SD card initialization during boot. */
       release(&spi_ctrl->isr_lock);
       while (!spi_ctrl->spi_data.xfer_done && (uint)(ticks - start) <= timeout_ticks)
         ;
@@ -328,6 +326,7 @@ spi_wait_xfer(struct spi_controller *spi_ctrl, uint timeout_ticks)
 }
 
 // ---------- SPI isr ----------
+
 static void
 spi_dma_isr(void *data)
 {
@@ -357,7 +356,7 @@ spi_dw_isr(void *data)
   } else {
     if (isr & SPI_ISR_TXE) {             /* TX FIFO empty (txftlr=0): refill */
       spi_dw_tx_fill(spi_data, spi_master, width);
-      if (!spi_data->count)
+      if (!spi_data->tx_count)
         spi_master->imr &= ~SPI_IMR_TXE;         /* sent it all: wait for the echoes */
     }
     if (isr & SPI_ISR_RXF) {             /* RX FIFO at threshold (rxftlr=0): drain */
@@ -389,18 +388,17 @@ spi_dw_int_transfer(struct spi_dw_data *spi_data, struct spi_transfer *transfer)
   spi_data->rx_buf = transfer->rx_buf;
 
   acquire(&spi_ctrl->isr_lock);
-  spi_data->count = spi_data->rx_count = transfer->len;
+  spi_data->tx_count = spi_data->rx_count = transfer->len;
   (void)spi_master->icr;                            /* clear any residual interrupt state */
-  /* prefill the TX FIFO so the first frames go out without waiting on TXE */
-  spi_dw_tx_fill(spi_data, spi_master, width);
-  /* Enable TXE (refill), RXF (drain, the ">=1 entry" threshold) plus the two
-   * overflow guards.  imr=0x1B: with the corrected bit layout, RXF is bit4. */
-  spi_master->imr = SPI_IMR_TXE | SPI_IMR_RXF | SPI_IMR_RXO | SPI_IMR_TXO;
+
+  spi_dw_tx_fill(spi_data, spi_master, width);  /* prefill the TX FIFO */
+  spi_master->imr = SPI_IMR_TXE | SPI_IMR_RXF | SPI_IMR_RXO | SPI_IMR_TXO; /* Enable TXE (refill) */
   ret = spi_wait_xfer(spi_ctrl, SPI_INT_TIMEOUT_TICKS);
   spi_master->imr = 0;
   release(&spi_ctrl->isr_lock);
+
   if (ret < 0)
-    printf("spi%d INT len=%d failed: %s\n", spi_data->index, transfer->len,
+    LOG_E("spi%d INT len=%d failed: %s\n", spi_data->index, transfer->len,
            ret == -ETIMEDOUT ? "timeout" :
            ret == -EOVERFLOW ? "RX FIFO overflow (ISR too slow)" : "TX FIFO overflow");
   return ret;
@@ -415,18 +413,14 @@ static int spi_dw_dma_xfer(struct spi_dw_data *spi_data, const void *tx_buf,
 
     spi_handle->dmacr = 0x3;     // enable send and receive dma
 
-    /* configuration dma request source */
     sysctl_dma_select((sysctl_dma_channel_t)spi_data->chan_tx, SYSCTL_DMA_SELECT_SSI0_TX_REQ + spi_num * 2);
     sysctl_dma_select((sysctl_dma_channel_t)spi_data->chan_rx, SYSCTL_DMA_SELECT_SSI0_RX_REQ + spi_num * 2);
 
-    /* configuration dma transfer */
     dmac_set_single_mode(spi_data->chan_rx, (void *)(&spi_handle->dr[0]), rx_buf, DMAC_ADDR_NOCHANGE, DMAC_ADDR_INCREMENT,
                          DMAC_MSIZE_1, DMAC_TRANS_WIDTH_32, len);
     dmac_set_single_mode(spi_data->chan_tx, tx_buf, (void *)(&spi_handle->dr[0]), DMAC_ADDR_INCREMENT, DMAC_ADDR_NOCHANGE,
                              DMAC_MSIZE_4, DMAC_TRANS_WIDTH_32, len);
 
-    /* wait for the DMAC completion IRQs (interrupt-driven, with a timeout
-     * fallback so a lost IRQ cannot hang the caller) */
     int ret = dmac_wait_idle_timeout(spi_data->chan_tx, SPI_DMA_TIMEOUT_TICKS);
     if (ret == 0)
         ret = dmac_wait_idle_timeout(spi_data->chan_rx, SPI_DMA_TIMEOUT_TICKS);
@@ -531,7 +525,7 @@ static bool spi_can_dma(struct spi_dw_data *spi_data, struct spi_transfer *trans
         return false;
 
     frames = transfer->len / frame_width;
-    if(frames * 2 * sizeof(uint32) > PGSIZE)
+    if(frames * 2 * sizeof(uint32) > PGSIZE)  /* Only one page */
         return false;
 
     return true;
@@ -575,7 +569,7 @@ static int __spi_transfer(struct spi_device *dev, struct spi_transfer *xfers, ui
             ret = spi_dw_int_transfer(spi_data, &xfers[i]);
         }
         if(ret < 0) {
-            printf("spi%d len=%d transfer failed: ret=%d\n", dev->bus_num,
+            LOG_E("spi%d len=%d transfer failed: ret=%d\n", dev->bus_num,
                    xfers[i].len, ret);
             break;
         }

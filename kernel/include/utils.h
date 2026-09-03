@@ -35,6 +35,18 @@ extern "C" {
 #define KENDRYTE_MIN(a, b) ((a) > (b) ? (b) : (a))
 #define KENDRYTE_MAX(a, b) ((a) > (b) ? (a) : (b))
 
+static inline uint32
+readl(uintptr_t base, uint32 reg)
+{
+  return *(volatile uint32 *)(base + reg);
+}
+
+static inline void
+writel(uintptr_t base, uint32 reg, uint32 value)
+{
+  *(volatile uint32 *)(base + reg) = value;
+}
+
 #ifdef __ASSEMBLY__
 #define KENDRYTE_CAST(type, ptr) ptr
 #else /* __ASSEMBLY__ */

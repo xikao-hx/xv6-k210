@@ -7,6 +7,8 @@
 #include "ringbuffer.h"
 #include "uarths.h"
 #include "uarths-dw.h"
+#include "utils.h"
+#include "sysctl.h"
 
 #ifdef QEMU
 
@@ -28,12 +30,6 @@
 
 #define ReadReg(reg)     (*(Reg(reg)))
 #define WriteReg(reg, v) (*(Reg(reg)) = (v))
-
-#else
-
-#include "sysctl.h"
-
-volatile uarths_t *const uarths = (volatile uarths_t *)UARTHS_V;
 
 #endif
 
@@ -72,11 +68,12 @@ uarths_hw_getc(void)
     return -1;
   return ReadReg(RHR);
 #else
-  uarths_rxdata_t recv = uarths->rxdata;
+  uintptr_t base = UARTHS_V;
+  uint32 recv = readl(base, UARTHS_REG_RXFIFO);
 
-  if (recv.empty)
+  if (recv & UARTHS_RXEMPTY)
     return -1;
-  return recv.data & 0xff;
+  return recv & UARTHS_FIFO_DATA;
 #endif
 }
 
@@ -94,7 +91,14 @@ uarths_rxenable(int enabled)
     ier &= ~IER_RX_ENABLE;
   WriteReg(IER, ier);
 #else
-  uarths->ie.rxwm = enabled;
+  uintptr_t base = UARTHS_V;
+  uint32 ie = readl(base, UARTHS_REG_IE);
+
+  if (enabled)
+    ie |= UARTHS_IE_RXWM;
+  else
+    ie &= ~UARTHS_IE_RXWM;
+  writel(base, UARTHS_REG_IE, ie);
 #endif
 }
 
@@ -113,7 +117,7 @@ uarths_hw_tx_ready(void)
 #ifdef QEMU
   return (ReadReg(LSR) & LSR_TX_IDLE) != 0;
 #else
-  return !uarths->txdata.full;
+  return !(readl(UARTHS_V, UARTHS_REG_TXFIFO) & UARTHS_TXFULL);
 #endif
 }
 
@@ -123,7 +127,7 @@ uarths_hw_putc(int c)
 #ifdef QEMU
   WriteReg(THR, c);
 #else
-  uarths->txdata.data = (uint8)c;
+  writel(UARTHS_V, UARTHS_REG_TXFIFO, (uint8)c);
 #endif
 }
 
@@ -139,7 +143,14 @@ uarths_txenable(int enabled)
     ier &= ~IER_TX_ENABLE;
   WriteReg(IER, ier);
 #else
-  uarths->ie.txwm = enabled;
+  uintptr_t base = UARTHS_V;
+  uint32 ie = readl(base, UARTHS_REG_IE);
+
+  if (enabled)
+    ie |= UARTHS_IE_TXWM;
+  else
+    ie &= ~UARTHS_IE_TXWM;
+  writel(base, UARTHS_REG_IE, ie);
 #endif
 }
 
@@ -157,18 +168,17 @@ uarthsinit(void)
   WriteReg(LCR, LCR_EIGHT_BITS);
   WriteReg(FCR, FCR_FIFO_ENABLE | FCR_FIFO_CLEAR);
 #else
+  uintptr_t base = UARTHS_V;
   uint32 freq = sysctl_clock_get_freq(SYSCTL_CLOCK_CPU);
   uint16 div = freq / 115200 - 1;
 
-  uarths->div.div = div;
-  uarths->txctrl.txen = 1;
-  uarths->rxctrl.rxen = 1;
+  writel(base, UARTHS_REG_DIV, div);
+  writel(base, UARTHS_REG_TXCTRL, UARTHS_TXEN | UARTHS_TXWM(1));
+  writel(base, UARTHS_REG_RXCTRL, UARTHS_RXEN | UARTHS_RXWM(0));
   // txwm is asserted when the FIFO count is less than txcnt. A threshold
   // of zero can never fire, leaving buffered output stalled until an RX IRQ.
-  uarths->txctrl.txcnt = 1;
-  uarths->rxctrl.rxcnt = 0;
-  uarths->ip.txwm = 1;
-  uarths->ip.rxwm = 1;
+  writel(base, UARTHS_REG_IP,
+         readl(base, UARTHS_REG_IP) | UARTHS_IP_TXWM | UARTHS_IP_RXWM);
 #endif
 
   initlock(&uarths_rx.lock, "uarthsrx");
@@ -373,18 +383,22 @@ uarths_wait_tx_idle(void)
   while (!uarths_hw_tx_ready())
     ;
 #else
-  uint32 old_txcnt = uarths->txctrl.txcnt;
+  uintptr_t base = UARTHS_V;
+  uint32 txctrl = readl(base, UARTHS_REG_TXCTRL);
+  uint32 old_txcnt = (txctrl >> 16) & 0x7;
   uint32 freq;
   uint32 baud;
   uint32 ncycles;
 
-  uarths->txctrl.txcnt = 1;
-  while (!uarths->ip.txwm)
+  writel(base, UARTHS_REG_TXCTRL,
+         (txctrl & ~UARTHS_TXWM(0x7)) | UARTHS_TXWM(1));
+  while (!(readl(base, UARTHS_REG_IP) & UARTHS_IP_TXWM))
     ;
-  uarths->txctrl.txcnt = old_txcnt;
+  writel(base, UARTHS_REG_TXCTRL,
+         (txctrl & ~UARTHS_TXWM(0x7)) | UARTHS_TXWM(old_txcnt));
 
   freq = sysctl_clock_get_freq(SYSCTL_CLOCK_CPU);
-  baud = freq / (uarths->div.div + 1);
+  baud = freq / ((readl(base, UARTHS_REG_DIV) & UARTHS_DIV_MASK) + 1);
   ncycles = (20UL * freq) / baud + 1000;
   if (ncycles > 500000)
     ncycles = 500000;
@@ -411,6 +425,7 @@ void
 uarths_set_baud(int baud)
 {
 #ifndef QEMU
+  uintptr_t base = UARTHS_V;
   uint32 freq;
   uint32 div;
 
@@ -428,7 +443,7 @@ uarths_set_baud(int baud)
   div = freq / (uint32)baud;
   if (div == 0)
     div = 1;
-  uarths->div.div = div - 1;
+  writel(base, UARTHS_REG_DIV, div - 1);
   requested_baud = (uint32)baud;
   uarths_rxenable(1);
 #else
@@ -445,8 +460,9 @@ uarths_get_baud_info(uint32 *info)
   info[2] = 0;
   info[3] = 0;
 #else
+  uintptr_t base = UARTHS_V;
   uint32 freq = sysctl_clock_get_freq(SYSCTL_CLOCK_CPU);
-  uint32 div = uarths->div.div;
+  uint32 div = readl(base, UARTHS_REG_DIV) & UARTHS_DIV_MASK;
 
   info[0] = requested_baud;
   info[1] = freq / (div + 1);
