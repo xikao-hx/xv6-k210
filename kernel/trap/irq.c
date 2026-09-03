@@ -41,6 +41,14 @@ irq_enable_hart(int irq)
 }
 
 void
+irq_set_priority(int irq, int priority)
+{
+  if (irq < 0 || irq >= MAXIRQ || priority < 0)
+    panic("irq_set_priority: bad argument");
+  *(uint32 *)(PLIC_PRIORITY + irq * sizeof(uint32)) = priority;
+}
+
+void
 irq_register(int irq, irq_handler_t h, void *data)
 {
   if (irq < 0 || irq >= MAXIRQ)
@@ -48,7 +56,7 @@ irq_register(int irq, irq_handler_t h, void *data)
   actions[irq].handler = h;
   actions[irq].data = data;
   // Non-zero priority, otherwise the PLIC treats the source as disabled.
-  *(uint32 *)(PLIC_PRIORITY + irq * sizeof(uint32)) = 1;
+  irq_set_priority(irq, 1);
   irq_enable_hart(irq);
 #ifdef QEMU
   printf("DBG irq_register irq=%d men0=%x men1=%x\n", irq,

@@ -8,15 +8,16 @@
 #include "sysctl.h"
 #include "uart.h"
 #include "uart-dw.h"
+#include "utils.h"
 
-static volatile uart_t *const uart_base[UART_DEVICE_MAX] = {
-  (volatile uart_t *)UART0_V,
-  (volatile uart_t *)UART1_V,
-  (volatile uart_t *)UART2_V,
+static const uintptr_t uart_base[UART_DEVICE_MAX] = {
+  UART0_V,
+  UART1_V,
+  UART2_V,
 };
 
 #define UART_LSR_DR      (1u << 0)
-#define UART_LSR_OE      (1u << 1)  // overrun error (FIFO overflowed)
+#define UART_LSR_OE      (1u << 1)  // RX FIFO overrun
 #define UART_LSR_TX_BUSY (1u << 5)
 #define UART_LSR_TEMT    (1u << 6)
 
@@ -27,6 +28,7 @@ static volatile uart_t *const uart_base[UART_DEVICE_MAX] = {
 
 #define UART_IER_RX      0x01
 #define UART_IER_TX      0x02
+#define UART_LCR_DLAB    (1u << 7)
 #define UART_BRATE_CONST 16
 #define UART_RXDMA_SIZE 512
 #define UART_TXDMA_SIZE 256
@@ -34,30 +36,42 @@ static volatile uart_t *const uart_base[UART_DEVICE_MAX] = {
 
 extern volatile int panicked;
 
-// ---------- Hardware Operation ----------
+// ---------- Hardware ----------
 
-static int
-uart_hw_getc(struct uart_controller *uart_ctrl)
+static inline volatile uint32 *
+uart_reg_addr(uintptr_t base, uint32 reg)
 {
-  if (!(uart_base[uart_ctrl->index]->LSR & UART_LSR_DR))
-    return -1;
-  return uart_base[uart_ctrl->index]->RBR & 0xff;
+  return (volatile uint32 *)(base + reg);
 }
 
 static int
 uart_hw_tx_ready(struct uart_controller *uart_ctrl)
 {
-  // K210 inverts LSR bit 5: 1 = busy, 0 = ready to accept a byte.
-  return !(uart_base[uart_ctrl->index]->LSR & UART_LSR_TX_BUSY);
+  uintptr_t base = uart_base[uart_ctrl->index];
+
+  // K210 uses LSR bit 5 as 1 = busy.
+  return !(readl(base, UART_REG_LSR) & UART_LSR_TX_BUSY);
 }
 
 static void
 uart_hw_putc(struct uart_controller *uart_ctrl, int ch)
 {
-  uart_base[uart_ctrl->index]->THR = ch;
+  uintptr_t base = uart_base[uart_ctrl->index];
+
+  writel(base, UART_REG_THR, ch);
 }
 
-// Drain the hardware RX FIFO (flush/baud switch); the soft ring is untouched.
+static int
+uart_hw_getc(struct uart_controller *uart_ctrl)
+{
+  uintptr_t base = uart_base[uart_ctrl->index];
+
+  if (!(readl(base, UART_REG_LSR) & UART_LSR_DR))
+    return -1;
+  return readl(base, UART_REG_RBR) & 0xff;
+}
+
+// Drain only the hardware RX FIFO.
 static void
 uart_hw_drain_fifo(struct uart_controller *uart_ctrl)
 {
@@ -65,68 +79,74 @@ uart_hw_drain_fifo(struct uart_controller *uart_ctrl)
     ;
 }
 
-// RX-enable is internal state, toggled only around baud/mode switches and at
-// init.  TX-enable is owned by the tx service loop (on while the ring has data).
 static void
 uart_rxenable(struct uart_controller *uart_ctrl, int enabled)
 {
-  uint32 ier = uart_base[uart_ctrl->index]->IER;
+  uintptr_t base = uart_base[uart_ctrl->index];
+  uint32 ier = readl(base, UART_REG_IER);
 
   if (enabled)
     ier |= UART_IER_RX;
   else
     ier &= ~UART_IER_RX;
-  uart_base[uart_ctrl->index]->IER = ier;
+  writel(base, UART_REG_IER, ier);
 }
 
 static void
 uart_txenable(struct uart_controller *uart_ctrl, int enabled)
 {
-  uint32 ier = uart_base[uart_ctrl->index]->IER;
+  uintptr_t base = uart_base[uart_ctrl->index];
+  uint32 ier = readl(base, UART_REG_IER);
 
   if (enabled)
     ier |= UART_IER_TX;
   else
     ier &= ~UART_IER_TX;
-  uart_base[uart_ctrl->index]->IER = ier;
+  writel(base, UART_REG_IER, ier);
 }
 
-// Program the 20-bit divisor (DLH:DLL:DLF): the APB0 clock is divided by
-// (DLH<<12 | DLL<<4 | DLF), integer in DLH/DLL, fraction in the 4-bit DLF.
+// Program the 20-bit divisor in DLH:DLL:DLF.
 static void
 uart_set_divisor(struct uart_controller *uart_ctrl, uint32 baud)
 {
+  uintptr_t base = uart_base[uart_ctrl->index];
   uint32 freq = sysctl_clock_get_freq(SYSCTL_CLOCK_APB0);
   uint32 divisor = freq / baud;
   uint8 dlh = divisor >> 12;
   uint8 dll = (divisor - (dlh << 12)) / UART_BRATE_CONST;
   uint8 dlf = divisor - (dlh << 12) - dll * UART_BRATE_CONST;
 
-  uart_base[uart_ctrl->index]->LCR |= (1u << 7);       // DLAB: latch DLL/DLH/DLF
-  uart_base[uart_ctrl->index]->DLH = dlh;
-  uart_base[uart_ctrl->index]->DLL = dll;
-  uart_base[uart_ctrl->index]->DLF = dlf;
-  uart_base[uart_ctrl->index]->LCR &= ~(1u << 7);      // clear DLAB, keep the current LCR format
+  uint32 lcr = readl(base, UART_REG_LCR);
+
+  writel(base, UART_REG_LCR, lcr | UART_LCR_DLAB);
+  writel(base, UART_REG_DLH, dlh);
+  writel(base, UART_REG_DLL, dll);
+  writel(base, UART_REG_DLF, dlf);
+  writel(base, UART_REG_LCR, lcr);
 }
 
-// 8N1 + FIFO on + RX trigger at 1 byte (SDK defaults).  DLAB must be clear,
-// so this must run after any uart_set_divisor() that uses the LCR register.
+// Configure 8N1, FIFO and the initial RX trigger.
 static void
-uart_configure_line(struct uart_controller *uart_ctrl)
+uart_dw_init(struct uart_controller *uart_ctrl)
 {
-  uart_base[uart_ctrl->index]->LCR = (8 - 5);          // 8N1: (data_width-5) | stop<<2 | parity<<3
-  uart_base[uart_ctrl->index]->IER |= 0x80;            // keep the SDK's THRE bit
-  uart_base[uart_ctrl->index]->FCR = (0 << 6) | (3 << 4) | (1 << 3) | 1;  // FIFO on, RX trig 1, TX trig 8
-  uart_base[uart_ctrl->index]->SRT = 0;                // receive FIFO trigger = 1 byte (UART_RECEIVE_FIFO_1)
-  uart_base[uart_ctrl->index]->STET = 0;
+  uintptr_t base = uart_base[uart_ctrl->index];
+  uint32 ier;
+
+  writel(base, UART_REG_LCR, 8 - 5);  // 8N1
+  ier = readl(base, UART_REG_IER);
+  writel(base, UART_REG_IER, ier | 0x80);
+  writel(base, UART_REG_FCR, (3 << 4) | (1 << 3) | 1);
+  writel(base, UART_REG_SRT, UART_SRT_ONE_CHAR);
+  writel(base, UART_REG_STET, 0);
 }
 
 // ---------- UART Init ----------
+
 void uart_dw_isr(void *data);
 void uart_dma_tx_isr(void *data);
 void uart_dma_rx_isr(void *data);
 void
-uartinit(struct uart_controller *uart_ctrl)
+uart_init(struct uart_controller *uart_ctrl)
 {
   sysctl_clock_enable(SYSCTL_CLOCK_UART1 + uart_ctrl->index);
   sysctl_reset(SYSCTL_RESET_UART1 + uart_ctrl->index);
@@ -134,54 +154,50 @@ uartinit(struct uart_controller *uart_ctrl)
   fpioa_set_function(uart_ctrl->tx_io, FUNC_UART1_TX + uart_ctrl->index * 2);
   fpioa_set_function(uart_ctrl->rx_io, FUNC_UART1_RX + uart_ctrl->index * 2);
 
-  // FUNC_UART1_RX is a floating input (pu=0); a low undriven line is framed as
-  // an endless 0x00 stream.  Pull it up so idle reads as high.
+  // Pull RX high to prevent an undriven line from producing 0x00 frames.
   fpioa->io[uart_ctrl->rx_io].pu = 1;
 
   uart_set_divisor(uart_ctrl, uart_ctrl->default_baud);
-  uart_configure_line(uart_ctrl);
+  uart_dw_init(uart_ctrl);
 
   initlock(&uart_ctrl->rx.lock, "uartrx");
   initlock(&uart_ctrl->tx.lock, "uarttx");
   ringbuffer_init(&uart_ctrl->rx.ring, (uint8 *)uart_ctrl->rx.buf, UART_RX_BUF_SIZE);
   ringbuffer_init(&uart_ctrl->tx.ring, (uint8 *)uart_ctrl->tx.buf, UART_TX_BUF_SIZE);
   uart_ctrl->requested_baud = uart_ctrl->default_baud;
-  uart_ctrl->rx_mode = UART_MODE_DMA;
-  uart_ctrl->tx_mode = UART_MODE_DMA;
   uart_ctrl->rx_dma_active = 0;
 
   irq_register(UART0_IRQ + uart_ctrl->index, uart_dw_isr, uart_ctrl);
-  if (uart_ctrl->chan_tx < DMAC_CHANNEL_MAX)
+  if (uart_ctrl->chan_tx < DMAC_CHANNEL_MAX) {
     irq_register(DMAC_CH0_IRQ + uart_ctrl->chan_tx, uart_dma_tx_isr, uart_ctrl);
-  if (uart_ctrl->chan_rx < DMAC_CHANNEL_MAX)
+  }
+  if (uart_ctrl->chan_rx < DMAC_CHANNEL_MAX) {
     irq_register(DMAC_CH0_IRQ + uart_ctrl->chan_rx, uart_dma_rx_isr, uart_ctrl);
+  }
 
-  uart_set_rx_mode(uart_ctrl, UART_MODE_DMA);
+  uart_set_mode(uart_ctrl, UART_MODE_DMA);
 }
 
 // ---------- UART RX ----------
 
-// Drain the hardware FIFO into the rx ring, count drops, wake readers.
-// Caller must hold uart_ctrl->rx.lock.
-static void
-uart_rx_service(struct uart_controller *uart_ctrl)
+// Drain RX FIFO into the ring; caller holds rx.lock.
+static int
+uart_rx_fifo_drain(struct uart_controller *uart_ctrl)
 {
   int received = 0;
   int ch;
 
   while ((ch = uart_hw_getc(uart_ctrl)) != -1) {
     if (ringbuffer_push(&uart_ctrl->rx.ring, (uint8)ch))
-      received = 1;
+      received++;
     else
       uart_ctrl->rx.dropped++;
   }
 
-  if (received)
-    wakeup_reason(&uart_ctrl->rx.ring, WAKEUP_DEVICE);
+  return received;
 }
 
-// Block for rx data.  1 = data; 0 = flush bumped the epoch; -1 = interrupted.
-// Caller must hold uart_ctrl->rx.lock.
+// Wait with rx.lock held: 1 = data, 0 = flush, -1 = interrupted.
 static int
 uart_rx_wait_data(struct uart_controller *uart_ctrl, uint epoch)
 {
@@ -222,54 +238,92 @@ uart_read(struct uart_controller *uart_ctrl, char *dst, int n)
   return i;
 }
 
-// ---- RX DMA (boundary-event-driven frame harvesting) ----
-static void
-uart_rx_dma_harvest(struct uart_controller *uart_ctrl)
+// Stop RX DMA and harvest its buffer with rx.lock held.
+static int
+uart_rx_dma_stop(struct uart_controller *uart_ctrl)
 {
-  uint32 n = ((uint32)(uintptr_t)dmac->channel[uart_ctrl->chan_rx].dar
-              - (uint32)(uintptr_t)uart_ctrl->rx_dma_buf) / 4;
+  uint32 n;
   int received = 0;
-  int ch;
+
+  dmac_channel_disable(uart_ctrl->chan_rx);
+  writeq(0xffffffff, &dmac->channel[uart_ctrl->chan_rx].intclear);
+  uart_ctrl->rx_dma_active = 0;
+
+  // DMA stores one byte in each 32-bit buffer slot.
+  n = ((uint32)readq(&dmac->channel[uart_ctrl->chan_rx].dar)
+       - (uint32)(uintptr_t)uart_ctrl->rx_dma_buf) / 4;
 
   if (n > UART_RXDMA_SIZE)
-    n = UART_RXDMA_SIZE;         // clamp
+    n = UART_RXDMA_SIZE;
   for (uint32 i = 0; i < n; i++) {
     if (ringbuffer_push(&uart_ctrl->rx.ring, (uint8)(uart_ctrl->rx_dma_buf[i] & 0xff)))
-      received = 1;
-    else
-      uart_ctrl->rx.dropped++;
-  }
-  while ((ch = uart_hw_getc(uart_ctrl)) != -1) {
-    if (ringbuffer_push(&uart_ctrl->rx.ring, (uint8)ch))
-      received = 1;
+      received++;
     else
       uart_ctrl->rx.dropped++;
   }
 
-  if (received)
-    wakeup_reason(&uart_ctrl->rx.ring, WAKEUP_DEVICE);
+  return received;
 }
 
-// Arm a fresh RX block on this instance's RX channel (lock held).  Caller
-// must have stopped the old transfer so dmac_set_single_mode's internal
-// dmac_wait_idle is a no-op.
+// Arm a new RX DMA block after the old transfer has stopped.
 static void
 uart_rx_dma_start(struct uart_controller *uart_ctrl)
 {
+  uintptr_t base = uart_base[uart_ctrl->index];
+
   sysctl_dma_select((sysctl_dma_channel_t)uart_ctrl->chan_rx,
                     SYSCTL_DMA_SELECT_UART1_RX_REQ + uart_ctrl->index * 2);
-  dmac_set_single_mode(uart_ctrl->chan_rx, (void *)&uart_base[uart_ctrl->index]->RBR, uart_ctrl->rx_dma_buf,
+  dmac_set_single_mode(uart_ctrl->chan_rx, (void *)uart_reg_addr(base, UART_REG_RBR), uart_ctrl->rx_dma_buf,
                        DMAC_ADDR_NOCHANGE, DMAC_ADDR_INCREMENT,
                        DMAC_MSIZE_1, DMAC_TRANS_WIDTH_32, UART_RXDMA_SIZE);
   uart_ctrl->rx_dma_active = 1;
 }
 
-void
-uart_dma_tx_isr(void *data)
+// Harvest and re-arm RX DMA with rx.lock held.
+static void
+uart_rx_dma(struct uart_controller *uart_ctrl)
 {
-  struct uart_controller *uart_ctrl = data;
+  int received = uart_rx_dma_stop(uart_ctrl);
 
-  dmac_intr(uart_ctrl->chan_tx);
+  uart_rx_dma_start(uart_ctrl);
+  if (received)
+    wakeup_reason(&uart_ctrl->rx.ring, WAKEUP_DEVICE);
+}
+
+// Handle RDA with rx.lock held.
+static void
+uart_rx_isr(struct uart_controller *uart_ctrl)
+{
+  if (uart_ctrl->mode == UART_MODE_DMA) {
+    // Finish a block whose DMA interrupt has not run yet.
+    if (uart_ctrl->rx_dma_active && dmac_is_done(uart_ctrl->chan_rx))
+      uart_rx_dma(uart_ctrl);
+    return;
+  }
+
+  if (uart_rx_fifo_drain(uart_ctrl))
+    wakeup_reason(&uart_ctrl->rx.ring, WAKEUP_DEVICE);
+}
+
+// Handle CTI with rx.lock held.
+static void
+uart_rx_timeout_isr(struct uart_controller *uart_ctrl)
+{
+  int received = 0;
+
+  if (uart_ctrl->mode == UART_MODE_DMA) {
+    if (uart_ctrl->rx_dma_active) {
+      // Stop DMA before the CPU drains the remaining FIFO data.
+      received = uart_rx_dma_stop(uart_ctrl);
+      received += uart_rx_fifo_drain(uart_ctrl);
+      uart_rx_dma_start(uart_ctrl);
+    }
+  } else {
+    received = uart_rx_fifo_drain(uart_ctrl);
+  }
+
+  if (received)
+    wakeup_reason(&uart_ctrl->rx.ring, WAKEUP_DEVICE);
 }
 
 void
@@ -277,40 +331,39 @@ uart_dma_rx_isr(void *data)
 {
   struct uart_controller *uart_ctrl = data;
 
-  dmac->channel[uart_ctrl->chan_rx].intclear = 0xffffffff;
   acquire(&uart_ctrl->rx.lock);
-  if (uart_ctrl->rx_mode == UART_MODE_DMA && uart_ctrl->rx_dma_active) {
-    dmac_channel_disable(uart_ctrl->chan_rx);
-    uart_rx_dma_harvest(uart_ctrl);
-    uart_rx_dma_start(uart_ctrl);
+  if (uart_ctrl->mode != UART_MODE_DMA || !uart_ctrl->rx_dma_active ||
+      !dmac_is_done(uart_ctrl->chan_rx)) {
+    release(&uart_ctrl->rx.lock);
+    return;
   }
+
+  uart_rx_dma(uart_ctrl);
   release(&uart_ctrl->rx.lock);
 }
 
-// Discard the FIFO (and in-flight DMA) and soft ring, reset rx state, then
-// wake readers so uart_read returns 0.  In DMA mode the harvested buffer is
-// dropped and the RX channel re-armed to keep the stream continuous.
+// Clear all RX data, wake readers and re-arm DMA when enabled.
 void
 uart_flush_rx(struct uart_controller *uart_ctrl)
 {
   acquire(&uart_ctrl->rx.lock);
-  if (uart_ctrl->rx_mode == UART_MODE_DMA && uart_ctrl->rx_dma_active) {
-    dmac_channel_disable(uart_ctrl->chan_rx);   // residual bytes are discarded
-  } else {
-    uart_hw_drain_fifo(uart_ctrl);
+  if (uart_ctrl->mode == UART_MODE_DMA && uart_ctrl->rx_dma_active) {
+    dmac_channel_disable(uart_ctrl->chan_rx);
+    writeq(0xffffffff, &dmac->channel[uart_ctrl->chan_rx].intclear);
+    uart_ctrl->rx_dma_active = 0;
   }
+  uart_hw_drain_fifo(uart_ctrl);
   ringbuffer_reset(&uart_ctrl->rx.ring);
   uart_ctrl->rx.dropped = 0;
   uart_ctrl->rx.overrun = 0;
   uart_ctrl->rx.epoch++;
   wakeup_reason(&uart_ctrl->rx.ring, WAKEUP_DEVICE);
-  if (uart_ctrl->rx_mode == UART_MODE_DMA && uart_ctrl->rx_dma_active)
+  if (uart_ctrl->mode == UART_MODE_DMA)
     uart_rx_dma_start(uart_ctrl);
   release(&uart_ctrl->rx.lock);
 }
 
-// info[0]=dropped, [1]=buffered, [2]=ring capacity, [3]=RX mode (INT/DMA),
-// [4]=hardware overruns (LSR OE).
+// Return dropped, buffered, capacity, mode and overrun in info[0..4].
 void
 uart_get_rx_stats(struct uart_controller *uart_ctrl, uint32 *info)
 {
@@ -318,46 +371,15 @@ uart_get_rx_stats(struct uart_controller *uart_ctrl, uint32 *info)
   info[0] = uart_ctrl->rx.dropped;
   info[1] = ringbuffer_used(&uart_ctrl->rx.ring);
   info[2] = ringbuffer_capacity(&uart_ctrl->rx.ring);
-  info[3] = (uint32)uart_ctrl->rx_mode;
+  info[3] = (uint32)uart_ctrl->mode;
   info[4] = uart_ctrl->rx.overrun;
   release(&uart_ctrl->rx.lock);
-}
-
-// Switch the RX path, preserving in-flight bytes (stop the DMA and harvest
-// first).  DMA mode uses an 8-byte trigger (SRT=2) so short bursts stay in the
-// FIFO and close via CTI instead of raising an RDA every byte.
-void
-uart_set_rx_mode(struct uart_controller *uart_ctrl, int mode)
-{
-  if (mode != UART_MODE_INT && mode != UART_MODE_DMA)
-    return;
-  if (mode == uart_ctrl->rx_mode && uart_ctrl->rx_dma_active == (mode == UART_MODE_DMA))
-    return;
-
-  uart_rxenable(uart_ctrl, 0);   // quiet RDA/CTI while reconfiguring
-  acquire(&uart_ctrl->rx.lock);
-  // Harvest only if armed: on a never-armed channel dar holds a stale address
-  // and (stale - base)/4 would push hundreds of bogus zero words into the ring.
-  if (uart_ctrl->rx_dma_active) {
-    dmac_channel_disable(uart_ctrl->chan_rx);
-    uart_rx_dma_harvest(uart_ctrl);       // preserve bytes already in flight
-  }
-  if (mode == UART_MODE_DMA) {
-    uart_base[uart_ctrl->index]->SRT = 2;               // 8-byte trigger: short bursts -> CTI
-    uart_rx_dma_start(uart_ctrl);
-  } else {
-    uart_base[uart_ctrl->index]->SRT = 0;               // 1-byte trigger for the interrupt path
-    uart_ctrl->rx_dma_active = 0;
-  }
-  uart_ctrl->rx_mode = mode;
-  release(&uart_ctrl->rx.lock);
-  uart_rxenable(uart_ctrl, 1);
 }
 
 // ---------- UART TX ----------
 
 static void
-uart_tx_service(struct uart_controller *uart_ctrl)
+uart_tx_isr(struct uart_controller *uart_ctrl)
 {
   uint8 ch;
 
@@ -370,7 +392,14 @@ uart_tx_service(struct uart_controller *uart_ctrl)
   uart_txenable(uart_ctrl, !ringbuffer_empty(&uart_ctrl->tx.ring));
 }
 
-// Block until the tx ring has room.
+void
+uart_dma_tx_isr(void *data)
+{
+  struct uart_controller *uart_ctrl = data;
+
+  dmac_intr(uart_ctrl->chan_tx);
+}
+
 static int
 uart_tx_wait_room(struct uart_controller *uart_ctrl)
 {
@@ -387,11 +416,11 @@ uart_tx_wait_room(struct uart_controller *uart_ctrl)
   return 0;
 }
 
-// TX via DMA: pack up to TXDMA_SIZE bytes into words, arm the TX channel,
-// block on the DMAC CH4 completion IRQ (dmac_wait_idle_timeout).
+// Send TXDMA_SIZE-byte chunks and wait for each DMA completion.
 static int
 uart_write_dma(struct uart_controller *uart_ctrl, const char *src, int n)
 {
+  uintptr_t base = uart_base[uart_ctrl->index];
   int done = 0;
 
   while (done < n) {
@@ -405,7 +434,8 @@ uart_write_dma(struct uart_controller *uart_ctrl, const char *src, int n)
       uart_ctrl->tx_dma_buf[i] = (uint32)(uint8)src[done + i];
     sysctl_dma_select((sysctl_dma_channel_t)uart_ctrl->chan_tx,
                       SYSCTL_DMA_SELECT_UART1_TX_REQ + uart_ctrl->index * 2);
-    dmac_set_single_mode(uart_ctrl->chan_tx, uart_ctrl->tx_dma_buf, (void *)&uart_base[uart_ctrl->index]->THR,
+    dmac_set_single_mode(uart_ctrl->chan_tx, uart_ctrl->tx_dma_buf,
+                         (void *)uart_reg_addr(base, UART_REG_THR),
                          DMAC_ADDR_INCREMENT, DMAC_ADDR_NOCHANGE,
                          DMAC_MSIZE_1, DMAC_TRANS_WIDTH_32, (uint64)chunk);
     release(&uart_ctrl->tx.lock);
@@ -421,83 +451,113 @@ uart_write(struct uart_controller *uart_ctrl, const char *src, int n)
 {
   int i;
 
-  if (uart_ctrl->tx_mode == UART_MODE_DMA)
+  if (uart_ctrl->mode == UART_MODE_DMA)
     return uart_write_dma(uart_ctrl, src, n);
 
   acquire(&uart_ctrl->tx.lock);
   for (i = 0; i < n; i++) {
+    int was_empty;
+
     if (uart_tx_wait_room(uart_ctrl) < 0) {
       release(&uart_ctrl->tx.lock);
       return i > 0 ? i : -1;
     }
+    was_empty = ringbuffer_empty(&uart_ctrl->tx.ring);
     ringbuffer_push(&uart_ctrl->tx.ring, (uint8)src[i]);
-    uart_tx_service(uart_ctrl);
+    // A newly non-empty ring starts the THRE interrupt flow.
+    if (was_empty)
+      uart_txenable(uart_ctrl, 1);
   }
   release(&uart_ctrl->tx.lock);
   return i;
 }
 
-// Wait for the tx ring and hardware FIFO to drain; used by the baud switch and
-// the switch into DMA TX so neither changes the line mid-frame.  In DMA mode
-// the ring is bypassed, so this reduces to waiting TEMT.
+// Wait until both the TX ring and UART transmitter are empty.
 static void
 uart_flush_tx(struct uart_controller *uart_ctrl)
 {
+  uintptr_t base = uart_base[uart_ctrl->index];
+
   acquire(&uart_ctrl->tx.lock);
   while (!ringbuffer_empty(&uart_ctrl->tx.ring)) {
-    uart_tx_service(uart_ctrl);
-    if (!ringbuffer_empty(&uart_ctrl->tx.ring))
-      sleep(&uart_ctrl->tx.ring, &uart_ctrl->tx.lock);
+    uart_txenable(uart_ctrl, 1);
+    sleep(&uart_ctrl->tx.ring, &uart_ctrl->tx.lock);
   }
   release(&uart_ctrl->tx.lock);
-  while (!(uart_base[uart_ctrl->index]->LSR & UART_LSR_TEMT))
+  while (!(readl(base, UART_REG_LSR) & UART_LSR_TEMT))
     ;
 }
 
-// Switch the TX path.  DMA mode flushes any bytes queued while still in INT
-// mode, then turns the THRE interrupt off -- DMA owns the FIFO.  STET stays 1:
-// it drives both THRE (INT) and DMATXREQ (DMA).
-void
-uart_set_tx_mode(struct uart_controller *uart_ctrl, int mode)
+// Drain pending traffic before switching RX and TX modes together.
+int
+uart_set_mode(struct uart_controller *uart_ctrl, int mode)
 {
-  if (mode != UART_MODE_INT && mode != UART_MODE_DMA)
-    return;
-  if (mode == uart_ctrl->tx_mode)
-    return;
+  uintptr_t base = uart_base[uart_ctrl->index];
+  int received = 0;
 
-  if (mode == UART_MODE_DMA)
-    uart_flush_tx(uart_ctrl);
+  if (mode != UART_MODE_PIO && mode != UART_MODE_DMA)
+    return -1;
+  if (mode == uart_ctrl->mode &&
+      uart_ctrl->rx_dma_active == (mode == UART_MODE_DMA))
+    return 0;
+
+  uart_flush_tx(uart_ctrl);
+  uart_rxenable(uart_ctrl, 0);
+
   acquire(&uart_ctrl->tx.lock);
   uart_txenable(uart_ctrl, 0);
-  uart_ctrl->tx_mode = mode;
+
+  acquire(&uart_ctrl->rx.lock);
+  if (uart_ctrl->rx_dma_active) {
+    received = uart_rx_dma_stop(uart_ctrl);
+    received += uart_rx_fifo_drain(uart_ctrl);
+  }
+
+  uart_ctrl->mode = mode;
+  if (mode == UART_MODE_DMA) {
+    writel(base, UART_REG_SRT, UART_SRT_HALF_FULL);
+    uart_rx_dma_start(uart_ctrl);
+  } else {
+    writel(base, UART_REG_SRT, UART_SRT_ONE_CHAR);
+  }
+  if (received)
+    wakeup_reason(&uart_ctrl->rx.ring, WAKEUP_DEVICE);
+  release(&uart_ctrl->rx.lock);
   release(&uart_ctrl->tx.lock);
+
+  uart_rxenable(uart_ctrl, 1);
+  return 0;
 }
 
-// ---------- baudrate setup ----------
+// ---------- Baud rate ----------
 
 void
 uart_set_baud(struct uart_controller *uart_ctrl, int baud)
 {
+  uintptr_t base = uart_base[uart_ctrl->index];
+  int received = 0;
+
   if (baud <= 0)
     return;
 
-  // Restore the prior RX interrupt state: forcing it on lets the ISR drain the
-  // FIFO before the next read (the "loop reads back 0 bytes" bug).
-  int rx_was_on = (uart_base[uart_ctrl->index]->IER & UART_IER_RX) != 0;
+  // Preserve the RX interrupt state across the baud change.
+  int rx_was_on = (readl(base, UART_REG_IER) & UART_IER_RX) != 0;
 
   uart_flush_tx(uart_ctrl);
   uart_rxenable(uart_ctrl, 0);
   acquire(&uart_ctrl->rx.lock);
-  if (uart_ctrl->rx_mode == UART_MODE_DMA && uart_ctrl->rx_dma_active) {
-    dmac_channel_disable(uart_ctrl->chan_rx);   // stop DMA, keep harvested bytes
-    uart_rx_dma_harvest(uart_ctrl);
+  if (uart_ctrl->mode == UART_MODE_DMA && uart_ctrl->rx_dma_active) {
+    received = uart_rx_dma_stop(uart_ctrl);
+    received += uart_rx_fifo_drain(uart_ctrl);
   } else {
-    uart_hw_drain_fifo(uart_ctrl);              // bytes in the soft ring are kept
+    uart_hw_drain_fifo(uart_ctrl);  // Keep bytes already in the ring.
   }
   uart_set_divisor(uart_ctrl, (uint32)baud);
   uart_ctrl->requested_baud = (uint32)baud;
-  if (uart_ctrl->rx_mode == UART_MODE_DMA && uart_ctrl->rx_dma_active)
-    uart_rx_dma_start(uart_ctrl);   // re-arm on the new line rate
+  if (uart_ctrl->mode == UART_MODE_DMA)
+    uart_rx_dma_start(uart_ctrl);
+  if (received)
+    wakeup_reason(&uart_ctrl->rx.ring, WAKEUP_DEVICE);
   release(&uart_ctrl->rx.lock);
   if (rx_was_on)
     uart_rxenable(uart_ctrl, 1);
@@ -506,14 +566,18 @@ uart_set_baud(struct uart_controller *uart_ctrl, int baud)
 void
 uart_get_baud_info(struct uart_controller *uart_ctrl, uint32 *info)
 {
+  uintptr_t base = uart_base[uart_ctrl->index];
   uint32 freq = sysctl_clock_get_freq(SYSCTL_CLOCK_APB0);
   uint32 divisor;
+  uint32 lcr;
 
-  // DLH/DLL alias IER/RBR and only decode as the divisor latch while DLAB is
-  // set -- without it the readback silently returns IER/RBR contents.
-  uart_base[uart_ctrl->index]->LCR |= (1u << 7);   // DLAB on: DLH/DLL/DLF visible at 0x04/0x00/0xc0
-  divisor = ((uart_base[uart_ctrl->index]->DLH & 0xff) << 12) | ((uart_base[uart_ctrl->index]->DLL & 0xff) << 4) | (uart_base[uart_ctrl->index]->DLF & 0xf);
-  uart_base[uart_ctrl->index]->LCR &= ~(1u << 7);  // DLAB off, line format preserved
+  // DLAB selects divisor registers instead of their IER/RBR aliases.
+  lcr = readl(base, UART_REG_LCR);
+  writel(base, UART_REG_LCR, lcr | UART_LCR_DLAB);
+  divisor = ((readl(base, UART_REG_DLH) & 0xff) << 12) |
+            ((readl(base, UART_REG_DLL) & 0xff) << 4) |
+            (readl(base, UART_REG_DLF) & 0xf);
+  writel(base, UART_REG_LCR, lcr);
 
   info[0] = uart_ctrl->requested_baud;
   info[1] = divisor ? freq / divisor : 0;
@@ -527,43 +591,35 @@ void
 uart_dw_isr(void *data)
 {
   struct uart_controller *uart_ctrl = data;
-  uint8 status = uart_base[uart_ctrl->index]->IIR & 0xf;
+  uintptr_t base = uart_base[uart_ctrl->index];
+  uint8 status = readl(base, UART_REG_IIR) & 0xf;
 
   switch (status) {
   case UART_IIR_THRE:
-    if (uart_ctrl->tx_mode == UART_MODE_DMA)
-      break;   // DMA TX owns the FIFO; a stale THRE is spurious
+    if (uart_ctrl->mode == UART_MODE_DMA)
+      break;  // DMA owns TX FIFO.
     acquire(&uart_ctrl->tx.lock);
-    uart_tx_service(uart_ctrl);
+    uart_tx_isr(uart_ctrl);
     release(&uart_ctrl->tx.lock);
     break;
   case UART_IIR_RDA:
-    if (uart_ctrl->rx_mode == UART_MODE_DMA)
-      break;   // DMA drains the FIFO; done/CTI harvest.  Harvesting on RDA
-               // disables the RX channel with dar mid-transfer and races the
-               // DMA-done ISR, corrupting frames (seen as 1.5M burn CRC errors).
     acquire(&uart_ctrl->rx.lock);
-    uart_rx_service(uart_ctrl);
+    uart_rx_isr(uart_ctrl);
     release(&uart_ctrl->rx.lock);
     break;
-  case UART_IIR_TIMEOUT:   // CTI: FIFO idle with bytes left
-    if (uart_ctrl->rx_mode == UART_MODE_DMA) {
-      // A frame tail too short to fill a DMA block closes via CTI.
-      uart_dma_rx_isr(uart_ctrl);
-    } else {
-      acquire(&uart_ctrl->rx.lock);
-      uart_rx_service(uart_ctrl);
-      release(&uart_ctrl->rx.lock);
-    }
+  case UART_IIR_TIMEOUT:  // CTI: RX FIFO became idle with data.
+    acquire(&uart_ctrl->rx.lock);
+    uart_rx_timeout_isr(uart_ctrl);
+    release(&uart_ctrl->rx.lock);
     break;
   case UART_IIR_LSERR:
-    // Line-status error (overrun/parity/framing): reading LSR clears it.
+    // Reading LSR clears the line error.
     acquire(&uart_ctrl->rx.lock);
-    if (uart_base[uart_ctrl->index]->LSR & UART_LSR_OE)
+    if (readl(base, UART_REG_LSR) & UART_LSR_OE)
       uart_ctrl->rx.overrun++;
     release(&uart_ctrl->rx.lock);
     break;
   default:
-    break;  // 0x01 = no interrupt pending
+    break;  // 0x01 means no pending interrupt.
   }
 }

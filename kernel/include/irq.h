@@ -10,6 +10,7 @@ typedef void (*irq_handler_t)(void *data);
 
 void irq_register(int irq, irq_handler_t h, void *data);
 void irq_enable_hart(int irq);
+void irq_set_priority(int irq, int priority);
 void irq_dispatch(int irq);
 
 #endif

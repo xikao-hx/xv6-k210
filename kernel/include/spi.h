@@ -19,7 +19,7 @@ struct spi_dw_data {
     uint8 index;
     void *rx_buf;
     const void *tx_buf;
-    unsigned int count;           /* TX bytes still to send (decremented by frame width) */
+    unsigned int tx_count;           /* TX bytes still to send (decremented by frame width) */
     unsigned int bytes_per_word;
     uint64 rx_count;              /* RX bytes still to receive (interrupt mode; isr_lock-held) */
     volatile int xfer_done;       /* transfer finished (interrupt mode) */
@@ -36,9 +36,6 @@ struct spi_controller {
     struct sleeplock lock;        /* per-controller transfer mutex (existing) */
     struct spinlock isr_lock;     /* ISR <-> waiter coordination (new) */
 };
-
-// Default transfer timeout: 100 ticks = 500 ms at the K210 5 ms tick.
-#define SPI_INT_TIMEOUT_TICKS 100
 
 struct spi_device {
   spi_device_num_t bus_num;

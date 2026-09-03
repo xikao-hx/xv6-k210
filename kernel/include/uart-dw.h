@@ -42,6 +42,24 @@
 #include "dmac.h"
 #include "plic.h"
 
+#define UART_REG_RBR   0x00
+#define UART_REG_THR   0x00
+#define UART_REG_DLL   0x00
+#define UART_REG_IER   0x04
+#define UART_REG_DLH   0x04
+#define UART_REG_IIR   0x08
+#define UART_REG_FCR   0x08
+#define UART_REG_LCR   0x0c
+#define UART_REG_LSR   0x14
+#define UART_REG_SRT   0x9c
+#define UART_REG_STET  0xa0
+#define UART_REG_DLF   0xc0
+
+#define UART_SRT_ONE_CHAR     0
+#define UART_SRT_QUARTER_FULL 1
+#define UART_SRT_HALF_FULL    2
+#define UART_SRT_ALMOST_FULL  3
+
 typedef enum _uart_dev
 {
     UART_DEV1 = 0,

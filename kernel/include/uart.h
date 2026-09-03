@@ -7,10 +7,9 @@
 #include "types.h"
 #include "uart-dw.h"
 
-#define UART_MODE_INT 0
+#define UART_MODE_PIO 0
 #define UART_MODE_DMA 1
-#define UART_IOCTL_SET_RX_MODE 0x21
-#define UART_IOCTL_SET_TX_MODE 0x22
+#define UART_IOCTL_SET_MODE 0x21
 
 // RX/TX ring capacities (usable bytes; the backing array is +1 to keep
 // "empty" apart from "full") and DMA per-transfer block sizes in 32-bit
@@ -48,19 +47,17 @@ struct uart_controller {
   struct uart_rx rx;                       
   struct uart_tx tx;
   uint32 requested_baud;
-  int rx_mode;
-  int tx_mode;
+  int mode;
   int rx_dma_active;
 };
 
-void uartinit(struct uart_controller *c);
+void uart_init(struct uart_controller *c);
 int  uart_read(struct uart_controller *c, char *dst, int n);
 int  uart_write(struct uart_controller *c, const char *src, int n);
 void uart_set_baud(struct uart_controller *c, int baud);
 void uart_get_baud_info(struct uart_controller *c, uint32 *info);
 void uart_flush_rx(struct uart_controller *c);
 void uart_get_rx_stats(struct uart_controller *c, uint32 *info);
-void uart_set_rx_mode(struct uart_controller *c, int mode);
-void uart_set_tx_mode(struct uart_controller *c, int mode);
+int  uart_set_mode(struct uart_controller *c, int mode);
 
 #endif

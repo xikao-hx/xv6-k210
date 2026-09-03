@@ -1,16 +1,3 @@
-// /dev/uart1 character device on top of the multi-instance uart driver.
-//
-// ioctl command codes intentionally match CONSOLE_IOCTL_* so burn.c can swap
-// its device entry without touching protocol logic.  Semantics are
-// independent: uart is a raw byte stream, so SET_MODE only accepts RAW.
-// The RX/TX interrupt-vs-DMA path is chosen per direction with
-// UART_IOCTL_SET_RX_MODE / UART_IOCTL_SET_TX_MODE (UART_MODE_INT/DMA), and
-// GET_RX_STATS reports the active RX mode in info[3].
-//
-// The device minor selects which uart_ctrls[] entry backs the file; the
-// controller is stashed in f->private_data by uartdev_open so read/write/
-// ioctl dispatch without touching global state.
-
 #include "console.h"
 #include "dev.h"
 #include "file.h"
@@ -90,9 +77,7 @@ uartdev_ioctl(struct file *f, uint64 cmd, uint64 arg)
     uart_flush_rx(c);
     return 0;
   case CONSOLE_IOCTL_SET_MODE:
-    // RAW = the byte-stream device (interrupt or DMA path per direction,
-    // chosen with the *_MODE ioctls).  TTY line editing is not meaningful on
-    // a raw UART; POLL was removed with Step 2.
+    // TTY line editing is not meaningful on this raw byte-stream device.
     if (arg == CONSOLE_MODE_RAW)
       return 0;
     return -1;
@@ -111,12 +96,8 @@ uartdev_ioctl(struct file *f, uint64 cmd, uint64 arg)
     uart_get_rx_stats(c, st);
     return either_copyout(1, arg, st, sizeof(st));
   }
-  case UART_IOCTL_SET_RX_MODE:
-    uart_set_rx_mode(c, (int)arg);
-    return 0;
-  case UART_IOCTL_SET_TX_MODE:
-    uart_set_tx_mode(c, (int)arg);
-    return 0;
+  case UART_IOCTL_SET_MODE:
+    return uart_set_mode(c, (int)arg);
   default:
     return -1;
   }
@@ -129,7 +110,7 @@ uartdev_open(struct file *f)
                               ? uart_ctrls[f->minor] : 0;
 
   if (c == 0)
-    return -1;              /* minor=0 正常；1/2 槽位 NULL → 打开失败 */
+    return -1;              
   f->private_data = c;
   return 0;
 }
@@ -146,7 +127,7 @@ uartdev_init(void)
 {
   for (int i = 0; i < UART_DEVICE_MAX; i++)
     if (uart_ctrls[i])
-      uartinit(uart_ctrls[i]);
-  if (device_register(DEV_UART1, "uart1", &uart_ops) < 0)
-    panic("uart1 device register");
+      uart_init(uart_ctrls[i]);
+  if (device_register(DEV_UART1, "ttyS0", &uart_ops) < 0)
+    panic("ttyS0 device register");
 }
