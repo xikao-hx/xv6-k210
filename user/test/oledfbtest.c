@@ -113,7 +113,7 @@ main(int argc, char *argv[])
     printf("\n");
   }
 
-  if(ioctl(fd, OLEDFB_IOCTL_FLUSH, 0) < 0)
+  if(ioctl(fd, OLEDFB_IOCTL_FLUSH, (uint64)fb) < 0)
     printf("oledfbtest: FLUSH failed (I2C?) - display may be blank\n");
   else
     printf("oledfbtest: FLUSH OK\n");

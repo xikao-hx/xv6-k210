@@ -1,13 +1,13 @@
-// uarttest: exercise /dev/uart1 in either direction.
+// uarttest: exercise /dev/ttyS0 in either direction.
 //
-//   uarttest [read|write|loop|stress|switch] [intrx] [inttx] [baud] ...
+//   uarttest [read|write|loop|stress|switch] [pio|dma] [baud] ...
 //
 //   write (default)  send an incrementing test-pattern burst on UART1 TX.
 //   read             dump whatever arrives on UART1 RX as hex.
 //   loop             board-side self test: short UART1_TX to UART1_RX.
 //   stress           loopback high-pressure at [baud], verifying byte-for-byte.
-//   switch           loopback across repeated INT<->DMA mode toggles.
-//   intrx / inttx    force the RX/TX path to interrupt mode.The driver default is DMA.
+//   switch           loopback across repeated PIO<->DMA mode toggles.
+//   pio / dma        select one mode for both RX and TX; default is DMA.
 //   nofh             switch test: skip the flush after each mode toggle.
 //   baud             line rate (default 115200; stress/switch default 1500000).
 //
@@ -36,7 +36,7 @@ is_arg(const char *s, const char *name)
 }
 
 // ---- stress: loopback high-pressure at a given baud ----
-//   uarttest stress [intrx] [inttx] [baud] [bytes]
+//   uarttest stress [pio|dma] [baud] [bytes]
 static void
 stress_run(int fd, int nbytes, int baud)
 {
@@ -100,7 +100,7 @@ stress_run(int fd, int nbytes, int baud)
            ? "PASS" : "FAIL");
 }
 
-// ---- switch: INT<->DMA round-trip ----
+// ---- switch: PIO<->DMA round-trip ----
 //   uarttest switch [baud] [count] [nofh]
 static void
 switch_run(int fd, int count, int baud, int noflush)
@@ -113,17 +113,14 @@ switch_run(int fd, int count, int baud, int noflush)
   printf("uarttest: switch count=%d baud=%d %s\n", count, baud,
          noflush ? "nofh" : "flush");
 
-  ioctl(fd, UART_IOCTL_SET_RX_MODE, UART_MODE_INT);
-  ioctl(fd, UART_IOCTL_SET_TX_MODE, UART_MODE_INT);
+  ioctl(fd, UART_IOCTL_SET_MODE, UART_MODE_PIO);
   ioctl(fd, CONSOLE_IOCTL_FLUSH_INPUT, 0);
 
   for (i = 0; i < count; i++) {
-    int rx = (i & 1) ? UART_MODE_DMA : UART_MODE_INT;
-    int tx = (i % 3 == 2) ? UART_MODE_DMA : UART_MODE_INT;
+    int mode = (i & 1) ? UART_MODE_DMA : UART_MODE_PIO;
     int w, got = 0, j, ok = 1;
 
-    ioctl(fd, UART_IOCTL_SET_RX_MODE, rx);
-    ioctl(fd, UART_IOCTL_SET_TX_MODE, tx);
+    ioctl(fd, UART_IOCTL_SET_MODE, mode);
     if (!noflush)
       ioctl(fd, CONSOLE_IOCTL_FLUSH_INPUT, 0);
 
@@ -156,8 +153,8 @@ switch_run(int fd, int count, int baud, int noflush)
     if (!noflush && rs.buffered != 0)
       ok = 0;
 
-    printf("uarttest: switch it=%d rx=%s tx=%s got=%d buffered=%u dropped=%u %s\n",
-           i, rx ? "DMA" : "INT", tx ? "DMA" : "INT", got,
+    printf("uarttest: switch it=%d mode=%s got=%d buffered=%u dropped=%u %s\n",
+           i, mode == UART_MODE_DMA ? "DMA" : "PIO", got,
            rs.buffered, rs.dropped, ok ? "OK" : "FAIL");
     if (!ok)
       break;
@@ -170,7 +167,7 @@ switch_run(int fd, int count, int baud, int noflush)
 }
 
 // ---- loop: board-side self test (short UART1_TX to UART1_RX) ----
-//   uarttest loop [intrx] [inttx]  -- returns 0 on PASS, 1 on FAIL
+//   uarttest loop [pio|dma]  -- returns 0 on PASS, 1 on FAIL
 static int
 loop_run(int fd)
 {
@@ -203,7 +200,7 @@ loop_run(int fd)
 }
 
 // ---- read: dump incoming bytes as hex ----
-//   uarttest read [intrx]
+//   uarttest read [pio|dma]
 static void
 read_run(int fd)
 {
@@ -227,12 +224,12 @@ read_run(int fd)
 }
 
 // ---- write: burst TX test pattern forever ----
-//   uarttest write [inttx]
+//   uarttest write [pio|dma]
 static void
 write_run(int fd, int baud)
 {
   int burst = 0;
-  printf("uarttest: sending test pattern on /dev/uart1 TX at %d baud\n", baud);
+  printf("uarttest: sending test pattern on /dev/ttyS0 TX at %d baud\n", baud);
   for (;;) {
     char msg[64];
     int n = snprintf(msg, sizeof(msg),
@@ -253,8 +250,7 @@ main(int argc, char *argv[])
   int do_loop = 0;
   int do_stress = 0;
   int do_switch = 0;
-  int rx_mode = UART_MODE_DMA;  // driver default; intrx/inttx/dmarx/dmatx override
-  int tx_mode = UART_MODE_DMA;
+  int mode = UART_MODE_DMA;
   int noflush = 0;
   int baud = 115200;
   int nbytes = STRESS_DEFAULT_BYTES;
@@ -273,14 +269,10 @@ main(int argc, char *argv[])
       do_switch = 1;
     else if (is_arg(argv[i], "write"))
       do_read = 0;
-    else if (is_arg(argv[i], "intrx"))
-      rx_mode = UART_MODE_INT;
-    else if (is_arg(argv[i], "inttx"))
-      tx_mode = UART_MODE_INT;
-    else if (is_arg(argv[i], "dmarx"))
-      rx_mode = UART_MODE_DMA;   // no-op: DMA is already the default
-    else if (is_arg(argv[i], "dmatx"))
-      tx_mode = UART_MODE_DMA;
+    else if (is_arg(argv[i], "pio"))
+      mode = UART_MODE_PIO;
+    else if (is_arg(argv[i], "dma"))
+      mode = UART_MODE_DMA;
     else if (is_arg(argv[i], "nofh"))
       noflush = 1;
     else if (nnum < 4)
@@ -301,17 +293,16 @@ main(int argc, char *argv[])
   if (baud < 9600 || baud > 20000000)
     baud = 115200;
 
-  fd = open("/dev/uart1", O_RDWR);
+  fd = open("/dev/ttyS0", O_RDWR);
   if (fd < 0) {
-    printf("uarttest: open /dev/uart1 failed\n");
+    printf("uarttest: open /dev/ttyS0 failed\n");
     exit(1);
   }
-  ioctl(fd, UART_IOCTL_SET_RX_MODE, rx_mode);
-  ioctl(fd, UART_IOCTL_SET_TX_MODE, tx_mode);
+  ioctl(fd, UART_IOCTL_SET_MODE, mode);
   ioctl(fd, CONSOLE_IOCTL_SET_BAUD, baud);
 
-  printf("uarttest: rx=%s tx=%s /dev/uart1 @ %d baud\n",
-         rx_mode ? "DMA" : "INT", tx_mode ? "DMA" : "INT", baud);
+  printf("uarttest: mode=%s /dev/ttyS0 @ %d baud\n",
+         mode == UART_MODE_DMA ? "DMA" : "PIO", baud);
 
   struct console_baud_info bi;
   if (ioctl(fd, CONSOLE_IOCTL_GET_BAUD_INFO, (uint64)&bi) == 0)

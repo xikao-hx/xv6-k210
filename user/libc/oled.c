@@ -347,5 +347,5 @@ OLED_DrawCircle(int X, int Y, int Radius, int IsFilled)
 int
 OLED_Flush(void)
 {
-  return ioctl(oled_fd, OLEDFB_IOCTL_FLUSH, 0);
+  return ioctl(oled_fd, OLEDFB_IOCTL_FLUSH, (uint64)fb);
 }

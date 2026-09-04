@@ -53,8 +53,11 @@ PKT_BAUD = 0x04
 PKT_ACK  = 0x81
 PKT_NAK  = 0x82
 
-ERR_CRC   = 0x01
-ERR_WRITE = 0x02
+ERR_CRC       = 0x01
+ERR_WRITE     = 0x02
+ERR_TRUNCATED = 0x03
+ERR_PROTOCOL  = 0x04
+ERR_IO        = 0x05
 
 ACK_OK = 0x00
 ACK_DUP = 0x01
@@ -92,6 +95,14 @@ def printable_serial(data):
         else:
             text.append(f"\\x{b:02x}")
     return "".join(text)
+
+
+def board_summary(data):
+    text = data.decode("ascii", errors="backslashreplace").replace("\r", "")
+    for line in reversed(text.splitlines()):
+        if line.startswith("burn: "):
+            return line
+    return ""
 
 
 def align_up(value, align):
@@ -366,6 +377,17 @@ def main():
 
     def die(msg, code=1):
         print(msg)
+        # In dual-port mode the protocol runs on data_ser, leaving the console
+        # as a diagnostic side channel.  Drain it before closing the ports so
+        # board-side SPI/UART errors and kernel panic output are not lost.
+        if data_ser is not None and ser is not None:
+            try:
+                tail = read_console_tail(ser)
+                if tail:
+                    print("Board console tail:")
+                    print(printable_serial(tail))
+            except Exception as e:
+                print(f"Failed to read board console tail: {e}")
         for s in (data_ser, ser):
             if s is not None:
                 try:
@@ -390,33 +412,43 @@ def main():
     full_size = len(img_data)
     img_size = full_size
     fat_info = None
+    trim_error = None
     if not args.full_image:
         try:
             img_size, fat_info = fat32_effective_size(img_data)
             img_data = img_data[:img_size]
         except ValueError as e:
-            print(f"FAT32 trim disabled: {e}; sending full image")
+            trim_error = str(e)
 
     nsectors = (img_size + SECTOR_SIZE - 1) // SECTOR_SIZE
-    print(f"Image: {img_path}")
-    print(f"Size: {img_size} bytes ({nsectors} sectors)")
+    trim_note = ""
     if fat_info:
         saved = full_size - img_size
         saved_pct = saved * 100 // full_size if full_size else 0
-        print(
-            "FAT32 trim: "
-            f"full={full_size} bytes, send={img_size} bytes, "
-            f"saved={saved} bytes ({saved_pct}%)")
-        print(
-            "FAT32 layout: "
-            f"data_start={fat_info['data_start_sector']} sectors, "
-            f"spc={fat_info['sectors_per_cluster']}, "
-            f"last_cluster={fat_info['last_cluster']}")
+        trim_note = f", FAT32 trimmed {saved_pct}%"
+        if args.verbose:
+            print(
+                "FAT32: "
+                f"full={full_size}, send={img_size}, "
+                f"data_start={fat_info['data_start_sector']}, "
+                f"spc={fat_info['sectors_per_cluster']}, "
+                f"last_cluster={fat_info['last_cluster']}")
     elif args.full_image:
-        print("FAT32 trim: disabled by --full-image")
-    print(f"Baud: {args.baud}, console={args.console_baud}")
+        trim_note = ", full image"
+    elif trim_error:
+        trim_note = f", full image (trim disabled: {trim_error})"
+
+    print(
+        f"Image: {img_path}, {img_size / (1024 * 1024):.2f} MiB, "
+        f"{nsectors} sectors{trim_note}")
     if args.data_port:
-        print(f"Data port: {args.data_port} (DW UART1, DMA)")
+        print(
+            f"Link: {port} -> {args.data_port} (ttyS0 DMA), "
+            f"{args.console_baud} -> {args.baud} baud")
+    else:
+        print(
+            f"Link: {port} (console), "
+            f"{args.console_baud} -> {args.baud} baud")
 
     if args.dry_run:
         return
@@ -443,10 +475,12 @@ def main():
     burn_idx = 0
     burn_cmd = burn_candidates[burn_idx]
 
-    print(f"Sending '{burn_cmd}' command to board at {args.console_baud} baud...")
+    if args.verbose:
+        print(f"Sending '{burn_cmd}' command at {args.console_baud} baud...")
     send_shell_command(ser, burn_cmd)
 
-    print("Waiting for BURN signal...")
+    if args.verbose:
+        print("Waiting for BURN signal...")
     buf = b""
     retries = 0
     while True:
@@ -477,9 +511,10 @@ def main():
             buf = buf[-256:]
 
     preamble = printable_serial(buf)
-    if preamble:
+    if args.verbose and preamble:
         print(f"Board preamble: {preamble}")
-    print("Board ready, sending image info...")
+    if args.verbose:
+        print("Sending image info...")
 
     # Send INFO on the console: total image size, board-side baud setting, and
     # the runtime data-port selection (0=console, 1=uart1).  The board switches
@@ -506,32 +541,37 @@ def main():
     if type_ != PKT_ACK:
         die(f"Expected ACK, got type 0x{type_:02X}")
     reason, ticks = ack_info(payload)
-    print(f"INFO ACK seq={seq} reason={reason} ticks={ticks}")
-    print("Handshake confirmed success!!!")
+    if args.verbose:
+        print(f"INFO ACK seq={seq} reason={reason} ticks={ticks}")
 
     if args.baud != args.console_baud:
-        print(f"Switching host to {args.baud} baud (board setting {board_baud})...")
-        print(f"  baud step 1: send switch request at {args.console_baud} baud")
+        if args.verbose:
+            print(f"Switching baud {args.console_baud} -> {args.baud}...")
+            print("  Send switch request")
         send_msg(proto, 0, PKT_BAUD, struct.pack('<I', board_baud))
         proto.flush()
         try:
             seq, type_, payload = recv_msg(proto, timeout=2, context="BAUD READY")
             if type_ == PKT_ACK:
                 reason, ticks = ack_info(payload)
-                print(f"  BAUD READY seq={seq} reason={reason} target={ticks}")
-            else:
+                if args.verbose:
+                    print(f"  BAUD READY seq={seq} reason={reason} target={ticks}")
+            elif args.verbose:
                 print(f"  Expected BAUD READY ACK, got {pkt_name(type_)}")
         except (TimeoutError, ValueError) as e:
-            print(f"  BAUD READY not received at {args.console_baud}: {e}")
+            if args.verbose:
+                print(f"  BAUD READY not received: {e}")
 
-        print(f"  baud step 2: switch host port to {args.baud} baud")
+        if args.verbose:
+            print(f"  Switch host port to {args.baud}")
         time.sleep(0.05)
         proto.baudrate = args.baud
         time.sleep(0.10)
         proto.reset_input_buffer()
         baud_synced = False
         for sync_try in range(3):
-            print(f"  baud step 3.{sync_try + 1}: send sync at {args.baud} baud")
+            if args.verbose:
+                print(f"  Send sync attempt {sync_try + 1}")
             send_msg(proto, 0, PKT_BAUD, struct.pack('<I', board_baud))
             try:
                 seq, type_, payload = recv_msg(
@@ -539,16 +579,19 @@ def main():
                     context=f"BAUD ACK attempt={sync_try + 1}")
             except (TimeoutError, ValueError) as e:
                 if sync_try == 2:
-                    print(f"BAUD ACK not received: {e}")
+                    if args.verbose:
+                        print(f"BAUD ACK not received: {e}")
                 continue
 
             if type_ == PKT_ACK:
                 reason, ticks = ack_info(payload)
-                print(f"BAUD ACK seq={seq} reason={reason} actual={ticks}")
+                if args.verbose:
+                    print(f"BAUD ACK seq={seq} reason={reason} actual={ticks}")
                 baud_synced = True
                 break
 
-            print(f"Expected BAUD ACK, got {pkt_name(type_)}")
+            if args.verbose:
+                print(f"Expected BAUD ACK, got {pkt_name(type_)}")
             break
 
         if not baud_synced:
@@ -558,15 +601,22 @@ def main():
                 "host could not decode the board's BAUD ACK.\n"
                 "  Reset the board; use --baud 230400 for the verified fast path.")
 
+    print("Board ready, transferring...")
+
     # Phase 2: data transfer at the negotiated baud.
     data_start = time.monotonic()
     retries_total = 0
     timeout_errors = 0
-    crc_errors = 0
-    nak_count = 0
+    host_crc_errors = 0
+    nak_errors = {
+        ERR_CRC: 0,
+        ERR_WRITE: 0,
+        ERR_TRUNCATED: 0,
+        ERR_PROTOCOL: 0,
+        ERR_IO: 0,
+    }
     stale_count = 0
     ack_dup_count = 0
-    sd_ticks_total = 0
     sd_ticks_max = 0
     for sec in range(nsectors):
         offset = sec * 512
@@ -577,7 +627,7 @@ def main():
         for attempt in range(MAX_RETRY + 1):
             if attempt > 0:
                 retries_total += 1
-            trace = args.verbose or attempt > 0
+            trace = args.verbose
             if trace:
                 print(f"\n  sec={sec} attempt={attempt + 1}: send DATA len={len(chunk)}")
             send_msg(proto, sec, PKT_DATA, chunk)
@@ -593,7 +643,7 @@ def main():
                     continue
                 die("  Max retries reached, aborting")
             except ValueError as e:
-                crc_errors += 1
+                host_crc_errors += 1
                 print(f"\n  sec={sec} attempt={attempt + 1} failed: {e}")
                 if attempt < MAX_RETRY:
                     continue
@@ -618,14 +668,20 @@ def main():
                 if reason == "DUP":
                     ack_dup_count += 1
                 else:
-                    sd_ticks_total += ticks
                     sd_ticks_max = max(sd_ticks_max, ticks)
                 break  # sector written successfully
             elif type_ == PKT_NAK:
-                nak_count += 1
                 err_code = payload[0] if payload else 0
-                err_name = {ERR_CRC: "CRC", ERR_WRITE: "WRITE"}.get(err_code, f"0x{err_code:02X}")
-                print(f"\n  NAK (seq={seq}, error={err_name}), retry {attempt + 1}/{MAX_RETRY}")
+                nak_errors[err_code] = nak_errors.get(err_code, 0) + 1
+                err_name = {
+                    ERR_CRC: "CRC",
+                    ERR_WRITE: "WRITE",
+                    ERR_TRUNCATED: "TRUNCATED",
+                    ERR_PROTOCOL: "PROTOCOL",
+                    ERR_IO: "IO",
+                }.get(err_code, f"0x{err_code:02X}")
+                if args.verbose or attempt >= MAX_RETRY:
+                    print(f"\n  NAK (seq={seq}, error={err_name}), retry {attempt + 1}/{MAX_RETRY}")
                 if attempt >= MAX_RETRY:
                     die("  Max retries reached, aborting")
             else:
@@ -635,7 +691,9 @@ def main():
 
         # Progress
         pct = (sec + 1) * 100 // nsectors
-        sys.stdout.write(f"\r  Sector {sec + 1}/{nsectors} ({pct}%)")
+        sys.stdout.write(
+            f"\r  Sector {sec + 1}/{nsectors} ({pct}%) "
+            f"retries={retries_total} crc_nak={nak_errors[ERR_CRC]}")
         sys.stdout.flush()
 
     print()
@@ -648,19 +706,31 @@ def main():
         seq, type_, payload = recv_msg(proto, timeout=5)
         if type_ == PKT_ACK:
             reason, ticks = ack_info(payload)
-            print(f"Transfer completed successfully! ACK reason={reason} ticks={ticks}")
+            if args.verbose:
+                print(f"DONE ACK seq={seq} reason={reason} ticks={ticks}")
         else:
             print(f"Unexpected response to DONE: type 0x{type_:02X}")
     except (TimeoutError, ValueError) as e:
         print(f"DONE response error: {e}")
 
+    nak_names = {
+        ERR_CRC: "crc",
+        ERR_WRITE: "write",
+        ERR_TRUNCATED: "truncated",
+        ERR_PROTOCOL: "protocol",
+        ERR_IO: "io",
+    }
+    nak_summary = ",".join(
+        f"{nak_names.get(code, f'0x{code:02x}')}:{count}"
+        for code, count in nak_errors.items() if count
+    ) or "none"
     print(
-        "Transfer stats: "
-        f"elapsed={data_elapsed:.2f}s, throughput={kib_per_sec:.1f} KiB/s, "
-        f"retries={retries_total}, timeouts={timeout_errors}, "
-        f"crc_errors={crc_errors}, naks={nak_count}, stale={stale_count}, "
-        f"ack_dup={ack_dup_count}, sd_ticks_total={sd_ticks_total}, "
-        f"sd_ticks_max={sd_ticks_max}")
+        f"Done: {nsectors} sectors, {img_size / (1024 * 1024):.2f} MiB, "
+        f"{data_elapsed:.2f}s, {kib_per_sec:.1f} KiB/s")
+    print(
+        f"Link: retries={retries_total} nak={{{nak_summary}}} "
+        f"timeout={timeout_errors} host_crc={host_crc_errors} "
+        f"stale={stale_count} dup={ack_dup_count} sd_max={sd_ticks_max}t")
 
     if args.baud != args.console_baud:
         proto.baudrate = args.console_baud
@@ -668,8 +738,13 @@ def main():
 
     tail = read_console_tail(ser)
     if tail:
-        print("Board console tail:")
-        print(printable_serial(tail))
+        if args.verbose:
+            print("Board console tail:")
+            print(printable_serial(tail))
+        elif retries_total or timeout_errors or host_crc_errors or stale_count:
+            summary = board_summary(tail)
+            if summary:
+                print(f"Board: {summary}")
 
     if data_ser is not None:
         data_ser.close()

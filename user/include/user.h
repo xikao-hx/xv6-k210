@@ -1,4 +1,5 @@
 #include "signal.h"
+#include <stdarg.h>
 
 struct stat;
 struct rtcdate;
@@ -51,6 +52,7 @@ int strcmp(const char*, const char*);
 void fprintf(int, const char*, ...);
 void printf(const char*, ...);
 int snprintf(char*, int, const char*, ...);
+int vsnprintf(char *buf, int n, const char *fmt, va_list ap);
 char* gets(char*, int max);
 uint strlen(const char*);
 void* memset(void*, int, uint);

@@ -1,13 +1,6 @@
-// Step 3+4: DinoGame — pure-integer port of game/DinoGame.c (FreeRTOS ref).
+// DinoGame — pure-integer port of game/DinoGame.c (FreeRTOS ref).
 //
 //   dino
-//
-// Platform swaps vs the reference:
-//   acos() angle   -> integer tilt threshold on AccX   (see sample_tilt)
-//   rand()         -> LCG
-//   nanosleep()    -> sleep(ticks)        (K210: 5 ms/tick)
-//   pthread sampler-> forked child sharing the tilt value via a MAP_SHARED page
-//   /dev/mpu6050   -> user/libc/mpu6050.c library
 //
 // Process layout:
 //   child  : opens /dev/mpu6050, samples AccX every 10 ms -> *tilt_state.
@@ -15,9 +8,6 @@
 //            parent's SIGINT handler clears the screen, prints a goodbye and
 //            exits; the child is in the same pgroup and dies from its default
 //            SIGINT action, so no quit flag is needed.
-//
-// Pure integer: objdump must show no FPU instructions (K210 FPU context is
-// not saved/restored by xv6).
 //
 // Controls (user-confirmed): tilt forward to jump, tilt forward on GAME OVER
 // to restart, Ctrl+C to quit.
@@ -128,8 +118,7 @@ parameter_reset(void)
 }
 
 /* Ctrl+C: parent clears the screen, shows a goodbye on the OLED, exits.
-   The child in the same pgroup dies from its default SIGINT action -- it
-   only samples I2C, so nothing to clean up there. */
+   The child in the same pgroup dies from its default SIGINT action */
 static void
 on_sigint(int sig)
 {
@@ -220,7 +209,7 @@ main(void)
 
       if (Score > Highest_Score)
         Highest_Score = Score;
-      parameter_reset();
+      parameter_reset();   // Failed to reset to zero.
       continue;
     }
 
@@ -349,14 +338,10 @@ main(void)
 
     OLED_Flush();
 
-    /* frame pacing: (30-Game_Speed)/12 ticks ≈ 10 ms early, ~5 ms late.
-       The full-screen FLUSH (~24 ms) is the real per-frame cost; a smaller
-       sleep gains nothing until Step 5 does dirty-page refresh. */
-    {
-      int ticks = (30 - Game_Speed) / 12;
-      if (ticks < 1)
-        ticks = 1;
-      sleep(ticks);
-    }
+    /* frame pacing: (30-Game_Speed)/12 ticks ≈ 10 ms early, ~5 ms late. */
+    int ticks = (30 - Game_Speed) / 12;
+    if (ticks < 1)
+      ticks = 1;
+    sleep(ticks);
   }
 }
