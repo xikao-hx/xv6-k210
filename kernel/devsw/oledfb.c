@@ -1,21 +1,9 @@
-// /dev/oledfb - mmap-able SSD1306 (128x64, 1bpp) framebuffer device.
-//
-// Modeled after kbufdev/eagerdev: the backing buffer is a struct kbuf (one
-// page for the 1024-byte page-format fb), so the VMA reuses the generic
-// kbufdev fault handler from mmap.c and eager vma_populate() - no driver
-// fault handler is needed.  Differences from kbufdev:
-//   - open() initializes the SSD1306 and clears the panel,
-//   - an ioctl pushes the whole framebuffer to the panel over I2C.
-//
-// The device layer stays thin: no rendering.  User space draws into the
-// mapped page, then calls OLEDFB_IOCTL_FLUSH.
 #include "oledfb.h"
 
 #include "dev.h"
 #include "fcntl.h"
 #include "file.h"
 #include "kalloc.h"
-#include "kbuf.h"
 #include "mmap.h"
 #include "param.h"
 #include "printf.h"
@@ -37,7 +25,6 @@
 
 struct oledfb {
   struct sleeplock lock;
-  struct kbuf *kbuf;      // one kbuf page holding the fb; fb[page*128+col]
   uint8 flush_buf[OLEDFB_FB_SIZE];  // staging for the 1024-byte DMA msg: {0x40, fb[0..1022]}
 };
 
@@ -98,7 +85,7 @@ oledfb_init(void)
 // covers all 8 pages.  The data is split into a 1024-byte DMA message
 // ({0x40, fb[0..1022]}) plus a 2-byte polling tail ({0x40, fb[1023]})
 static int
-oledfb_flush(struct oledfb *of)
+oledfb_flush(struct oledfb *of, uint8 *fb)
 {
   struct i2c_device *dev = i2c_device_get(I2C_DEV_OLED);
   struct i2c_msg msgs[3];
@@ -106,12 +93,10 @@ oledfb_flush(struct oledfb *of)
   // {ctrl, set-col-addr, start, end, set-page-addr, start, end}
   uint8 cursor[7] = {OLED_CTRL_CMD, 0x21, 0x00, 0x7F, 0x22, 0x00, 0x07};
   uint8 tail[2] = {OLED_CTRL_DAT, 0};   // {ctrl-data, last fb byte}
-  uint8 *fb;
   int ret;
 
   if(dev == 0)
     return -1;
-  fb = kbuf_page_address(of->kbuf, 0);
   if(fb == 0)
     return -1;
 
@@ -153,14 +138,7 @@ oledfb_open(struct file *file)
   memset(of, 0, sizeof(*of));
   initsleeplock(&of->lock, "oledfb");
 
-  of->kbuf = kbuf_create(OLEDFB_FB_SIZE);
-  if(of->kbuf == 0) {
-    kfree(of);
-    return -1;
-  }
-
   oledfb_init();
-  oledfb_flush(of);   /* clear */
 
   file->private_data = of;
   return 0;
@@ -172,7 +150,6 @@ oledfb_close(struct file *file)
   struct oledfb *of = file->private_data;
 
   if(of) {
-    kbuf_put(of->kbuf);
     kfree(of);
     file->private_data = 0;
   }
@@ -182,20 +159,13 @@ oledfb_close(struct file *file)
 static int
 oledfb_mmap(struct file *file, struct vma_area *vma, uint64 offset)
 {
-  struct oledfb *of = file->private_data;
   uint64 length = vma->valid_end - vma->start;
-  struct proc *p = myproc();
 
-  if(of == 0 || vma->flags != MAP_SHARED || (vma->prot & PROT_EXEC))
+  (void)file;
+  if(offset != 0 || length != OLEDFB_FB_SIZE ||
+     vma->flags != MAP_SHARED || (vma->prot & PROT_EXEC))
     return -1;
-  if((offset % PGSIZE) != 0 || length == 0 ||
-     offset + length < offset || offset + length > OLEDFB_FB_SIZE)
-    return -1;
-  vma->data = of->kbuf;
-  if(vma_populate(p, vma) < 0){
-    printf("oledfb: vma_populate failed\n");
-    return -1;
-  }
+  vma->populate = 1;
   return 0;
 }
 
@@ -203,15 +173,18 @@ static int
 oledfb_ioctl(struct file *file, uint64 cmd, uint64 arg)
 {
   struct oledfb *of = file->private_data;
+  uint8 *fb;
   int ret;
 
-  (void)arg;
   if(of == 0)
     return -1;
   switch(cmd) {
   case OLEDFB_IOCTL_FLUSH:
+    fb = vma_device_page_address(myproc(), file, arg, 0);
+    if(fb == 0)
+      return -1;
     acquiresleep(&of->lock);
-    ret = oledfb_flush(of);
+    ret = oledfb_flush(of, fb);
     releasesleep(&of->lock);
     return ret;
   default:

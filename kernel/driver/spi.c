@@ -517,11 +517,12 @@ static bool spi_can_dma(struct spi_dw_data *spi_data, struct spi_transfer *trans
        frame_width != SPI_TRANS_INT)
         return false;
 
+    /* The buffer length must contain complete SPI frames. */
+    if (transfer->len % frame_width)
+        return false;
+    
     dma_unit = SPI_DMA_WML * frame_width;
     if(transfer->len < dma_unit)
-        return false;
-
-    if(transfer->len % dma_unit)
         return false;
 
     frames = transfer->len / frame_width;

@@ -66,8 +66,10 @@ OBJS = \
   $K/vm/kalloc.o \
   $K/vm/vm.o \
   $K/vm/vmcopyin.o \
-  $K/vm/mmap.o \
-  $K/vm/kbuf.o \
+  $K/vm/mmap/mmap.o \
+  $K/vm/mmap/mmap_file.o \
+  $K/vm/mmap/mmap_anon.o \
+  $K/vm/mmap/mmap_kbuf.o \
   $K/proc/swtch.o \
   $K/trap/trap.o \
   $K/trap/irq.o \

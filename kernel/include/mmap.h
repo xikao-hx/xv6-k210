@@ -10,6 +10,7 @@
 #define MMAP_TOP USER_STACK_BOTTOM
 
 struct file;
+struct kbuf;
 struct proc;
 struct anon_object;
 struct vma_area;
@@ -40,17 +41,7 @@ struct mmap_object {
   enum vma_type type;
   struct file *file;
   struct anon_object *anon;
-};
-
-struct anon_page {
-  uint64 index;
-  uint64 pa;
-  struct anon_page *next;
-};
-
-struct anon_object {
-  struct spinlock lock;
-  struct anon_page *pages;
+  struct kbuf *kbuf;
 };
 
 struct vma_area {
@@ -62,10 +53,12 @@ struct vma_area {
   uint64 offset;
   int prot;
   int flags;
+  int populate;
   struct mmap_object *object;
   const struct vma_ops *ops;  // backing fault handler; installed by core mm by type
-  void *data;                 // driver-private data handed to ops->fault
 };
+
+void *vma_device_page_address(struct proc *, struct file *, uint64, uint64);
 
 uint64 vma_map_file(struct proc *, uint64, uint64, int, int,
                     struct file *, uint64);
@@ -74,7 +67,6 @@ uint64 vma_map_device(struct proc *, uint64, uint64, int, int,
                       struct file *, uint64);
 int vma_unmap(struct proc *, uint64, uint64);
 int vm_fault(struct proc *, uint64, int);
-int vma_populate(struct proc *, struct vma_area *);
 int vma_fork(struct proc *, struct proc *);
 void vma_destroy_all(struct proc *);
 uint64 vma_heap_limit(struct proc *);

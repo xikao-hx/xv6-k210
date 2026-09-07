@@ -613,6 +613,7 @@ kbuf_device_test(void)
 {
   char *bad;
   char *p;
+  char *alias;
   int fd;
   int rofd;
   int pid;
@@ -666,7 +667,19 @@ kbuf_device_test(void)
       err("kbuf user write via mmap");
   }
 
+  alias = mmap(0, PGSIZE, PROT_READ | PROT_WRITE,
+               MAP_SHARED, fd, PGSIZE);
+  if(alias == MAP_FAILED)
+    err("kbuf second mmap");
+  if((uchar)alias[64] != 0)
+    err("kbuf mmap object isolation");
+  alias[65] = 0x5a;
+  if((uchar)p[PGSIZE + 65] != 0x36)
+    err("kbuf mmap reverse isolation");
+
   close(fd);
+  if(munmap(alias, PGSIZE) < 0)
+    err("kbuf second munmap");
   if((uchar)p[PGSIZE + 64] != 0x36)
     err("kbuf mapping after close");
   pid = fork();
@@ -691,6 +704,7 @@ eager_device_test(void)
 {
   char *bad;
   char *p;
+  char *alias;
   int fd;
   int rofd;
   int pid;
@@ -741,7 +755,19 @@ eager_device_test(void)
       err("eager full-buffer access");
   }
 
+  alias = mmap(0, PGSIZE, PROT_READ | PROT_WRITE,
+               MAP_SHARED, fd, PGSIZE);
+  if(alias == MAP_FAILED)
+    err("eager second mmap");
+  if((uchar)alias[64] != 0)
+    err("eager mmap object isolation");
+  alias[65] = 0x5a;
+  if((uchar)p[PGSIZE + 65] != (uchar)(PGSIZE + 65))
+    err("eager mmap reverse isolation");
+
   close(fd);
+  if(munmap(alias, PGSIZE) < 0)
+    err("eager second munmap");
   if((uchar)p[PGSIZE + 64] != (uchar)(PGSIZE + 64))
     err("eager mapping after close");
 

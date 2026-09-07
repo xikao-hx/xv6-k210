@@ -65,10 +65,8 @@ fileopen(struct file *f) {
   f->ops = dev->ops;
   if (!f->ops)
     return -1;
-  if (f->ops->open)
-    return f->ops->open(f);
-
-  return 0;
+  f->private_data = 0;
+  return f->ops->open ? f->ops->open(f) : 0;
 }
 
 // Close file f.  (Decrement ref count, close when reaches 0.)
@@ -96,7 +94,7 @@ fileclose(struct file *f)
   } else if(ff.type == FD_DEVICE){
     if (!ff.ops)
       return -1;
-    if (ff.ops->close)
+    if(ff.ops->close)
       return ff.ops->close(&ff);
   }
 

@@ -17,8 +17,7 @@ struct file_operations {
   int (*close)(struct file *);
   int (*read)(struct file *, uint64, int);
   int (*write)(struct file *, uint64, int);
-  // Configure a freshly created device VMA (set vma->ops and vma->data).
-  // Called by the mmap VM after the VMA/object exist; Linux f_op->mmap shape.
+  // Validate/configure a device VMA; the VM core owns its backing object.
   int (*mmap)(struct file *, struct vma_area *, uint64);
   int (*ioctl)(struct file *, uint64, uint64);
 };
