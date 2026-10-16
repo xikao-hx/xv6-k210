@@ -145,6 +145,8 @@ struct proc {
   int sig_term;                // Signal responsible for final termination
   int interruptible_sleep;     // Ordinary signals may wake this sleep
   struct trapframe sig_saved_trapframe;
+  int copy_fault_active;       // kernel-mode user access is in progress
+  uint64 copy_fault_recovery;  // recovery PC for an unrecoverable user fault
 };
 
 int             cpuid(void);

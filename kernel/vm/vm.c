@@ -695,49 +695,36 @@ uvmclear(pagetable_t pagetable, uint64 va)
   *pte &= ~PTE_U;
 }
 
-// Copy from kernel to user.
-// Copy len bytes from src to virtual address dstva in a given page table.
-// Return 0 on success, -1 on error.
 int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
-  uint64 n, va0, pa0;
   struct proc *p = myproc();
-  pte_t *pte;
+
+  (void)pagetable;
 
   if(dstva >= MAXUVA || len > MAXUVA - dstva)
     return -1;
 
-  while(len > 0){
-    va0 = PGROUNDDOWN(dstva);
-    pte = walk(pagetable, va0, 0);
-    if((pte == 0 || !(*pte & PTE_V)) && pagetable == p->pagetable){
-      if(faultin_page(p, pagetable, va0, VM_FAULT_WRITE) < 0)
-        return -1;
-      pte = walk(pagetable, va0, 0);
-    }
+  uint64 end = dstva + len;
+  p->copy_fault_active = 1;
+  p->copy_fault_recovery = (uint64)&&copy_fault;
 
-    if (uvmcowpage(pagetable, va0) == 0) {
-      pa0 = (uint64)uvmcowmalloc(pagetable, va0);
-      pte = walk(pagetable, va0, 0);
-    } else {
-      pa0 = pte && (*pte & PTE_V) ? PTE2PA(*pte) : 0;
-    }
-
-    if(pa0 == 0 || pte == 0 ||
-       (*pte & (PTE_V | PTE_U | PTE_W)) != (PTE_V | PTE_U | PTE_W))
-      return -1;
-
-    n = PGSIZE - (dstva - va0);
-    if(n > len)
-      n = len;
-    memmove((void *)(pa0 + (dstva - va0)), src, n);
-
-    len -= n;
-    src += n;
-    dstva = va0 + PGSIZE;
+  while(dstva < end){
+    uint64 n = PGSIZE - (dstva & (PGSIZE - 1));
+    if(n > end - dstva)
+      n = end - dstva;
+    while(n-- > 0)
+      *(volatile uchar *)dstva++ = *(uchar *)src++;
   }
+
+  p->copy_fault_active = 0;
+  p->copy_fault_recovery = 0;
   return 0;
+
+copy_fault:
+  p->copy_fault_active = 0;
+  p->copy_fault_recovery = 0;
+  return -1;
 }
 
 // Copy from user to kernel.

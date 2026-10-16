@@ -42,8 +42,10 @@ exec(char *path, char **argv)
   struct proghdr ph;
   pagetable_t pagetable = 0, oldpagetable;
   struct dirent *ep;
+  int kpagetable_staged = 0;
 
   struct proc *p = myproc();
+  uint64 old_sz = p->sz;
 
   sz = 0;
   if((ep = ename(path)) == 0){
@@ -88,6 +90,18 @@ exec(char *path, char **argv)
   sz = PGROUNDUP(sz);
   if(uvm_stack_init(pagetable) < 0)
     goto bad;
+
+  // Install the new user mappings in the current kernel page table before
+  // copying argv.  The process still points at the old user page table; this
+  // is restored below if exec fails.
+  uvmunmap(p->kpagetable, 0, PGROUNDUP(old_sz) / PGSIZE, 0);
+  uvm_stack_unmap(p->kpagetable, 0);
+  if(upg2ukpg(pagetable, p->kpagetable, 0, sz) < 0)
+    panic("exec: stage user pages");
+  uvm_stack_sync(pagetable, p->kpagetable);
+  sfence_vma();
+  kpagetable_staged = 1;
+
   sp = USER_STACK_TOP;
   stackbase = sp - PGSIZE;
 
@@ -121,7 +135,6 @@ exec(char *path, char **argv)
 
   // Save process state
   oldpagetable = p->pagetable;
-  uint64 old_sz = p->sz;
   p->pagetable = pagetable;
   p->sz = sz;
   p->trapframe->epc = elf.entry;
@@ -133,15 +146,6 @@ exec(char *path, char **argv)
   }
   safestrcpy(p->name, last, sizeof(p->name));
 
-  // Update kpagetable for the new user address space.
-  // Unmap old user mappings, then copy new ones from the new pagetable.
-  uvmunmap(p->kpagetable, 0, PGROUNDUP(old_sz) / PGSIZE, 0);
-  uvm_stack_unmap(p->kpagetable, 0);
-  if(upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz) < 0)
-    panic("exec: upg2ukpg");
-  uvm_stack_sync(p->pagetable, p->kpagetable);
-  sfence_vma();
-
   proc_freepagetable(oldpagetable, old_sz);
   signal_reset_on_exec(p);
   
@@ -150,7 +154,15 @@ exec(char *path, char **argv)
 
   return argc;
 
- bad:
+bad:
+  if(kpagetable_staged){
+    uvmunmap(p->kpagetable, 0, PGROUNDUP(sz) / PGSIZE, 0);
+    uvm_stack_unmap(p->kpagetable, 0);
+    if(upg2ukpg(p->pagetable, p->kpagetable, 0, old_sz) < 0)
+      panic("exec: restore user pages");
+    uvm_stack_sync(p->pagetable, p->kpagetable);
+    sfence_vma();
+  }
   if(pagetable)
     proc_freepagetable(pagetable, sz);
   if(ep){

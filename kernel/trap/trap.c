@@ -166,24 +166,48 @@ usertrapret(void)
 
 // interrupts and exceptions from kernel code go here via kernelvec,
 // on whatever the current kernel stack is.
-void 
-kerneltrap()
+void
+kerneltrap(uint64 *regs)
 {
   int which_dev = 0;
   uint64 sepc = r_sepc();
   uint64 sstatus = r_sstatus();
   uint64 scause = r_scause();
+  struct proc *p = myproc();
   
   if((sstatus & SSTATUS_SPP) == 0)
     panic("kerneltrap: not from supervisor mode");
   if(intr_get() != 0)
     panic("kerneltrap: interrupts enabled");
 
+  if(scause == 13 || scause == 15) {
+    if(p != 0 && p->copy_fault_active) {
+      int access = scause == 15 ? VM_FAULT_WRITE : VM_FAULT_READ;
+
+      uint64 va = PGROUNDDOWN(r_stval());
+      if(faultin_page(p, p->pagetable, va, access) == 0) {
+        // faultin_page() may find an already-present user PTE.  The
+        // kernel PTE can still be stale when the access faulted there.
+        if(upg2ukpg(p->pagetable, p->kpagetable, va, va + PGSIZE) < 0)
+          panic("kerneltrap: sync user page");
+        sfence_vma();
+        goto handled;
+      }
+
+      // The fault is not a valid user access.  Leave the copy routine
+      // through its local recovery label instead of retrying the fault.
+      sepc = p->copy_fault_recovery;
+      goto handled;
+    }
+  }
+
   if((which_dev = devintr()) == 0){
     printf("scause %p\n", scause);
     printf("sepc=%p stval=%p\n", r_sepc(), r_stval());
     panic("kerneltrap");
   }
+
+handled:
 
   // The idle scheduler has no process lock or device lock held.
   if(myproc() == 0)

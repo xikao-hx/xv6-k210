@@ -27,37 +27,35 @@ int
 copyin_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
   struct proc *p = myproc();
+  uint64 end;
   uint64 n;
-  uint64 va0;
-  uint64 pa0;
-  pte_t *pte;
+
+  (void)pagetable;
 
   if(srcva >= MAXUVA || len > MAXUVA - srcva)
     return -1;
-  
-  while(len > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pte = walk(pagetable, va0, 0);
-    if((pte == 0 || !(*pte & PTE_V)) && pagetable == p->pagetable){
-      if(faultin_page(p, pagetable, va0, VM_FAULT_READ) < 0)
-        return -1;
-      pte = walk(pagetable, va0, 0);
-    }
-    if(pte == 0 ||
-       (*pte & (PTE_V | PTE_U | PTE_R)) != (PTE_V | PTE_U | PTE_R))
-      return -1;
-    pa0 = PTE2PA(*pte);
-    n = PGSIZE - (srcva - va0);
-    if(n > len)
-      n = len;
-    memmove(dst, (void *)(pa0 + (srcva - va0)), n);
-    len -= n;
-    dst += n;
-    srcva = va0 + PGSIZE;
+
+  end = srcva + len;
+  p->copy_fault_active = 1;
+  p->copy_fault_recovery = (uint64)&&copy_fault;
+
+  while(srcva < end){
+    n = PGSIZE - (srcva & (PGSIZE - 1));
+    if(n > end - srcva)
+      n = end - srcva;
+    while(n-- > 0)
+      *dst++ = *(volatile uchar *)srcva++;
   }
 
+  p->copy_fault_active = 0;
+  p->copy_fault_recovery = 0;
   stats.ncopyin++;   // XXX lock
   return 0;
+
+copy_fault:
+  p->copy_fault_active = 0;
+  p->copy_fault_recovery = 0;
+  return -1;
 }
 
 // Copy a null-terminated string from user to kernel.
@@ -68,45 +66,38 @@ int
 copyinstr_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
   struct proc *p = myproc();
-  uint64 va0;
-  uint64 pa0;
   uint64 n;
-  pte_t *pte;
-  
+
+  (void)pagetable;
+
   if(srcva >= MAXUVA)
     return -1;
 
   stats.ncopyinstr++;   // XXX lock
+  p->copy_fault_active = 1;
+  p->copy_fault_recovery = (uint64)&&copy_fault;
+
   while(max > 0) {
     if(srcva >= MAXUVA)
-      return -1;
-    va0 = PGROUNDDOWN(srcva);
-    pte = walk(pagetable, va0, 0);
-    if((pte == 0 || !(*pte & PTE_V)) && pagetable == p->pagetable){
-      if(faultin_page(p, pagetable, va0, VM_FAULT_READ) < 0)
-        return -1;
-      pte = walk(pagetable, va0, 0);
-    }
-    if(pte == 0 ||
-       (*pte & (PTE_V | PTE_U | PTE_R)) != (PTE_V | PTE_U | PTE_R))
-      return -1;
-    pa0 = PTE2PA(*pte);
-    n = PGSIZE - (srcva - va0);
+      goto copy_fault;
+    n = PGSIZE - (srcva & (PGSIZE - 1));
     if(n > max)
       n = max;
-    if(n > MAXUVA - srcva)
-      n = MAXUVA - srcva;
-    char *src = (char *)(pa0 + (srcva - va0));
-    while(n > 0){
-      if(*src == '\0'){
+    while(n-- > 0){
+      uchar c = *(volatile uchar *)srcva++;
+      if(c == '\0'){
         *dst = '\0';
+        p->copy_fault_active = 0;
+        p->copy_fault_recovery = 0;
         return 0;
       }
-      *dst++ = *src++;
-      srcva++;
+      *dst++ = c;
       max--;
-      n--;
     }
   }
+
+copy_fault:
+  p->copy_fault_active = 0;
+  p->copy_fault_recovery = 0;
   return -1;
 }
