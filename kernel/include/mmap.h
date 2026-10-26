@@ -29,12 +29,6 @@ enum vma_type {
   VMA_KBUF,
 };
 
-enum vm_fault_access {
-  VM_FAULT_READ,
-  VM_FAULT_WRITE,
-  VM_FAULT_EXEC,
-};
-
 struct mmap_object {
   struct spinlock lock;
   int refcnt;
@@ -66,7 +60,9 @@ uint64 vma_map_anon(struct proc *, uint64, uint64, int, int);
 uint64 vma_map_device(struct proc *, uint64, uint64, int, int,
                       struct file *, uint64);
 int vma_unmap(struct proc *, uint64, uint64);
-int vm_fault(struct proc *, uint64, int);
+struct vma_area *mmap_vma_find(struct proc *, uint64);
+int mmap_access_allowed(struct vma_area *, int);
+int mmap_fault_page(struct proc *, struct vma_area *, uint64, int);
 int vma_fork(struct proc *, struct proc *);
 void vma_destroy_all(struct proc *);
 uint64 vma_heap_limit(struct proc *);

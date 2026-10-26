@@ -80,19 +80,33 @@ void test1(void)
 int
 countfree()
 {
-  uint64 sz0 = (uint64)sbrk(0);
+  int fds[2];
+  int pid;
   int n = 0;
 
-  while(1){
-    uint64 a = (uint64) sbrk(4096);
-    if(a == 0xffffffffffffffff){
-      break;
-    }
-    // modify the memory to make sure it's really allocated.
-    *(char *)(a + 4096 - 1) = 1;
-    n += 1;
+  if(pipe(fds) < 0 || (pid = fork()) < 0){
+    printf("countfree: fork failed\n");
+    exit(-1);
   }
-  sbrk(-((uint64)sbrk(0) - sz0));
+  if(pid == 0){
+    close(fds[0]);
+    while(1){
+      uint64 a = (uint64)sbrk(PGSIZE);
+      if(a == 0xffffffffffffffffL)
+        break;
+      *(volatile char *)(a + PGSIZE - 1) = 1;
+      n++;
+      if(write(fds[1], &n, sizeof(n)) != sizeof(n))
+        exit(-1);
+    }
+    exit(0);
+  }
+
+  close(fds[1]);
+  while(read(fds[0], &pid, sizeof(pid)) == sizeof(pid))
+    n = pid;
+  close(fds[0]);
+  wait(0);
   return n;
 }
 

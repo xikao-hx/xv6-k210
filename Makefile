@@ -65,6 +65,7 @@ OBJS = \
   $K/vm/kmalloc.o \
   $K/vm/kalloc.o \
   $K/vm/vm.o \
+  $K/vm/vmfault.o \
   $K/vm/vmcopyin.o \
   $K/vm/mmap/mmap.o \
   $K/vm/mmap/mmap_file.o \

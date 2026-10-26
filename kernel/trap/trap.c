@@ -22,6 +22,20 @@ void kernelvec();
 
 extern int devintr();
 
+static int
+trap_fault_access(uint64 scause, int *access)
+{
+  if(scause == 12)
+    *access = VM_FAULT_EXEC;
+  else if(scause == 13)
+    *access = VM_FAULT_READ;
+  else if(scause == 15)
+    *access = VM_FAULT_WRITE;
+  else
+    return -1;
+  return 0;
+}
+
 void
 trapinit(void)
 {
@@ -49,6 +63,8 @@ void
 usertrap(void)
 {
   int which_dev = 0;
+  int fault_access;
+  uint64 scause = r_scause();
 
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
@@ -62,7 +78,7 @@ usertrap(void)
   // save user program counter.
   p->trapframe->epc = r_sepc();
   
-  if(r_scause() == 8){
+  if(scause == 8){
     // system call
 
     if(p->killed)
@@ -79,22 +95,8 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok 
-  } else if(r_scause() == 1 || r_scause() == 5 || r_scause() == 7 ||
-            r_scause() == 12 || r_scause() == 13 || r_scause() == 15) {
-
-    uint64 va = r_stval();
-    pagetable_t pagetable = p->pagetable;
-    uint64 cause = r_scause();
-    int access;
-
-    if(cause == 1 || cause == 12)
-      access = VM_FAULT_EXEC;
-    else if(cause == 5 || cause == 13)
-      access = VM_FAULT_READ;
-    else
-      access = VM_FAULT_WRITE;
-    
-    if(faultin_page(p, pagetable, PGROUNDDOWN(va), access) < 0) {
+  } else if(trap_fault_access(scause, &fault_access) == 0) {
+    if(vm_resolve_fault(p, p->pagetable, r_stval(), fault_access) < 0) {
       printf("usertrap(): page fault is illegal pid=%d sepc=%p stval=%p\n",
              p->pid, r_sepc(), r_stval());
       p->killed = 1;
@@ -174,23 +176,18 @@ kerneltrap(uint64 *regs)
   uint64 sstatus = r_sstatus();
   uint64 scause = r_scause();
   struct proc *p = myproc();
+  int fault_access;
   
   if((sstatus & SSTATUS_SPP) == 0)
     panic("kerneltrap: not from supervisor mode");
   if(intr_get() != 0)
     panic("kerneltrap: interrupts enabled");
 
-  if(scause == 13 || scause == 15) {
+  if(trap_fault_access(scause, &fault_access) == 0 &&
+     fault_access != VM_FAULT_EXEC) {
     if(p != 0 && p->copy_fault_active) {
-      int access = scause == 15 ? VM_FAULT_WRITE : VM_FAULT_READ;
-
-      uint64 va = PGROUNDDOWN(r_stval());
-      if(faultin_page(p, p->pagetable, va, access) == 0) {
-        // faultin_page() may find an already-present user PTE.  The
-        // kernel PTE can still be stale when the access faulted there.
-        if(upg2ukpg(p->pagetable, p->kpagetable, va, va + PGSIZE) < 0)
-          panic("kerneltrap: sync user page");
-        sfence_vma();
+      if(vm_resolve_fault(p, p->pagetable,
+                          r_stval(), fault_access) == VM_FAULT_RESOLVED) {
         goto handled;
       }
 

@@ -186,8 +186,8 @@ mmap_map_create(struct proc *p, uint64 addr, uint64 length, int prot,
   return start;
 }
 
-static int
-vma_access_allowed(struct vma_area *vma, int access)
+int
+mmap_access_allowed(struct vma_area *vma, int access)
 {
   if(access == VM_FAULT_READ)
     return (vma->prot & PROT_READ) != 0;
@@ -199,30 +199,22 @@ vma_access_allowed(struct vma_area *vma, int access)
 }
 
 int
-vm_fault(struct proc *p, uint64 va, int access)
+mmap_fault_page(struct proc *p, struct vma_area *vma, uint64 page, int access)
 {
-  struct vma_area *vma;
-  uint64 page;
   pte_t *pte;
   void *mem;
   int pte_flags = PTE_U;
 
-  if(va >= MAXUVA || (vma = mmap_vma_find(p, va)) == 0)
-    return -1;
-  if(!vma_access_allowed(vma, access))
-    return -1;
-
-  page = PGROUNDDOWN(va);
+  if(page < vma->start || page >= vma->end ||
+     !mmap_access_allowed(vma, access))
+    return VM_FAULT_INVALID;
   pte = walk(p->pagetable, page, 0);
-  if(pte && (*pte & PTE_V)){
-    if(access == VM_FAULT_WRITE && (*pte & PTE_COW))
-      return uvmcowmalloc(p->pagetable, page) ? 0 : -1;
-    return 0;
-  }
+  if(pte && (*pte & PTE_V))
+    return VM_FAULT_INVALID;
   if(vma->ops == 0 || vma->ops->fault == 0)
-    return -1;
+    return VM_FAULT_BACKING;
   if(vma->ops->fault(vma, page, &mem) < 0 || mem == 0)
-    return -1;
+    return VM_FAULT_BACKING;
 
   if(vma->prot & PROT_READ)
     pte_flags |= PTE_R;
@@ -232,13 +224,13 @@ vm_fault(struct proc *p, uint64 va, int access)
     pte_flags |= PTE_X;
   if(mappages(p->pagetable, page, PGSIZE, (uint64)mem, pte_flags) < 0){
     kfree_page(mem);
-    return -1;
+    return VM_FAULT_NOMEM;
   }
-  if(upg2ukpg(p->pagetable, p->kpagetable,
-              page, page + PGSIZE) < 0)
-    panic("vm_fault: upg2ukpg");
-  sfence_vma();
-  return 0;
+  if(vm_sync_user_page(p, page) < 0){
+    uvmunmap(p->pagetable, page, 1, 1);
+    return VM_FAULT_NOMEM;
+  }
+  return VM_FAULT_RESOLVED;
 }
 
 static void
@@ -277,11 +269,9 @@ mmap_populate(struct proc *p, struct vma_area *vma)
       kfree_page(mem);
       goto rollback;
     }
-    if(upg2ukpg(p->pagetable, p->kpagetable,
-                page, page + PGSIZE) < 0)
-      panic("mmap_populate: upg2ukpg");
+    if(vm_sync_user_page(p, page) < 0)
+      panic("mmap_populate: sync user page");
   }
-  sfence_vma();
   vma->ops = 0;
   return 0;
 

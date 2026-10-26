@@ -377,52 +377,33 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 }
 
 int
-uvmlazymalloc(pagetable_t pagetable, uint64 va)
+uvm_fault_alloc(struct proc *p, pagetable_t pagetable, uint64 va, int perm)
 {
-  struct proc *p = myproc();
   char *mem;
 
-  if ((va % PGSIZE) != 0 || va >= MAXUVA) {
-    printf("uvmlazymalloc: va must be page-aligned\n");
+  if(p == 0 || pagetable != p->pagetable ||
+     (va % PGSIZE) != 0 || va >= MAXUVA)
     return -1;
-  }
 
   pte_t *pte = walk(pagetable, va, 0);
-  if(pte != 0 && (*pte & PTE_V)) {
-    return 0;   // 已经映射，直接返回成功
-  }
+  if(pte != 0 && (*pte & PTE_V))
+    return -1;
 
   mem = kalloc_page();
-  if(mem == 0){
-    // printf("uvmlazymalloc: kalloc fail\n");
+  if(mem == 0)
     return -1;
-  }
   memset(mem, 0, PGSIZE);
-  if(mappages(pagetable, va, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
-    // printf("uvmlazymalloc: mappages fail\n");
+  if(mappages(pagetable, va, PGSIZE, (uint64)mem, perm | PTE_U) != 0){
     kfree_page(mem);
     return -1;
   }
 
-  if(upg2ukpg(p->pagetable, p->kpagetable,
-              va, va + PGSIZE) < 0){
+  if(vm_sync_user_page(p, va) < 0){
     uvmunmap(pagetable, va, 1, 1);
     return -1;
   }
-  // if(mappages(p->kpagetable, va, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R) != 0){
-  //   uvmunmap(pagetable, va, PGSIZE / PGSIZE, 1);
-  //   printf("uvmalloc: mappages fail\n");
-  //   kfree_page(mem);
-  //   return -1;
-  // }
 
   return 0;
-}
-
-static int
-uvm_stack_address(uint64 va)
-{
-  return va >= USER_STACK_START && va < USER_STACK_TOP;
 }
 
 int
@@ -442,32 +423,6 @@ uvm_stack_init(pagetable_t pagetable)
   return 0;
 }
 
-static int
-uvm_stack_fault(struct proc *p, pagetable_t pagetable, uint64 va)
-{
-  if(!uvm_stack_address(va) || pagetable != p->pagetable)
-    return -1;
-  return uvmlazymalloc(pagetable, va);
-}
-
-// Resolve a fault on page-aligned va for the given access.
-// First tries mmap demand paging (vm_fault); if the page is not backed
-// by a VMA, falls back to lazy allocation of the anonymous heap/stack
-// region, mirroring the page-fault path in usertrap().
-// Returns 0 on success, -1 if the fault cannot be resolved.
-int
-faultin_page(struct proc *p, pagetable_t pagetable, uint64 va, int access)
-{
-  if(va >= MAXUVA)
-    return -1;
-  if(vm_fault(p, va, access) == 0)
-    return 0;
-  if(access == VM_FAULT_WRITE && uvmcowpage(pagetable, va) == 0)
-    return uvmcowmalloc(pagetable, va) ? 0 : -1;
-  if(va < p->sz)
-    return uvmlazymalloc(pagetable, va);
-  return uvm_stack_fault(p, pagetable, va);
-}
 
 void *
 uvmcowmalloc(pagetable_t pagetable, uint64 va)
@@ -493,10 +448,8 @@ uvmcowmalloc(pagetable_t pagetable, uint64 va)
     *pte |= PTE_W;
     *pte &= ~PTE_COW;
 
-    if(upg2ukpg(p->pagetable, p->kpagetable,
-                va, va + PGSIZE) < 0)
-      panic("uvmcowmalloc: upg2ukpg");
-    sfence_vma();
+    if(vm_sync_user_page(p, va) < 0)
+      panic("uvmcowmalloc: sync user page");
 
     return (void *)pa;
   } else {
@@ -513,24 +466,13 @@ uvmcowmalloc(pagetable_t pagetable, uint64 va)
       return 0;
     }
 
-    if(upg2ukpg(p->pagetable, p->kpagetable,
-                va, va + PGSIZE) < 0)
-      panic("uvmcowmalloc: upg2ukpg");
+    if(vm_sync_user_page(p, va) < 0)
+      panic("uvmcowmalloc: sync user page");
 
     kfree_page((void *)pa);
-    sfence_vma();
 
     return (void *)mem;
   }
-}
-
-int uvmcowpage(pagetable_t pagetable, uint64 va)
-{
-  if (va >= MAXUVA) return -1;
-  pte_t *pte = walk(pagetable, va, 0);
-  if (pte == 0) return -1;
-  if ((*pte & PTE_V) == 0) return -1;
-  return *pte & PTE_COW? 0: -1;
 }
 
 // Deallocate user pages to bring the process size from oldsz to
@@ -583,6 +525,20 @@ upg2ukpg(pagetable_t u_pagetable, pagetable_t k_pagetable,
       return -1;
     *k_pte = (*u_pte) & ~PTE_U;
   }
+  return 0;
+}
+
+int
+vm_sync_user_page(struct proc *p, uint64 va)
+{
+  uint64 page = PGROUNDDOWN(va);
+
+  if(p == 0 || page >= MAXUVA)
+    return -1;
+  if(upg2ukpg(p->pagetable, p->kpagetable,
+              page, page + PGSIZE) < 0)
+    return -1;
+  sfence_vma();
   return 0;
 }
 

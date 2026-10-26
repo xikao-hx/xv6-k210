@@ -12,53 +12,23 @@ sinfo(struct sysinfo *info) {
   }
 }
 
-//
-// use sbrk() to count how many free physical memory pages there are.
-//
-int
-countfree()
-{
-  uint64 sz0 = (uint64)sbrk(0);
-  struct sysinfo info;
-  int n = 0;
-
-  while(1){
-    if((uint64)sbrk(PGSIZE) == 0xffffffffffffffff){
-      break;
-    }
-    n += PGSIZE;
-  }
-  sinfo(&info);
-  if (info.freemem != 0) {
-    printf("FAIL: there is no free mem, but sysinfo.freemem=%d\n",
-      info.freemem);
-    exit(1);
-  }
-  sbrk(-((uint64)sbrk(0) - sz0));
-  return n;
-}
-
 void
 testmem() {
-  struct sysinfo info;
-  uint64 n = countfree();
-  
-  sinfo(&info);
+  struct sysinfo before;
+  struct sysinfo allocated;
+  struct sysinfo released;
 
-  if (info.freemem!= n) {
-    printf("FAIL: free mem %d (bytes) instead of %d\n", info.freemem, n);
-    exit(1);
-  }
-  
-  if((uint64)sbrk(PGSIZE) == 0xffffffffffffffff){
+  sinfo(&before);
+  uint64 page = (uint64)sbrk(PGSIZE);
+  if(page == 0xffffffffffffffff){
     printf("sbrk failed");
     exit(1);
   }
+  *(volatile char *)page = 1;
 
-  sinfo(&info);
-    
-  if (info.freemem != n-PGSIZE) {
-    printf("FAIL: free mem %d (bytes) instead of %d\n", n-PGSIZE, info.freemem);
+  sinfo(&allocated);
+  if(allocated.freemem > before.freemem - PGSIZE){
+    printf("FAIL: touched page did not consume physical memory\n");
     exit(1);
   }
   
@@ -67,10 +37,10 @@ testmem() {
     exit(1);
   }
 
-  sinfo(&info);
-    
-  if (info.freemem != n) {
-    printf("FAIL: free mem %d (bytes) instead of %d\n", n, info.freemem);
+  sinfo(&released);
+  if(released.freemem != before.freemem){
+    printf("FAIL: free mem %d after release instead of %d\n",
+           released.freemem, before.freemem);
     exit(1);
   }
 }

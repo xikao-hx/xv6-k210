@@ -565,30 +565,19 @@ fork(void)
   }
 
   // Copy user memory from parent to child.
-  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
-    freeproc(np);
-    release(&np->lock);
-    return -1;
-  }
-  if(uvm_stack_copy(p->pagetable, np->pagetable) < 0){
-    if(upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz) < 0)
-      panic("fork: parent upg2ukpg");
-    uvm_stack_sync(p->pagetable, p->kpagetable);
-    sfence_vma();
-    freeproc(np);
-    release(&np->lock);
-    return -1;
-  }
+  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0)
+    goto bad;
   np->sz = p->sz;
-  if(vma_fork(p, np) < 0){
-    if(upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz) < 0)
-      panic("fork: parent upg2ukpg");
-    uvm_stack_sync(p->pagetable, p->kpagetable);
-    sfence_vma();
-    freeproc(np);
-    release(&np->lock);
-    return -1;
-  }
+  if(uvm_stack_copy(p->pagetable, np->pagetable) < 0)
+    goto bad;
+  if(vma_fork(p, np) < 0)
+    goto bad;
+
+  if(upg2ukpg(np->pagetable, np->kpagetable, 0, np->sz) < 0 ||
+     upg2ukpg(np->pagetable, np->kpagetable,
+              USER_STACK_START, USER_STACK_TOP) < 0)
+    goto bad;
+  sfence_vma();
 
   np->parent = p;
 
@@ -611,11 +600,6 @@ fork(void)
   signal_proc_fork(p, np);
   pid = np->pid;
 
-  if(upg2ukpg(np->pagetable, np->kpagetable, 0, np->sz) < 0)
-    panic("fork: child upg2ukpg");
-  uvm_stack_sync(np->pagetable, np->kpagetable);
-  sfence_vma();
-
   np->state = RUNNABLE;
 
   release(&np->lock);
@@ -628,6 +612,15 @@ fork(void)
   sfence_vma();
 
   return pid;
+
+bad:
+  if(upg2ukpg(p->pagetable, p->kpagetable, 0, p->sz) < 0)
+    panic("fork: parent upg2ukpg");
+  uvm_stack_sync(p->pagetable, p->kpagetable);
+  sfence_vma();
+  freeproc(np);
+  release(&np->lock);
+  return -1;
 }
 
 /*

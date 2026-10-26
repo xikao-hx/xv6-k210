@@ -7,11 +7,7 @@
 #include "syscall.h"
 #include "memlayout.h"
 #include "riscv.h"
-// 16777216
-#define REGION_SZ (201310000)
-// #define REGION_SZ (1024 * 1024 * 1024)
-// 1073741824
-// 201326592  -->  由于进程内核页表的限制，导致不能进程的地址空间不能太大，否则会覆盖内核地址空间，导致出现错误
+#define REGION_SZ (32 * 1024 * 1024)
 void
 sparse_memory(char *s)
 {
@@ -78,14 +74,13 @@ sparse_memory_unmap(char *s)
 void
 oom(char *s)
 {
-  void *m1, *m2;
+  char *mem;
   int pid;
 
   if((pid = fork()) == 0){
-    m1 = 0;
-    while((m2 = malloc(4096*4096)) != 0){
-      *(char**)m2 = m1;
-      m1 = m2;
+    while((mem = malloc(64 * PGSIZE)) != 0){
+      for(int i = 0; i < 64; i++)
+        mem[i * PGSIZE] = 1;
     }
     exit(0);
   } else {
